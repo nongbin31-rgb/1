@@ -21,6 +21,27 @@ public struct ReaderImageUpscalerConfigView: View {
     @State private var showingAnime4KFAQ: Bool = false
     @State private var showingUpscalerFAQ: Bool = false
 
+    /// 真实有效的预览图像（具备自动兜底回退样张机制）
+    private var activeImage: UIImage {
+        if imageForPreview.size.width > 0 {
+            return imageForPreview
+        }
+        if let sample = ReaderTextureCache.shared.previewSampleImage() {
+            return sample
+        }
+        for ext in ["jpg", "png", "heic"] {
+            if let path = Bundle.main.path(forResource: "Starry_night_in_manga_original", ofType: ext),
+               let img = UIImage(contentsOfFile: path) {
+                return img
+            }
+            if let path = Bundle.main.path(forResource: "Texture_Preview_sample", ofType: ext),
+               let img = UIImage(contentsOfFile: path) {
+                return img
+            }
+        }
+        return imageForPreview
+    }
+
     public init(imageForPreview: UIImage) {
         self.imageForPreview = imageForPreview
     }
@@ -35,10 +56,19 @@ public struct ReaderImageUpscalerConfigView: View {
                     let size = geo.size
                     ZStack {
                         // 底层：原图
-                        Image(uiImage: imageForPreview)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: size.width, height: size.height)
+                        if activeImage.size.width > 0 {
+                            Image(uiImage: activeImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: size.width, height: size.height)
+                        } else {
+                            VStack(spacing: 12) {
+                                ProgressView().tint(.white)
+                                Text("正在准备页面图像...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
+                        }
 
                         // 顶层：超分后图像（根据 revealPercent 裁剪遮罩）
                         if let upscaled = upscaledImage {
@@ -312,6 +342,15 @@ public struct ReaderImageUpscalerConfigView: View {
 
     private func runPreviewEnhance() async {
         guard !isEnhancing else { return }
+        let target = activeImage
+        guard target.size.width > 0, target.cgImage != nil || target.ciImage != nil else {
+            await MainActor.run {
+                self.upscaleError = "当前页面图片尚未加载完成，请稍候再试"
+                self.performanceResult = "超分等待中: 正在加载原图"
+            }
+            return
+        }
+
         isEnhancing = true
         upscaleError = nil
 
@@ -321,12 +360,12 @@ public struct ReaderImageUpscalerConfigView: View {
             switch store.upscalerConfig.model {
             case .anime4k:
                 result = try await Anime4kService.shared.enhance(
-                    image: imageForPreview,
+                    image: target,
                     config: store.upscalerConfig.anime4k
                 )
             case .waifu2x:
                 result = try await Waifu2xService.shared.enhance(
-                    image: imageForPreview,
+                    image: target,
                     model: store.upscalerConfig.waifu2x
                 )
             }

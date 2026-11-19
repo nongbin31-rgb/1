@@ -20,7 +20,8 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
-        onZoomChanged: ((CGFloat) -> Void)? = nil
+        onZoomChanged: ((CGFloat) -> Void)? = nil,
+        onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
         self.pageIndex = pageIndex
         let rootView = ComicPageCellView(
@@ -37,7 +38,8 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
-            onZoomChanged: onZoomChanged
+            onZoomChanged: onZoomChanged,
+            onImageLoaded: onImageLoaded
         )
         super.init(rootView: rootView)
     }

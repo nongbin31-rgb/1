@@ -59,6 +59,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
+    public var onImageLoaded: ((UIImage) -> Void)? = nil
 
     public init(
         pages: [MangaPage],
@@ -74,7 +75,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         textureOpacity: Double = 0.4,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
-        onStatusUpdate: @escaping (String) -> Void
+        onStatusUpdate: @escaping (String) -> Void,
+        onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
         self.pages = pages
         self.upscalerConfig = upscalerConfig
@@ -90,6 +92,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
+        self.onImageLoaded = onImageLoaded
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -174,6 +177,11 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                     let shouldEnableScroll = scale <= 1.01
                     if collectionView?.isScrollEnabled != shouldEnableScroll {
                         collectionView?.isScrollEnabled = shouldEnableScroll
+                    }
+                },
+                onImageLoaded: { [weak self] img in
+                    if indexPath.item == self?.parent.currentPageIndex {
+                        self?.parent.onImageLoaded?(img)
                     }
                 }
             )
@@ -298,7 +306,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
         textureOpacity: Double = 0.4,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
-        onZoomChanged: @escaping (CGFloat) -> Void
+        onZoomChanged: @escaping (CGFloat) -> Void,
+        onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
         let pageView = ComicPageCellView(
             page: page,
@@ -313,7 +322,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
             textureOpacity: textureOpacity,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
-            onZoomChanged: onZoomChanged
+            onZoomChanged: onZoomChanged,
+            onImageLoaded: onImageLoaded
         )
 
         if let existing = hostingController {

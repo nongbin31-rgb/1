@@ -278,7 +278,8 @@ public final class Waifu2xService: @unchecked Sendable {
     }
 
     private static func cgImageToMultiArray(_ cgImage: CGImage, targetSize: Int) throws -> MLMultiArray {
-        let shape: [NSNumber] = [1, 3, NSNumber(value: targetSize), NSNumber(value: targetSize)]
+        // 模型规格：SpecificationVersion 1，输入期望严格为 3 维 [3, 156, 156]（非 4 维）
+        let shape: [NSNumber] = [3, NSNumber(value: targetSize), NSNumber(value: targetSize)]
         let multiArray = try MLMultiArray(shape: shape, dataType: .double)
 
         let width = cgImage.width
@@ -315,17 +316,45 @@ public final class Waifu2xService: @unchecked Sendable {
     }
 
     private static func multiArrayToCGImage(_ array: MLMultiArray, size: Int) -> CGImage? {
-        let ptr = array.dataPointer.bindMemory(to: Double.self, capacity: 3 * size * size)
         var rawBytes = [UInt8](repeating: 255, count: size * size * 4)
 
-        for y in 0..<size {
-            for x in 0..<size {
-                let pixelIdx = (y * size + x) * 4
-                for c in 0..<3 {
-                    let channelOffset = c * size * size
-                    let val = ptr[channelOffset + y * size + x]
-                    let clamped = max(0.0, min(1.0, val))
-                    rawBytes[pixelIdx + c] = UInt8(clamped * 255.0)
+        if array.dataType == .double {
+            let ptr = array.dataPointer.bindMemory(to: Double.self, capacity: 3 * size * size)
+            for y in 0..<size {
+                for x in 0..<size {
+                    let pixelIdx = (y * size + x) * 4
+                    for c in 0..<3 {
+                        let channelOffset = c * size * size
+                        let val = ptr[channelOffset + y * size + x]
+                        let clamped = max(0.0, min(1.0, val))
+                        rawBytes[pixelIdx + c] = UInt8(clamped * 255.0)
+                    }
+                }
+            }
+        } else if array.dataType == .float32 {
+            let ptr = array.dataPointer.bindMemory(to: Float.self, capacity: 3 * size * size)
+            for y in 0..<size {
+                for x in 0..<size {
+                    let pixelIdx = (y * size + x) * 4
+                    for c in 0..<3 {
+                        let channelOffset = c * size * size
+                        let val = Double(ptr[channelOffset + y * size + x])
+                        let clamped = max(0.0, min(1.0, val))
+                        rawBytes[pixelIdx + c] = UInt8(clamped * 255.0)
+                    }
+                }
+            }
+        } else {
+            // 通用下标读取兜底
+            for y in 0..<size {
+                for x in 0..<size {
+                    let pixelIdx = (y * size + x) * 4
+                    for c in 0..<3 {
+                        let channelOffset = c * size * size
+                        let val = array[channelOffset + y * size + x].doubleValue
+                        let clamped = max(0.0, min(1.0, val))
+                        rawBytes[pixelIdx + c] = UInt8(clamped * 255.0)
+                    }
                 }
             }
         }

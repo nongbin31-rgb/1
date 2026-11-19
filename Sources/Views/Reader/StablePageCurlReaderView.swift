@@ -24,6 +24,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
+    public var onImageLoaded: ((UIImage) -> Void)? = nil
 
     public init(
         pages: [MangaPage],
@@ -40,7 +41,8 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
-        onStatusUpdate: @escaping (String) -> Void
+        onStatusUpdate: @escaping (String) -> Void,
+        onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
         self.pages = pages
         self.upscalerConfig = upscalerConfig
@@ -57,6 +59,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
+        self.onImageLoaded = onImageLoaded
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -225,7 +228,12 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 textureOpacity: parent.textureOpacity,
                 showDividingLine: parent.showDividingLine,
                 onSingleTap: parent.onSingleTap,
-                onStatusUpdate: parent.onStatusUpdate
+                onStatusUpdate: parent.onStatusUpdate,
+                onImageLoaded: { [weak self] img in
+                    if index == self?.parent.currentPageIndex {
+                        self?.parent.onImageLoaded?(img)
+                    }
+                }
             )
         }
 

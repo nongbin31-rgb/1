@@ -94,6 +94,20 @@ public actor OnlineImageLoader {
         try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
     }
 
+    /// 同步快速获取已缓存的图片（优先内存，次选磁盘）
+    public func cachedImage(for urlString: String) -> UIImage? {
+        let identityKey = normalizedCacheKey(for: urlString)
+        if let memoryImage = memoryCache.object(forKey: identityKey as NSString) {
+            return memoryImage
+        }
+        let diskURL = diskFileURL(for: identityKey)
+        if let diskData = try? Data(contentsOf: diskURL), let diskImage = UIImage(data: diskData) {
+            memoryCache.setObject(diskImage, forKey: identityKey as NSString)
+            return diskImage
+        }
+        return nil
+    }
+
     public func diskCacheSizeBytes() -> Int64 {
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: diskDirectory,

@@ -104,6 +104,7 @@ public struct ComicPageCellView: View {
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onZoomChanged: ((CGFloat) -> Void)? = nil
+    public var onImageLoaded: ((UIImage) -> Void)? = nil
 
     @StateObject private var slot = ComicPageSlot()
 
@@ -121,7 +122,8 @@ public struct ComicPageCellView: View {
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
-        onZoomChanged: ((CGFloat) -> Void)? = nil
+        onZoomChanged: ((CGFloat) -> Void)? = nil,
+        onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
         self.page = page
         self.config = config
@@ -137,6 +139,7 @@ public struct ComicPageCellView: View {
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onZoomChanged = onZoomChanged
+        self.onImageLoaded = onImageLoaded
     }
 
     public var body: some View {
@@ -213,6 +216,11 @@ public struct ComicPageCellView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
             await triggerLoad()
+        }
+        .onChange(of: slot.displayImage) { newImg in
+            if let newImg {
+                onImageLoaded?(newImg)
+            }
         }
     }
 

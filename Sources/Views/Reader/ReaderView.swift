@@ -180,6 +180,7 @@ public struct ReaderView: View {
                 soundEnabled: $store.pageTurnSoundEnabled,
                 showSpineShadow: $store.showSpineShadowInCurl,
                 onOpenAdvancedConfig: {
+                    capturedPreviewImage = resolveCurrentImageForPreview()
                     showUpscalerSheet = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         showConfigPreviewSheet = true
@@ -190,7 +191,7 @@ public struct ReaderView: View {
         }
         .fullScreenCover(isPresented: $showConfigPreviewSheet) {
             ReaderImageUpscalerConfigView(
-                imageForPreview: capturedPreviewImage ?? UIImage()
+                imageForPreview: resolveCurrentImageForPreview()
             )
         }
         .sheet(isPresented: $showBackgroundPickerSheet) {
@@ -289,6 +290,9 @@ public struct ReaderView: View {
                 },
                 onStatusUpdate: { text in
                     currentHUDText = text
+                },
+                onImageLoaded: { img in
+                    capturedPreviewImage = img
                 }
             )
         } else {
@@ -313,6 +317,9 @@ public struct ReaderView: View {
                 },
                 onStatusUpdate: { text in
                     currentHUDText = text
+                },
+                onImageLoaded: { img in
+                    capturedPreviewImage = img
                 }
             )
         }
@@ -502,6 +509,33 @@ public struct ReaderView: View {
         }
 
         isLoadingChapter = false
+    }
+
+    /// 解析用于超分高级预览的图片（多层兜底保障，绝不返回无效空图）
+    private func resolveCurrentImageForPreview() -> UIImage {
+        if let captured = capturedPreviewImage, captured.size.width > 0 {
+            return captured
+        }
+        if pages.indices.contains(currentPageIndex) {
+            let page = pages[currentPageIndex]
+            if let cached = OnlineImageLoader.shared.cachedImage(for: page.imageURL) {
+                return cached
+            }
+        }
+        if let sample = ReaderTextureCache.shared.previewSampleImage() {
+            return sample
+        }
+        for ext in ["jpg", "png", "heic"] {
+            if let path = Bundle.main.path(forResource: "Starry_night_in_manga_original", ofType: ext),
+               let img = UIImage(contentsOfFile: path) {
+                return img
+            }
+            if let path = Bundle.main.path(forResource: "Texture_Preview_sample", ofType: ext),
+               let img = UIImage(contentsOfFile: path) {
+                return img
+            }
+        }
+        return UIImage()
     }
 }
 
