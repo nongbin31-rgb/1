@@ -109,13 +109,13 @@ public struct ReaderBackgroundPickerSheet: View {
                     .foregroundStyle(.secondary)
             }
 
-            Grid(horizontalSpacing: 12, verticalSpacing: 12) {
-                GridRow {
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
                     ForEach(Array(ReaderTextureType.allCases.prefix(3))) { item in
                         textureCardView(for: item)
                     }
                 }
-                GridRow {
+                HStack(spacing: 12) {
                     ForEach(Array(ReaderTextureType.allCases.suffix(from: 3))) { item in
                         textureCardView(for: item)
                     }
@@ -135,52 +135,55 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         } label: {
             VStack(spacing: 6) {
-                // 材质缩略图展示区域：严格定高，图片通过 background 载入并 clipShape 裁切，杜绝尺寸溢出
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.clear)
-                    .frame(height: 72)
-                    .background {
-                        if let img = ReaderTextureCache.shared.textureImage(for: item) {
-                            Image(uiImage: img)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Color.secondary.opacity(0.15)
-                        }
+                // 材质缩略图展示区域：严格定高定宽，图片通过 ZStack 载入并双重裁切，杜绝尺寸溢出
+                ZStack {
+                    if let img = ReaderTextureCache.shared.textureImage(for: item) {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .frame(height: 72)
+                            .clipped()
+                    } else {
+                        Color(uiColor: .secondarySystemBackground)
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .frame(height: 72)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
                     // 选中状态浅蓝高亮蒙层
-                    .overlay {
-                        if isSelected {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color.accentColor.opacity(0.12))
-                        }
+                    if isSelected {
+                        Color.accentColor.opacity(0.12)
                     }
-                    // 选中右下角角标
-                    .overlay(alignment: .bottomTrailing) {
-                        if isSelected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(Color.accentColor)
-                                .background(Circle().fill(Color.white).padding(2))
-                                .padding(6)
-                        }
+                }
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .frame(height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                // 选中右下角角标
+                .overlay(alignment: .bottomTrailing) {
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color.accentColor)
+                            .background(Circle().fill(Color.white).padding(2))
+                            .padding(6)
                     }
-                    // 描边（使用 strokeBorder 向内描边，杜绝向外溢出干扰相邻单元）
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(
-                                isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
-                                lineWidth: isSelected ? 2.5 : 1
-                            )
-                    }
+                }
+                // 描边（使用 strokeBorder 向内描边，杜绝向外溢出干扰相邻单元）
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(
+                            isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                            lineWidth: isSelected ? 2.5 : 1
+                        )
+                }
 
                 Text(item.displayName)
                     .font(.caption.weight(isSelected ? .bold : .regular))
                     .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity)
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
