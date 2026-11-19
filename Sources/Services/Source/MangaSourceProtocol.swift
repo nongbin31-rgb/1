@@ -40,7 +40,7 @@ public extension MangaSourceProtocol {
     }
 
     func fetchChapterPages(mangaID: String, chapterID: String) async throws -> [MangaPage] {
-        try await fetchPages(for: MangaChapter(id: chapterID, mangaID: mangaID, title: "", index: 0))
+        try await fetchPages(for: MangaChapter(id: chapterID, mangaID: mangaID, title: "", number: 0))
     }
 }
 
