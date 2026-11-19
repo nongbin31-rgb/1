@@ -51,12 +51,17 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
 
     // MARK: - 1. 贴图访问接口
 
-    /// 获取粉刷批荡与 23,500 颗浮雕砂砾贴图 (向后兼容 getSharedTile)
+    /// 获取画页专用粉刷纸浆微粒吸光贴图 (向后兼容 getSharedTile，零泛白正片叠底安全)
     public func getSharedTile() -> UIImage {
-        return getStuccoTile()
+        return getPaperGrainTile()
     }
 
-    /// 获取粉刷批荡与立体浮雕砂砾贴图
+    /// 获取专供漫画画页使用的粉刷纸浆微吸收贴图 (超细纤维 + 矿物砂砾，正片叠底安全且零泛白)
+    public func getPaperGrainTile() -> UIImage {
+        return getFiberAbsorbTile()
+    }
+
+    /// 获取粉刷批荡与立体浮雕砂砾贴图 (专供四周背景底布使用，温润浮雕立体感)
     public func getStuccoTile() -> UIImage {
         lock.lock()
         defer { lock.unlock() }
@@ -70,12 +75,12 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         return tile
     }
 
-    /// 获取纸纤维微吸收贴图 (用于浅色留白细腻颗粒)
+    /// 获取纸纤维微吸收贴图 (用于浅色留白细腻颗粒，100% 正片叠底零泛白)
     public func getFiberAbsorbTile() -> UIImage {
         return getFiberTiles().absorbTile
     }
 
-    /// 获取纸纤维柔光贴图 (用于彩图与中间调立体纤维且零泛白)
+    /// 获取纸纤维柔光贴图 (用于彩图与中间调立体纤维)
     public func getFiberSoftLightTile() -> UIImage {
         return getFiberTiles().softLightTile
     }
@@ -127,29 +132,30 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         }
     }
 
-    /// 42 处大尺度柔和粉刷批荡抹刀印痕 (带 10px 高斯模糊，微明暗起伏)
+    /// 24 处柔和粉刷批荡抹刀印痕 (带 12px 高斯模糊，微明暗起伏，避免大面积白斑发白)
     private func paintSoftPlasterMarks(in cg: CGContext) {
         var random = DeterministicRandom(seed: 20261108)
 
         cg.saveGState()
-        for _ in 0..<42 {
+        for _ in 0..<24 {
             let cx = random.nextDouble() * Double(Self.tileSize)
             let cy = random.nextDouble() * Double(Self.tileSize)
-            let radius = 20.0 + random.nextDouble() * 38.0
+            let radius = 22.0 + random.nextDouble() * 32.0
             let isLight = random.nextBool()
 
+            // 显著降低批荡高光反光，消除大片白雾
             let color = isLight
-                ? UIColor.white.withAlphaComponent(0.055)
-                : UIColor.black.withAlphaComponent(0.020)
+                ? UIColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 0.018)
+                : UIColor(red: 0.22, green: 0.20, blue: 0.18, alpha: 0.015)
 
             cg.setFillColor(color.cgColor)
-            cg.setShadow(offset: .zero, blur: 10.0, color: color.cgColor)
+            cg.setShadow(offset: .zero, blur: 12.0, color: color.cgColor)
             drawSeamlessCircle(in: cg, cx: cx, cy: cy, radius: radius, size: Self.tileSize)
         }
         cg.restoreGState()
     }
 
-    /// 23,500 颗带立体微观投影与纯白高光的浮雕砂砾 + 干燥气孔 (强制关闭抗锯齿，微粒锐利不发糊)
+    /// 7,200 颗立体微观浮雕砂砾 + 干燥微孔 (柔和微暖半透明高光，彻底告别刺眼死白与噪点感)
     private func paintEmbossedGrains(in cg: CGContext) {
         var random = DeterministicRandom(seed: 20261109)
 
@@ -157,39 +163,41 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         cg.setAllowsAntialiasing(false)
         cg.setShouldAntialias(false)
 
-        let grainCount = 23500
+        let grainCount = 7200
         for _ in 0..<grainCount {
             let x = random.nextDouble() * Double(Self.tileSize)
             let y = random.nextDouble() * Double(Self.tileSize)
 
-            // 16% 较大视觉锚点砂砾 (1.55~2.70px)，84% 细腻底砂 (0.75~1.80px)
-            let diameter: Double = random.nextDouble() < 0.16
-                ? (1.55 + random.nextDouble() * 1.15)
-                : (0.75 + random.nextDouble() * 1.05)
+            // 15% 较大视觉锚点砂砾 (1.4~2.4px)，85% 细腻底砂 (0.65~1.5px)
+            let diameter: Double = random.nextDouble() < 0.15
+                ? (1.4 + random.nextDouble() * 1.0)
+                : (0.65 + random.nextDouble() * 0.85)
 
-            let isRaisedGrain = random.nextDouble() > 0.36
+            let isRaisedGrain = random.nextDouble() > 0.40
 
             if isRaisedGrain {
-                // 凸起砂砾：在右下方 (x + 0.85, y + 0.85) 画偏置侧影
-                if diameter > 0.95 {
-                    let shadowAlpha = 0.10 + random.nextDouble() * 0.14
-                    cg.setFillColor(UIColor.black.withAlphaComponent(shadowAlpha).cgColor)
+                // 凸起砂砾：在右下方 (x + 0.75, y + 0.75) 画偏置侧影
+                if diameter > 0.90 {
+                    let shadowAlpha = 0.08 + random.nextDouble() * 0.10
+                    let shadowColor = UIColor(red: 0.20, green: 0.18, blue: 0.16, alpha: shadowAlpha)
+                    cg.setFillColor(shadowColor.cgColor)
                     drawSeamlessDot(
                         in: cg,
-                        x: (x + 0.85).truncatingRemainder(dividingBy: Double(Self.tileSize)),
-                        y: (y + 0.85).truncatingRemainder(dividingBy: Double(Self.tileSize)),
-                        diameter: diameter * 0.88,
+                        x: (x + 0.75).truncatingRemainder(dividingBy: Double(Self.tileSize)),
+                        y: (y + 0.75).truncatingRemainder(dividingBy: Double(Self.tileSize)),
+                        diameter: diameter * 0.85,
                         size: Self.tileSize
                     )
                 }
 
-                // 原位画纯白高光微粒
-                let highlightAlpha = 0.82 + random.nextDouble() * 0.18
-                cg.setFillColor(UIColor.white.withAlphaComponent(highlightAlpha).cgColor)
+                // 原位画微暖柔和高光 (0.18~0.34，杜绝刺眼死白)
+                let highlightAlpha = 0.18 + random.nextDouble() * 0.16
+                let highlightColor = UIColor(red: 0.98, green: 0.97, blue: 0.95, alpha: highlightAlpha)
+                cg.setFillColor(highlightColor.cgColor)
                 drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter, size: Self.tileSize)
             } else {
                 // 微孔凹坑与纸浆微纤维 (Color 0xFF45474D)
-                let poreAlpha = 0.12 + random.nextDouble() * 0.16
+                let poreAlpha = 0.08 + random.nextDouble() * 0.12
                 let poreColor = UIColor(
                     red: 69.0 / 255.0,
                     green: 71.0 / 255.0,
@@ -256,19 +264,31 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         }
         var hpFibers = highPassCircular(fibers, size: size, radius: 2, subtractWeight: 0.42)
 
-        // 3. 归一化融合后同步生成同相双贴图
+        // 3. 3,600 颗微观矿物粉刷砂砾微吸收颗粒 (双线性散布)
+        var grains = [Double](repeating: 0.0, count: total)
+        let grainCount = 3600
+        for _ in 0..<grainCount {
+            let gx = Int(random.nextDouble() * Double(size)) & mask
+            let gy = Int(random.nextDouble() * Double(size)) & mask
+            let gWeight = 0.65 + random.nextDouble() * 0.45
+            grains[gy * size + gx] += gWeight
+        }
+        var hpGrains = highPassCircular(grains, size: size, radius: 1, subtractWeight: 0.48)
+
+        // 4. 归一化融合后同步生成同相双贴图
         normalizeZeroMeanUnitStd(&hpNoise)
         normalizeZeroMeanUnitStd(&hpFibers)
+        normalizeZeroMeanUnitStd(&hpGrains)
 
         var combined = [Double](repeating: 0.0, count: total)
         for i in 0..<total {
-            combined[i] = 0.64 * hpNoise[i] + 0.36 * hpFibers[i]
+            combined[i] = 0.48 * hpNoise[i] + 0.32 * hpFibers[i] + 0.20 * hpGrains[i]
         }
         normalizeZeroMeanUnitStd(&combined)
 
-        let baseR: Double = 30.0
-        let baseG: Double = 28.0
-        let baseB: Double = 25.0
+        let baseR: Double = 26.0
+        let baseG: Double = 24.0
+        let baseB: Double = 22.0
 
         var absorbPixels = [UInt8](repeating: 0, count: total * 4)
         var softLightPixels = [UInt8](repeating: 0, count: total * 4)
@@ -277,8 +297,8 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
             let v = combined[i]
             let off = i * 4
 
-            // (A) 透明底微吸收贴图：浅色与留白处细腻颗粒
-            let alphaNorm = max(0.0, min(0.34, 0.064 + 0.088 * v))
+            // (A) 透明底微吸收贴图：浅色与留白处细腻微粒，以正片叠底 Multiply 融入，暗部零提亮、零泛白
+            let alphaNorm = max(0.0, min(0.36, 0.055 + 0.080 * v))
             let a = UInt8(clamping: Int(round(alphaNorm * 255.0)))
             absorbPixels[off + 0] = UInt8(clamping: Int(round((baseR * Double(a)) / 255.0)))
             absorbPixels[off + 1] = UInt8(clamping: Int(round((baseG * Double(a)) / 255.0)))

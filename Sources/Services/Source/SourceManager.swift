@@ -61,6 +61,9 @@ public final class AppStore: ObservableObject {
     @Published public var searchHistory: [String] = [] {
         didSet { save(searchHistory, key: Keys.searchHistory) }
     }
+    @Published public var imageFilterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig() {
+        didSet { save(imageFilterConfig, key: Keys.imageFilterConfig) }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -83,6 +86,7 @@ public final class AppStore: ObservableObject {
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
         static let searchHistory = "keda_online_search_history_v1"
+        static let imageFilterConfig = "keda_online_image_filter_config_v1"
     }
 
     public init() {
@@ -142,6 +146,7 @@ public final class AppStore: ObservableObject {
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
         self.searchHistory = load(key: Keys.searchHistory) ?? []
+        self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
     }
 
     public var enabledSources: [MangaSourceConfig] {

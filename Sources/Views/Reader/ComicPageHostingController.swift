@@ -8,6 +8,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     private var config: ImageUpscalerConfig
     private var isEnabled: Bool
     private var transitionAfterUpscaled: Bool
+    private var filterConfig: ImageFilterConfig
     private var isCompareMode: Bool
     private var showSpineShadow: Bool
     private var isRightToLeft: Bool
@@ -27,6 +28,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         config: ImageUpscalerConfig,
         isEnabled: Bool = false,
         transitionAfterUpscaled: Bool = true,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool = false,
         showSpineShadow: Bool = false,
         isRightToLeft: Bool = false,
@@ -45,6 +47,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.config = config
         self.isEnabled = isEnabled
         self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.filterConfig = filterConfig
         self.isCompareMode = isCompareMode
         self.showSpineShadow = showSpineShadow
         self.isRightToLeft = isRightToLeft
@@ -63,6 +66,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             config: config,
             isEnabled: isEnabled,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig,
             isCompareMode: isCompareMode,
             showSpineShadow: showSpineShadow,
             isRightToLeft: isRightToLeft,
@@ -92,6 +96,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         config: ImageUpscalerConfig,
         isEnabled: Bool,
         transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool? = nil,
         background: ReaderBackground,
@@ -109,6 +114,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         let upscalerChanged = self.config != config
             || self.isEnabled != isEnabled
             || self.transitionAfterUpscaled != transitionAfterUpscaled
+            || self.filterConfig != filterConfig
             || self.isCompareMode != isCompareMode
 
         let layoutChanged = self.isRightToLeft != newRTL
@@ -127,6 +133,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.config = config
         self.isEnabled = isEnabled
         self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.filterConfig = filterConfig
         self.isCompareMode = isCompareMode
         self.isRightToLeft = newRTL
         self.showSpineShadow = newSpineShadow
@@ -175,6 +182,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             config: config,
             isEnabled: isEnabled,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig,
             isCompareMode: isCompareMode,
             showSpineShadow: showSpineShadow,
             isRightToLeft: isRightToLeft,

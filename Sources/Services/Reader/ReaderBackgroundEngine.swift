@@ -28,7 +28,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     /// 获取指定纸张纹理图像（带内存二级缓存）
     public func textureImage(for type: ReaderTextureType) -> UIImage? {
         if type == .proceduralStucco {
-            return ProceduralStuccoTextureManager.shared.getSharedTile()
+            return ProceduralStuccoTextureManager.shared.getPaperGrainTile()
         }
 
         let key = type.rawValue as NSString
@@ -248,20 +248,19 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     private func updateTextureImage() {
-        guard let img = ReaderTextureCache.shared.textureImage(for: currentTexture) else {
-            textureOverlayView.image = nil
-            return
-        }
         if currentTexture == .proceduralStucco {
+            let bgStucco = ProceduralStuccoTextureManager.shared.getStuccoTile()
             textureOverlayView.contentMode = .scaleToFill
-            textureOverlayView.image = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
-            textureOverlayView.layer.compositingFilter = "overlayBlendMode"
+            textureOverlayView.image = bgStucco.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+            textureOverlayView.layer.compositingFilter = nil
             textureOverlayView.alpha = CGFloat(ProceduralStuccoTextureManager.stuccoPerceptualAlpha(for: Double(textureOpacity)))
-        } else {
+        } else if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
             textureOverlayView.contentMode = .scaleAspectFill
             textureOverlayView.image = img
             textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
             textureOverlayView.alpha = textureOpacity
+        } else {
+            textureOverlayView.image = nil
         }
     }
 
@@ -360,6 +359,7 @@ public struct StuccoWallBackgroundView: View {
 
 /// 拟真纸张纹理正片叠底覆盖层 (SwiftUI)
 /// 默认与所属页面/漫画视图刚性贴合，滚动或翻页时颗粒随漫画一同移动，绝不固定在屏幕上产生抽离感
+/// 严格采用正片叠底 Multiply 模式，暗部与深色墨水天然吸收，彻底杜绝任何泛白与发灰
 public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
     public let opacity: Double
@@ -376,17 +376,18 @@ public struct PaperTextureOverlayView: View {
     }
 
     public var body: some View {
-        if texture == .proceduralStucco {
-            ProceduralStuccoMultiPassOverlayView(
-                opacity: opacity,
-                phaseAnchor: phaseAnchor
-            )
-        } else if let uiImg = ReaderTextureCache.shared.textureImage(for: texture) {
-            let effectiveOpacity = opacity
+        let uiImg: UIImage? = (texture == .proceduralStucco)
+            ? ProceduralStuccoTextureManager.shared.getPaperGrainTile()
+            : ReaderTextureCache.shared.textureImage(for: texture)
+
+        if let img = uiImg {
+            let effectiveOpacity = (texture == .proceduralStucco)
+                ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
+                : opacity
 
             switch phaseAnchor {
             case .local:
-                Image(uiImage: uiImg)
+                Image(uiImage: img)
                     .resizable(resizingMode: .tile)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .blendMode(.multiply)
@@ -396,8 +397,8 @@ public struct PaperTextureOverlayView: View {
 
             case .namedSpace(let spaceName):
                 GeometryReader { proxy in
-                    let tileW = max(uiImg.size.width, 64.0)
-                    let tileH = max(uiImg.size.height, 64.0)
+                    let tileW = max(img.size.width, 64.0)
+                    let tileH = max(img.size.height, 64.0)
                     let contentFrame = proxy.frame(in: .named(spaceName))
 
                     let rawX = contentFrame.minX.truncatingRemainder(dividingBy: tileW)
@@ -407,7 +408,7 @@ public struct PaperTextureOverlayView: View {
                     let phaseY = rawY >= 0 ? rawY : rawY + tileH
 
                     ZStack(alignment: .topLeading) {
-                        Image(uiImage: uiImg)
+                        Image(uiImage: img)
                             .resizable(resizingMode: .tile)
                             .frame(
                                 width: proxy.size.width + tileW,
@@ -426,10 +427,8 @@ public struct PaperTextureOverlayView: View {
     }
 }
 
-/// 100% 对齐 DoveShelf 的 PaperGrainLayer 三 Pass 复合覆层引擎 (SwiftUI)
-/// Pass 1: 零泛白柔光纸纤维层 (.softLight)，激活彩漫与中暗调立体质感且绝不泛白
-/// Pass 2: 透明底微吸收微粒层 (.multiply)，确保浅色留白有细腻颗粒
-/// Pass 3: Stucco 浮雕砂砾层 (.overlay)，使画页与底布砂砾同源贯通
+/// MangaPrism 独家粉刷颗粒正片叠底覆层 (SwiftUI)
+/// 严格采用正片叠底 Multiply 模式，呈现细腻纸浆微纤维与粉刷矿物微粒，暗部零泛白
 public struct ProceduralStuccoMultiPassOverlayView: View {
     public let opacity: Double
     public let phaseAnchor: TexturePhaseAnchor
@@ -440,80 +439,11 @@ public struct ProceduralStuccoMultiPassOverlayView: View {
     }
 
     public var body: some View {
-        let softLightTile = ProceduralStuccoTextureManager.shared.getFiberSoftLightTile()
-        let absorbTile = ProceduralStuccoTextureManager.shared.getFiberAbsorbTile()
-        let stuccoTile = ProceduralStuccoTextureManager.shared.getStuccoTile()
-
-        let fiberAlpha = ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
-        let stuccoAlpha = max(0.0, min(1.0, opacity * 0.75))
-
-        switch phaseAnchor {
-        case .local:
-            ZStack {
-                // Pass 1: 零泛白柔光纸纤维
-                Image(uiImage: softLightTile)
-                    .resizable(resizingMode: .tile)
-                    .blendMode(.softLight)
-                    .opacity(fiberAlpha)
-
-                // Pass 2: 暖墨微吸收浅色纸粒
-                Image(uiImage: absorbTile)
-                    .resizable(resizingMode: .tile)
-                    .blendMode(.multiply)
-                    .opacity(fiberAlpha)
-
-                // Pass 3: 浮雕砂砾微粒 (与底布完全贯通)
-                Image(uiImage: stuccoTile)
-                    .resizable(resizingMode: .tile)
-                    .blendMode(.overlay)
-                    .opacity(stuccoAlpha)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .allowsHitTesting(false)
-
-        case .namedSpace(let spaceName):
-            GeometryReader { proxy in
-                let tileW: CGFloat = 256.0
-                let tileH: CGFloat = 256.0
-                let contentFrame = proxy.frame(in: .named(spaceName))
-
-                let rawX = contentFrame.minX.truncatingRemainder(dividingBy: tileW)
-                let phaseX = rawX >= 0 ? rawX : rawX + tileW
-
-                let rawY = contentFrame.minY.truncatingRemainder(dividingBy: tileH)
-                let phaseY = rawY >= 0 ? rawY : rawY + tileH
-
-                ZStack(alignment: .topLeading) {
-                    // Pass 1: 零泛白柔光纸纤维
-                    Image(uiImage: softLightTile)
-                        .resizable(resizingMode: .tile)
-                        .frame(width: proxy.size.width + tileW, height: proxy.size.height + tileH)
-                        .offset(x: -phaseX, y: -phaseY)
-                        .blendMode(.softLight)
-                        .opacity(fiberAlpha)
-
-                    // Pass 2: 暖墨微吸收浅色纸粒
-                    Image(uiImage: absorbTile)
-                        .resizable(resizingMode: .tile)
-                        .frame(width: proxy.size.width + tileW, height: proxy.size.height + tileH)
-                        .offset(x: -phaseX, y: -phaseY)
-                        .blendMode(.multiply)
-                        .opacity(fiberAlpha)
-
-                    // Pass 3: 浮雕砂砾微粒 (与底布完全贯通)
-                    Image(uiImage: stuccoTile)
-                        .resizable(resizingMode: .tile)
-                        .frame(width: proxy.size.width + tileW, height: proxy.size.height + tileH)
-                        .offset(x: -phaseX, y: -phaseY)
-                        .blendMode(.overlay)
-                        .opacity(stuccoAlpha)
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipped()
-                .allowsHitTesting(false)
-            }
-        }
+        PaperTextureOverlayView(
+            texture: .proceduralStucco,
+            opacity: opacity,
+            phaseAnchor: phaseAnchor
+        )
     }
 }
 

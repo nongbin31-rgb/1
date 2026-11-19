@@ -14,6 +14,7 @@ public final class ComicPageSlot: ObservableObject {
     private var loadedPageID: String?
     private var lastAppliedConfig: ImageUpscalerConfig?
     private var lastIsEnabled: Bool?
+    private var lastAppliedFilterSignature: String?
     private var loadGeneration: UInt64 = 0
 
     public init() {}
@@ -22,7 +23,8 @@ public final class ComicPageSlot: ObservableObject {
         page: MangaPage,
         config: ImageUpscalerConfig,
         isEnabled: Bool,
-        transitionAfterUpscaled: Bool
+        transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig()
     ) async {
         // 页面切换（例如 UICollectionViewCell 复用）时，必须清空上一页缓存的图片与状态
         if loadedPageID != page.id {
@@ -35,20 +37,27 @@ public final class ComicPageSlot: ObservableObject {
             isUpscaling = false
             lastAppliedConfig = nil
             lastIsEnabled = nil
+            lastAppliedFilterSignature = nil
         } else {
             errorMessage = nil
         }
 
+        let targetFilterSig = filterConfig.cacheSignature
+
         // 如果当前页原图已经存在，检查是否已经达到目标状态以避免重复计算
         if let original = originalImage {
             if !isEnabled {
-                if lastIsEnabled == false, processed?.appliedModel == nil, displayImage === original {
+                if lastIsEnabled == false,
+                   processed?.appliedModel == nil,
+                   lastAppliedFilterSignature == targetFilterSig,
+                   displayImage != nil {
                     return
                 }
             } else if lastIsEnabled == true,
                       lastAppliedConfig == config,
+                      lastAppliedFilterSignature == targetFilterSig,
                       let currentProcessed = processed,
-                      displayImage === currentProcessed.image {
+                      displayImage != nil {
                 return
             }
         }
@@ -87,7 +96,7 @@ public final class ComicPageSlot: ObservableObject {
 
         guard let original = originalImage else { return }
 
-        // 若超分未启用，直接显示原图
+        // 若超分未启用，直接处理原图 + 滤镜
         guard isEnabled else {
             let size = CGSize(
                 width: original.cgImage?.width ?? Int(original.size.width),
@@ -102,7 +111,19 @@ public final class ComicPageSlot: ObservableObject {
             )
             lastIsEnabled = false
             lastAppliedConfig = nil
-            displayImage = original
+
+            let finalImage: UIImage
+            if filterConfig.hasActiveFilters {
+                finalImage = ImageFilterPipeline.shared.process(
+                    image: original,
+                    cacheKey: "\(page.imageURL)_raw",
+                    config: filterConfig
+                )
+            } else {
+                finalImage = original
+            }
+            self.lastAppliedFilterSignature = targetFilterSig
+            self.displayImage = finalImage
             return
         }
 
@@ -126,13 +147,25 @@ public final class ComicPageSlot: ObservableObject {
         self.lastIsEnabled = true
         self.lastAppliedConfig = config
 
+        let finalImage: UIImage
+        if filterConfig.hasActiveFilters {
+            finalImage = ImageFilterPipeline.shared.process(
+                image: result.image,
+                cacheKey: "\(page.imageURL)_upscaled",
+                config: filterConfig
+            )
+        } else {
+            finalImage = result.image
+        }
+        self.lastAppliedFilterSignature = targetFilterSig
+
         // 增强后平滑淡入（可达阅读器 transitionAfterImageUpscaled 逻辑）
         if transitionAfterUpscaled {
             withAnimation(.easeInOut(duration: 0.35)) {
-                self.displayImage = result.image
+                self.displayImage = finalImage
             }
         } else {
-            self.displayImage = result.image
+            self.displayImage = finalImage
         }
     }
 
@@ -164,6 +197,7 @@ public struct ComicPageCellView: View {
     public let textureOpacity: Double
     public let textureTarget: ReaderTextureTarget
     public let showDividingLine: Bool
+    public let filterConfig: ImageFilterConfig
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -176,6 +210,7 @@ public struct ComicPageCellView: View {
         config: ImageUpscalerConfig,
         isEnabled: Bool = false,
         transitionAfterUpscaled: Bool = true,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool = false,
         showSpineShadow: Bool = false,
         isRightToLeft: Bool = false,
@@ -193,6 +228,7 @@ public struct ComicPageCellView: View {
         self.config = config
         self.isEnabled = isEnabled
         self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.filterConfig = filterConfig
         self.isCompareMode = isCompareMode
         self.showSpineShadow = showSpineShadow
         self.isRightToLeft = isRightToLeft
@@ -285,7 +321,7 @@ public struct ComicPageCellView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
-        .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)") {
+        .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)::\(filterConfig.cacheSignature)") {
             await triggerLoad()
         }
         .onChange(of: slot.displayImage) { newImg in
@@ -325,7 +361,8 @@ public struct ComicPageCellView: View {
             page: page,
             config: config,
             isEnabled: isEnabled,
-            transitionAfterUpscaled: transitionAfterUpscaled
+            transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig
         )
         guard !Task.isCancelled else { return }
         if let p = slot.processed {

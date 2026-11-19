@@ -28,6 +28,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let upscalerConfig: ImageUpscalerConfig
     public let enableUpscaler: Bool
     public let transitionAfterUpscaled: Bool
+    public let filterConfig: ImageFilterConfig
     public let isCompareMode: Bool
     public let isRightToLeft: Bool
     public let turningEffect: PageTurningEffect
@@ -46,6 +47,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         upscalerConfig: ImageUpscalerConfig,
         enableUpscaler: Bool = false,
         transitionAfterUpscaled: Bool = true,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         turningEffect: PageTurningEffect,
@@ -63,6 +65,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.upscalerConfig = upscalerConfig
         self.enableUpscaler = enableUpscaler
         self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.filterConfig = filterConfig
         self.isCompareMode = isCompareMode
         self.isRightToLeft = isRightToLeft
         self.turningEffect = turningEffect
@@ -93,11 +96,12 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         // 1. 更新背景颜色
         uiViewController.updateBackgroundStyle(background)
 
-        // 2. 立即更新当前可见 Cell 的超分状态、对比模式、背景与纸质纹理，无需等待翻页
+        // 2. 立即更新当前可见 Cell 的超分状态、滤镜配置、对比模式、背景与纸质纹理，无需等待翻页
         uiViewController.updateVisibleCellsConfiguration(
             config: upscalerConfig,
             isEnabled: enableUpscaler,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig,
             isCompareMode: isCompareMode,
             isRightToLeft: isRightToLeft,
             background: background,
@@ -146,6 +150,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 config: parent.upscalerConfig,
                 isEnabled: parent.enableUpscaler,
                 transitionAfterUpscaled: parent.transitionAfterUpscaled,
+                filterConfig: parent.filterConfig,
                 isCompareMode: parent.isCompareMode,
                 isRightToLeft: parent.isRightToLeft,
                 background: parent.background,
@@ -255,6 +260,7 @@ public final class SnapPageViewController: UIViewController {
         config: ImageUpscalerConfig,
         isEnabled: Bool,
         transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         background: ReaderBackground,
@@ -269,6 +275,7 @@ public final class SnapPageViewController: UIViewController {
                     config: config,
                     isEnabled: isEnabled,
                     transitionAfterUpscaled: transitionAfterUpscaled,
+                    filterConfig: filterConfig,
                     isCompareMode: isCompareMode,
                     isRightToLeft: isRightToLeft,
                     background: background,
@@ -284,6 +291,7 @@ public final class SnapPageViewController: UIViewController {
                 config: config,
                 isEnabled: isEnabled,
                 transitionAfterUpscaled: transitionAfterUpscaled,
+                filterConfig: filterConfig,
                 isCompareMode: isCompareMode,
                 isRightToLeft: isRightToLeft,
                 background: background,
@@ -485,6 +493,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentConfig: ImageUpscalerConfig?
     private var currentIsEnabled: Bool = false
     private var currentTransitionAfterUpscaled: Bool = true
+    private var currentFilterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig()
     private var currentIsCompareMode: Bool = false
     private var currentIsRightToLeft: Bool = false
     private var currentBackground: ReaderBackground = .followSystem
@@ -513,6 +522,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         config: ImageUpscalerConfig,
         isEnabled: Bool,
         transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         background: ReaderBackground = .followSystem,
@@ -528,6 +538,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentConfig = config
         self.currentIsEnabled = isEnabled
         self.currentTransitionAfterUpscaled = transitionAfterUpscaled
+        self.currentFilterConfig = filterConfig
         self.currentIsCompareMode = isCompareMode
         self.currentIsRightToLeft = isRightToLeft
         self.currentBackground = background
@@ -558,6 +569,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         config: ImageUpscalerConfig,
         isEnabled: Bool,
         transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         background: ReaderBackground,
@@ -570,6 +582,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         let upscalerChanged = currentConfig != config
             || currentIsEnabled != isEnabled
             || currentTransitionAfterUpscaled != transitionAfterUpscaled
+            || currentFilterConfig != filterConfig
             || currentIsCompareMode != isCompareMode
 
         let layoutChanged = currentIsRightToLeft != isRightToLeft
@@ -586,6 +599,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentConfig = config
         self.currentIsEnabled = isEnabled
         self.currentTransitionAfterUpscaled = transitionAfterUpscaled
+        self.currentFilterConfig = filterConfig
         self.currentIsCompareMode = isCompareMode
         self.currentIsRightToLeft = isRightToLeft
         self.currentBackground = background
@@ -643,6 +657,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             config: config,
             isEnabled: currentIsEnabled,
             transitionAfterUpscaled: currentTransitionAfterUpscaled,
+            filterConfig: currentFilterConfig,
             isCompareMode: currentIsCompareMode,
             showSpineShadow: false,
             isRightToLeft: currentIsRightToLeft,

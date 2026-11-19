@@ -13,6 +13,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let upscalerConfig: ImageUpscalerConfig
     public let enableUpscaler: Bool
     public let transitionAfterUpscaled: Bool
+    public let filterConfig: ImageFilterConfig
     public let isCompareMode: Bool
     public let isRightToLeft: Bool
     public let soundEnabled: Bool
@@ -32,6 +33,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         upscalerConfig: ImageUpscalerConfig,
         enableUpscaler: Bool = false,
         transitionAfterUpscaled: Bool = true,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         soundEnabled: Bool,
@@ -50,6 +52,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.upscalerConfig = upscalerConfig
         self.enableUpscaler = enableUpscaler
         self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.filterConfig = filterConfig
         self.isCompareMode = isCompareMode
         self.isRightToLeft = isRightToLeft
         self.soundEnabled = soundEnabled
@@ -106,13 +109,14 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             uiViewController.view.backgroundColor = .clear
         }
 
-        // 立即更新当前可见子页面的超分状态、对比模式、背景与纸质纹理，无需等待翻页
+        // 立即更新当前可见子页面的超分状态、滤镜配置、对比模式、背景与纸质纹理，无需等待翻页
         if let currentVCs = uiViewController.viewControllers as? [ComicPageHostingController] {
             for vc in currentVCs {
                 vc.updateConfiguration(
                     config: upscalerConfig,
                     isEnabled: enableUpscaler,
                     transitionAfterUpscaled: transitionAfterUpscaled,
+                    filterConfig: filterConfig,
                     isCompareMode: isCompareMode,
                     isRightToLeft: isRightToLeft,
                     background: background,
@@ -242,6 +246,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 config: parent.upscalerConfig,
                 isEnabled: parent.enableUpscaler,
                 transitionAfterUpscaled: parent.transitionAfterUpscaled,
+                filterConfig: parent.filterConfig,
                 isCompareMode: parent.isCompareMode,
                 showSpineShadow: parent.showSpineShadow,
                 isRightToLeft: parent.isRightToLeft,

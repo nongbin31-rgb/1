@@ -18,6 +18,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public let upscalerConfig: ImageUpscalerConfig
     public let enableUpscaler: Bool
     public let transitionAfterUpscaled: Bool
+    public let filterConfig: ImageFilterConfig
     public let isCompareMode: Bool
     public let isRightToLeft: Bool
     public let soundEnabled: Bool
@@ -36,6 +37,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         upscalerConfig: ImageUpscalerConfig,
         enableUpscaler: Bool = false,
         transitionAfterUpscaled: Bool = true,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         soundEnabled: Bool,
@@ -53,6 +55,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self.upscalerConfig = upscalerConfig
         self.enableUpscaler = enableUpscaler
         self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.filterConfig = filterConfig
         self.isCompareMode = isCompareMode
         self.isRightToLeft = isRightToLeft
         self.soundEnabled = soundEnabled
@@ -83,11 +86,12 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         // 1. 同步背景风格
         uiViewController.updateBackgroundStyle(background)
 
-        // 2. 动态更新当前可见子页面的超分状态、对比模式、背景与纸质纹理
+        // 2. 动态更新当前可见子页面的超分状态、滤镜配置、对比模式、背景与纸质纹理
         uiViewController.updateVisibleControllersConfiguration(
             config: upscalerConfig,
             isEnabled: enableUpscaler,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig,
             isCompareMode: isCompareMode,
             isRightToLeft: isRightToLeft,
             background: background,
@@ -240,6 +244,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
         config: ImageUpscalerConfig,
         isEnabled: Bool,
         transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig(),
         isCompareMode: Bool,
         isRightToLeft: Bool,
         background: ReaderBackground,
@@ -252,6 +257,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             config: config,
             isEnabled: isEnabled,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig,
             isCompareMode: isCompareMode,
             isRightToLeft: isRightToLeft,
             background: background,
@@ -264,6 +270,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             config: config,
             isEnabled: isEnabled,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig,
             isCompareMode: isCompareMode,
             isRightToLeft: isRightToLeft,
             background: background,
@@ -307,6 +314,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             config: parentConfig.upscalerConfig,
             isEnabled: parentConfig.enableUpscaler,
             transitionAfterUpscaled: parentConfig.transitionAfterUpscaled,
+            filterConfig: parentConfig.filterConfig,
             isCompareMode: parentConfig.isCompareMode,
             showSpineShadow: false,
             isRightToLeft: parentConfig.isRightToLeft,

@@ -12,25 +12,33 @@ private final class ReaderPageSlot: ObservableObject {
 
     private var lastAppliedConfig: ImageUpscalerConfig?
     private var lastIsEnabled: Bool?
+    private var lastAppliedFilterSignature: String?
 
     func loadAndProcess(
         page: MangaPage,
         config: ImageUpscalerConfig,
         isEnabled: Bool,
-        transitionAfterUpscaled: Bool
+        transitionAfterUpscaled: Bool,
+        filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig()
     ) async {
         errorMessage = nil
+
+        let targetFilterSig = filterConfig.cacheSignature
 
         // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
         if let original = originalImage {
             if !isEnabled {
-                if lastIsEnabled == false, processed?.appliedModel == nil, displayImage === original {
+                if lastIsEnabled == false,
+                   processed?.appliedModel == nil,
+                   lastAppliedFilterSignature == targetFilterSig,
+                   displayImage != nil {
                     return
                 }
             } else if lastIsEnabled == true,
                       lastAppliedConfig == config,
+                      lastAppliedFilterSignature == targetFilterSig,
                       let currentProcessed = processed,
-                      displayImage === currentProcessed.image {
+                      displayImage != nil {
                 return
             }
         }
@@ -69,7 +77,19 @@ private final class ReaderPageSlot: ObservableObject {
             )
             lastIsEnabled = false
             lastAppliedConfig = nil
-            displayImage = original
+
+            let finalImage: UIImage
+            if filterConfig.hasActiveFilters {
+                finalImage = ImageFilterPipeline.shared.process(
+                    image: original,
+                    cacheKey: "\(page.imageURL)_webtoon_raw",
+                    config: filterConfig
+                )
+            } else {
+                finalImage = original
+            }
+            self.lastAppliedFilterSignature = targetFilterSig
+            self.displayImage = finalImage
             return
         }
 
@@ -85,12 +105,24 @@ private final class ReaderPageSlot: ObservableObject {
         self.lastIsEnabled = true
         self.lastAppliedConfig = config
 
+        let finalImage: UIImage
+        if filterConfig.hasActiveFilters {
+            finalImage = ImageFilterPipeline.shared.process(
+                image: result.image,
+                cacheKey: "\(page.imageURL)_webtoon_upscaled",
+                config: filterConfig
+            )
+        } else {
+            finalImage = result.image
+        }
+        self.lastAppliedFilterSignature = targetFilterSig
+
         if transitionAfterUpscaled {
             withAnimation(.easeInOut(duration: 0.35)) {
-                self.displayImage = result.image
+                self.displayImage = finalImage
             }
         } else {
-            self.displayImage = result.image
+            self.displayImage = finalImage
         }
     }
 
@@ -101,6 +133,7 @@ private final class ReaderPageSlot: ObservableObject {
         displayImage = nil
         lastAppliedConfig = nil
         lastIsEnabled = nil
+        lastAppliedFilterSignature = nil
     }
 }
 
@@ -122,6 +155,7 @@ public struct ReaderView: View {
     @State private var showUpscalerSheet = false
     @State private var showConfigPreviewSheet = false
     @State private var showBackgroundPickerSheet = false
+    @State private var showImageFilterSheet = false
     @State private var isCompareMode = false
     @State private var currentHUDText = ""
     @State private var capturedPreviewImage: UIImage?
@@ -257,6 +291,13 @@ public struct ReaderView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         showConfigPreviewSheet = true
                     }
+                },
+                onOpenImageFilter: {
+                    capturedPreviewImage = resolveCurrentImageForPreview()
+                    showUpscalerSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showImageFilterSheet = true
+                    }
                 }
             )
             .environmentObject(store)
@@ -266,6 +307,12 @@ public struct ReaderView: View {
             ReaderImageUpscalerConfigView(
                 imageForPreview: resolveCurrentImageForPreview()
             )
+        }
+        .fullScreenCover(isPresented: $showImageFilterSheet) {
+            ReaderImageFilterView(
+                previewImage: resolveCurrentImageForPreview()
+            )
+            .environmentObject(store)
         }
         .sheet(isPresented: $showBackgroundPickerSheet) {
             ReaderBackgroundPickerSheet()
@@ -333,7 +380,13 @@ public struct ReaderView: View {
                 let scale = UIScreen.main.scale
                 let pixelOverlap = 1.0 / scale
 
-                ZStack(alignment: .topLeading) {
+                ZoomableWebtoonContainer(
+                    onSingleTap: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showChrome.toggle()
+                        }
+                    }
+                ) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(pages) { page in
@@ -343,6 +396,7 @@ public struct ReaderView: View {
                                     config: store.upscalerConfig,
                                     isEnabled: store.enableImageUpscaler,
                                     transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                                    filterConfig: store.imageFilterConfig,
                                     background: store.preferredReaderBackground,
                                     texture: store.readerTextureType,
                                     textureOpacity: store.readerTextureOpacity,
@@ -369,12 +423,6 @@ public struct ReaderView: View {
                         .coordinateSpace(name: "webtoon_scroll_content")
                     }
                 }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showChrome.toggle()
-                    }
-                }
             }
         } else if store.pageTurningEffect == .curling {
             // 仿真书本卷页模式 (PageCurl 3D立体网格折叠)
@@ -383,6 +431,7 @@ public struct ReaderView: View {
                 upscalerConfig: store.upscalerConfig,
                 enableUpscaler: store.enableImageUpscaler,
                 transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                filterConfig: store.imageFilterConfig,
                 isCompareMode: isCompareMode,
                 isRightToLeft: activeLayoutMode == .pagedRTL,
                 soundEnabled: store.pageTurnSoundEnabled,
@@ -413,6 +462,7 @@ public struct ReaderView: View {
                 upscalerConfig: store.upscalerConfig,
                 enableUpscaler: store.enableImageUpscaler,
                 transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                filterConfig: store.imageFilterConfig,
                 isCompareMode: isCompareMode,
                 isRightToLeft: activeLayoutMode == .pagedRTL,
                 soundEnabled: store.pageTurnSoundEnabled,
@@ -442,6 +492,7 @@ public struct ReaderView: View {
                 upscalerConfig: store.upscalerConfig,
                 enableUpscaler: store.enableImageUpscaler,
                 transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                filterConfig: store.imageFilterConfig,
                 isCompareMode: isCompareMode,
                 isRightToLeft: activeLayoutMode == .pagedRTL,
                 turningEffect: store.pageTurningEffect,
@@ -579,9 +630,26 @@ public struct ReaderView: View {
                             Text(store.preferredReaderBackground == .texture ? store.readerTextureType.shortName : store.preferredReaderBackground.title)
                         }
                         .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(Color.white.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.white)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        capturedPreviewImage = resolveCurrentImageForPreview()
+                        showImageFilterSheet = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "camera.filters")
+                            Text(store.imageFilterConfig.hasActiveFilters ? "滤镜(\(store.imageFilterConfig.activeFilterTypes.count))" : "画面滤镜")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(store.imageFilterConfig.hasActiveFilters ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
                         .foregroundStyle(.white)
                     }
 
@@ -595,7 +663,7 @@ public struct ReaderView: View {
                             Text(store.enableImageUpscaler ? store.upscalerConfig.model.displayName : "画质增强")
                         }
                         .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
                         .foregroundStyle(.white)
@@ -774,6 +842,7 @@ private struct VerticalMangaPageCell: View {
     let config: ImageUpscalerConfig
     let isEnabled: Bool
     let transitionAfterUpscaled: Bool
+    var filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig()
     var background: ReaderBackground = .followSystem
     var texture: ReaderTextureType = .classic
     var textureOpacity: Double = 0.4
@@ -921,7 +990,7 @@ private struct VerticalMangaPageCell: View {
                 .clipped()
             }
         }
-        .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)") {
+        .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)::\(filterConfig.cacheSignature)") {
             await triggerLoad()
         }
         .onChange(of: isEnabled) { _ in
@@ -930,6 +999,11 @@ private struct VerticalMangaPageCell: View {
             }
         }
         .onChange(of: config.reloadKey) { _ in
+            Task {
+                await triggerLoad()
+            }
+        }
+        .onChange(of: filterConfig.cacheSignature) { _ in
             Task {
                 await triggerLoad()
             }
@@ -960,7 +1034,8 @@ private struct VerticalMangaPageCell: View {
             page: page,
             config: config,
             isEnabled: isEnabled,
-            transitionAfterUpscaled: transitionAfterUpscaled
+            transitionAfterUpscaled: transitionAfterUpscaled,
+            filterConfig: filterConfig
         )
         if let orig = slot.originalImage {
             onImageLoaded?(orig)
@@ -993,10 +1068,40 @@ private struct ReaderUpscalerSheet: View {
     @Binding var soundEnabled: Bool
     @Binding var showSpineShadow: Bool
     var onOpenAdvancedConfig: () -> Void
+    var onOpenImageFilter: () -> Void
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Button {
+                        onOpenImageFilter()
+                    } label: {
+                        HStack {
+                            Image(systemName: "camera.filters")
+                                .foregroundStyle(Color.accentColor)
+                            Text("画面滤镜")
+                                .font(.body.weight(.medium))
+                            Spacer()
+                            if store.imageFilterConfig.hasActiveFilters {
+                                Text("\(store.imageFilterConfig.activeFilterTypes.count) 项启用")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("未启用")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("画面色彩与线条调节")
+                } footer: {
+                    Text("支持将彩漫转黑白、改善扫描图发灰、锐化画面线条、调节色温护眼以及暗部层次微调。")
+                }
                 Section {
                     Picker("排版方式", selection: Binding(
                         get: { layoutMode },
