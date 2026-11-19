@@ -154,29 +154,32 @@ public struct ReaderView: View {
     @ViewBuilder
     private var readerContent: some View {
         if store.readerLayoutMode == .verticalWebtoon && !isCompareMode {
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(pages) { page in
-                        VerticalMangaPageCell(
-                            page: page,
-                            config: store.upscalerConfig,
-                            onStatusUpdate: { text in
-                                if page.index == currentPageIndex {
-                                    currentHUDText = text
+            GeometryReader { geo in
+                let contentWidth = geo.size.width
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(pages) { page in
+                            VerticalMangaPageCell(
+                                page: page,
+                                contentWidth: contentWidth,
+                                config: store.upscalerConfig,
+                                onStatusUpdate: { text in
+                                    if page.index == currentPageIndex {
+                                        currentHUDText = text
+                                    }
                                 }
+                            )
+                            .onAppear {
+                                currentPageIndex = page.index
                             }
-                        )
-                        .onAppear {
-                            currentPageIndex = page.index
                         }
                     }
                 }
-                .padding(.vertical, 8)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showChrome.toggle()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showChrome.toggle()
+                    }
                 }
             }
         } else {
@@ -464,6 +467,7 @@ private struct PagedMangaPageCell: View {
 
 private struct VerticalMangaPageCell: View {
     let page: MangaPage
+    let contentWidth: CGFloat
     let config: ImageUpscalerConfig
     let onStatusUpdate: (String) -> Void
 
@@ -473,10 +477,21 @@ private struct VerticalMangaPageCell: View {
         ZStack(alignment: .topTrailing) {
             if let orig = slot.originalImage {
                 let displayImage = slot.processed?.image ?? orig
-                Image(uiImage: displayImage)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
+                if contentWidth > 0, displayImage.size.width > 0 {
+                    let scale = UIScreen.main.scale
+                    let rawHeight = contentWidth * (displayImage.size.height / displayImage.size.width)
+                    let alignedHeight = max(1, (rawHeight * scale).rounded(.down) / scale)
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: contentWidth, height: alignedHeight)
+                        .clipped()
+                } else {
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                }
 
                 if slot.isUpscaling {
                     HStack(spacing: 6) {
