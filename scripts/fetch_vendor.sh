@@ -42,6 +42,14 @@ cp "${TMP_DIR}/Anime4KMetal/Shared/Anime4K.swift" "${VENDOR_DIR}/Anime4KMetal/"
 cp "${TMP_DIR}/Anime4KMetal/Shared/MPVShader.swift" "${VENDOR_DIR}/Anime4KMetal/"
 cp "${TMP_DIR}/Anime4KMetal/Shared/CenterResize.metal" "${VENDOR_DIR}/Anime4KMetal/"
 
+# 标准 MSL 采样器在 iOS 16 Metal 编译器下不支持 filter::bicubic，替换为兼容性 100% 的 filter::linear
+python3 -c '
+p = "'"${VENDOR_DIR}/Anime4KMetal/CenterResize.metal"'"
+txt = open(p, "r", encoding="utf-8").read()
+txt = txt.replace("filter::bicubic", "filter::linear")
+open(p, "w", encoding="utf-8").write(txt)
+'
+
 echo "==> [3/3] 拉取 bloc97/Anime4K v4 GLSL 着色器 (MIT)..."
 git clone --depth 1 https://github.com/bloc97/Anime4K.git "${TMP_DIR}/Anime4K"
 cp -R "${TMP_DIR}/Anime4K/glsl" "${VENDOR_DIR}/Anime4K/glsl"

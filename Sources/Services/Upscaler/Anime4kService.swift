@@ -158,11 +158,11 @@ public actor Anime4kService {
             output: outputTexture
         )
 
-        commandBuffer.commit()
         await withCheckedContinuation { continuation in
             commandBuffer.addCompletedHandler { _ in
                 continuation.resume()
             }
+            commandBuffer.commit()
         }
 
         if let error = commandBuffer.error {
