@@ -2,12 +2,12 @@
 //  ProceduralStuccoTextureManager.swift
 //  KedaOnlineReader
 //
-//  复刻自 MangaPrism (漫棱) 独家粉刷微粒与浮雕无缝纹理系统
+//  MangaPrism (漫棱) 细腻粉刷微粒与浮雕无缝纹理系统
 //  特点：
-//  1. 零素材外部依赖，运行时纯代码生成 256x256 高精透明底切片；
+//  1. 零素材外部依赖，运行时纯代码以 @3x 高精分辨率离屏生成透明底无缝切片；
 //  2. 环形对角无缝衔接 (Toroidal Seamless Wrapping)，杜绝拼接网格缝隙；
-//  3. 42 组低频抹灰厚度起伏 + 23,500 颗高频立体浮雕砂粒与纤维孔隙；
-//  4. 屏幕空间相位锁定 (Screen-Space Phase Lock)，翻页、滚动、缩放时微粒纹理绝对锚定。
+//  3. 36 组柔和抹灰底晕 + 16,500 颗物理像素级超细微浮雕粉粒与纸浆微孔；
+//  4. 配合内容空间相位对齐，滚动、翻页与缩放时微粒紧密贴合漫画纸面同步移动。
 //
 
 import CoreGraphics
@@ -17,7 +17,9 @@ import UIKit
 public final class ProceduralStuccoTextureManager: @unchecked Sendable {
     public static let shared = ProceduralStuccoTextureManager()
 
-    public static let tileSize: CGFloat = 256.0
+    /// 逻辑点尺寸（pt），配合 tileScale = 3.0 生成 540×540 物理像素高精切片
+    public static let tileSize: CGFloat = 180.0
+    private static let tileScale: CGFloat = 3.0
 
     private var cachedTile: UIImage?
     private let lock = NSLock()
@@ -53,24 +55,24 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         return tile
     }
 
-    /// 计算非线性感知透明度（Gamma 0.66 校准，低档位保留清晰骨架，避免变成灰雾）
+    /// 计算非线性感知透明度（Gamma 0.78 校准，低档位温润细腻、高档位层次分明）
     public static func perceptualAlpha(for intensity: Double) -> Double {
         let clamped = max(0.0, min(1.0, intensity))
-        return pow(clamped, 0.66)
+        return pow(clamped, 0.78)
     }
 
-    // MARK: - 离屏生成切片
+    // MARK: - 离屏生成 @3x 高精切片
     private func generateSharedTile() -> UIImage {
         let size = CGSize(width: Self.tileSize, height: Self.tileSize)
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0 // 1:1 物理像素离屏绘制
+        format.scale = Self.tileScale
         format.opaque = false
 
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { context in
             let cg = context.cgContext
 
-            // 保持透明底：纹理由背景底色与漫画原图共同作为底层，同一份微粒自然穿透两条绘制链
+            // 保持透明底：纹理由纸浆底色与漫画原图共同作为底层，通过正片叠底自然融合
             paintSoftPlasterMarks(in: cg)
             paintEmbossedGrains(in: cg)
         }
@@ -78,7 +80,6 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
 
     // MARK: - 1. 低频柔和抹灰印记（Soft Plaster Marks）
     private func paintSoftPlasterMarks(in cg: CGContext) {
-        // 固定伪随机数发生器（对齐 MangaPrism 20261108 种子）
         var seed: UInt64 = 20261108
         func nextRandom() -> Double {
             seed = (seed &* 6364136223846793005) &+ 1442695040888963407
@@ -86,27 +87,25 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         }
 
         cg.saveGState()
-        for _ in 0..<42 {
+        for _ in 0..<36 {
             let cx = nextRandom() * Self.tileSize
             let cy = nextRandom() * Self.tileSize
-            let radius = 20.0 + nextRandom() * 38.0
+            let radius = 12.0 + nextRandom() * 14.0
             let isLight = nextRandom() > 0.5
 
             let color = isLight
-                ? UIColor.white.withAlphaComponent(0.055).cgColor
-                : UIColor.black.withAlphaComponent(0.020).cgColor
+                ? UIColor.white.withAlphaComponent(0.045).cgColor
+                : UIColor.black.withAlphaComponent(0.014).cgColor
 
             cg.setFillColor(color)
-            // 羽化微晕模拟
-            cg.setShadow(offset: .zero, blur: 10.0, color: color)
+            cg.setShadow(offset: .zero, blur: 6.0, color: color)
             drawSeamlessCircle(in: cg, cx: cx, cy: cy, radius: radius)
         }
         cg.restoreGState()
     }
 
-    // MARK: - 2. 微观浮雕颗粒与气孔（Embossed Grains）
+    // MARK: - 2. 细腻微观浮雕粉粒与气孔（Fine Embossed Grains）
     private func paintEmbossedGrains(in cg: CGContext) {
-        // 固定伪随机数发生器（对齐 MangaPrism 20261109 种子）
         var seed: UInt64 = 20261109
         func nextRandom() -> Double {
             seed = (seed &* 6364136223846793005) &+ 1442695040888963407
@@ -114,49 +113,50 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
         }
 
         cg.saveGState()
-        // 关键点：禁用抗锯齿以让微细微粒保持晶体颗粒的硬度与骨架，防止被模糊均化
-        cg.setAllowsAntialiasing(false)
+        // @3x 高精分辨率下开启抗锯齿，使 0.3~0.95pt 微粒柔滑自然，杜绝粗大锯齿噪点
+        cg.setAllowsAntialiasing(true)
+        cg.setShouldAntialias(true)
 
-        let grainCount = 23500
+        let grainCount = 16500
         for _ in 0..<grainCount {
             let x = nextRandom() * Self.tileSize
             let y = nextRandom() * Self.tileSize
 
-            // 16% 为大颗粒作为视觉锚点，84% 为高频极细砂
-            let diameter: CGFloat = nextRandom() < 0.16
-                ? CGFloat(1.55 + nextRandom() * 1.15)
-                : CGFloat(0.75 + nextRandom() * 1.05)
+            // 12% 细腻视觉锚点微粒 (0.62~0.96pt)，88% 极细微粉粒 (0.30~0.58pt)
+            let diameter: CGFloat = nextRandom() < 0.12
+                ? CGFloat(0.62 + nextRandom() * 0.34)
+                : CGFloat(0.30 + nextRandom() * 0.28)
 
             let isRaisedGrain = nextRandom() > 0.36
 
             if isRaisedGrain {
-                // 浮雕微凸粒子：较大颗粒在右下角 (x+0.85, y+0.85) 产生暗部偏置微阴影
-                if diameter > 0.95 {
-                    let shadowAlpha = 0.10 + nextRandom() * 0.14
+                // 浮雕微凸粒子：极细微右下角暗部偏置侧影 (0.32pt ≈ 1px @3x)
+                if diameter > 0.52 {
+                    let shadowAlpha = 0.055 + nextRandom() * 0.070
                     cg.setFillColor(UIColor.black.withAlphaComponent(shadowAlpha).cgColor)
                     drawSeamlessDot(
                         in: cg,
-                        x: (x + 0.85).truncatingRemainder(dividingBy: Self.tileSize),
-                        y: (y + 0.85).truncatingRemainder(dividingBy: Self.tileSize),
-                        diameter: diameter * 0.88
+                        x: (x + 0.32).truncatingRemainder(dividingBy: Self.tileSize),
+                        y: (y + 0.32).truncatingRemainder(dividingBy: Self.tileSize),
+                        diameter: diameter * 0.85
                     )
                 }
 
-                // 纯白受光微粒
-                let highlightAlpha = 0.82 + nextRandom() * 0.18
+                // 纯白受光细微粒
+                let highlightAlpha = 0.68 + nextRandom() * 0.22
                 cg.setFillColor(UIColor.white.withAlphaComponent(highlightAlpha).cgColor)
                 drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter)
             } else {
-                // 凹陷气孔与纸浆纤维微杂质 (Color 0xFF45474D)
-                let poreAlpha = 0.12 + nextRandom() * 0.16
+                // 细腻凹陷微孔与纸浆微纤维 (Color 0xFF4C4E54)
+                let poreAlpha = 0.065 + nextRandom() * 0.080
                 let poreColor = UIColor(
-                    red: CGFloat(0x45) / 255.0,
-                    green: CGFloat(0x47) / 255.0,
-                    blue: CGFloat(0x4D) / 255.0,
+                    red: CGFloat(0x4C) / 255.0,
+                    green: CGFloat(0x4E) / 255.0,
+                    blue: CGFloat(0x54) / 255.0,
                     alpha: CGFloat(poreAlpha)
                 )
                 cg.setFillColor(poreColor.cgColor)
-                drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter * 0.85)
+                drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter * 0.80)
             }
         }
         cg.restoreGState()
@@ -185,7 +185,6 @@ public final class ProceduralStuccoTextureManager: @unchecked Sendable {
             cg.fillEllipse(in: CGRect(x: x - r, y: y - Self.tileSize - r, width: diameter, height: diameter))
         }
 
-        // 顶角同时跨越
         if crossesLeft && crossesTop {
             cg.fillEllipse(in: CGRect(x: x + Self.tileSize - r, y: y + Self.tileSize - r, width: diameter, height: diameter))
         }

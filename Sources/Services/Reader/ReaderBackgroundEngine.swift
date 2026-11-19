@@ -248,7 +248,17 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     private func updateTextureImage() {
-        textureOverlayView.image = ReaderTextureCache.shared.textureImage(for: currentTexture)
+        guard let img = ReaderTextureCache.shared.textureImage(for: currentTexture) else {
+            textureOverlayView.image = nil
+            return
+        }
+        if currentTexture == .proceduralStucco {
+            textureOverlayView.contentMode = .scaleToFill
+            textureOverlayView.image = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+        } else {
+            textureOverlayView.contentMode = .scaleAspectFill
+            textureOverlayView.image = img
+        }
     }
 
     // MARK: - 沉浸式动态氛围高斯模糊 (CoreImage 异步高效管线)
@@ -303,61 +313,77 @@ public class ReaderBackgroundContainerView: UIView {
 
 // MARK: - 3. SwiftUI 拟真纸质与书脊光影扩展组件
 
+/// 纸张纹理平铺相位锚点模式
+public enum TexturePhaseAnchor: Equatable, Sendable {
+    /// 绑定当前视图自身坐标系（默认）：翻页、滚动、缩放时纹理严格贴合漫画纸面同步移动
+    case local
+    /// 绑定指定命名内容坐标系（如条漫 ScrollView 内部 LazyVStack）：
+    /// 纹理随滚动内容一起移动，同时保证多张条漫切片拼接处 100% 无缝相位衔接
+    case namedSpace(String)
+}
+
 /// 拟真纸张纹理正片叠底覆盖层 (SwiftUI)
-/// 增强版：内置全局屏幕空间绝对坐标锁定 (Screen-Space Phase Lock)，翻页、滚动、缩放时微粒纹理绝对锚定，彻底解决多页面拼接错位与接缝断层
+/// 默认与所属页面/漫画视图刚性贴合，滚动或翻页时颗粒随漫画一同移动，绝不固定在屏幕上产生抽离感
 public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
     public let opacity: Double
+    public let phaseAnchor: TexturePhaseAnchor
 
-    public init(texture: ReaderTextureType, opacity: Double = 0.4) {
+    public init(
+        texture: ReaderTextureType,
+        opacity: Double = 0.4,
+        phaseAnchor: TexturePhaseAnchor = .local
+    ) {
         self.texture = texture
         self.opacity = opacity
+        self.phaseAnchor = phaseAnchor
     }
 
     public var body: some View {
         if let uiImg = ReaderTextureCache.shared.textureImage(for: texture) {
-            GeometryReader { proxy in
-                let tileSize = (texture == .proceduralStucco)
-                    ? ProceduralStuccoTextureManager.tileSize
-                    : max(uiImg.size.width, 256.0)
-                let globalFrame = proxy.frame(in: .global)
+            let effectiveOpacity = (texture == .proceduralStucco)
+                ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
+                : opacity
 
-                // 正模全局绝对相位计算 (Screen-Space Positive Modulo)
-                // globalFrame.minX 与 minY 代表当前视图左上角在全局物理窗口中的绝对坐标
-                // 严格将屏幕左上角 (0, 0) 映射为纹理网格原点
-                let rawX = globalFrame.minX.truncatingRemainder(dividingBy: tileSize)
-                let phaseX = rawX >= 0 ? rawX : rawX + tileSize
+            switch phaseAnchor {
+            case .local:
+                Image(uiImage: uiImg)
+                    .resizable(resizingMode: .tile)
+                    .blendMode(.multiply)
+                    .opacity(effectiveOpacity)
+                    .clipped()
+                    .allowsHitTesting(false)
 
-                let rawY = globalFrame.minY.truncatingRemainder(dividingBy: tileSize)
-                let phaseY = rawY >= 0 ? rawY : rawY + tileSize
+            case .namedSpace(let spaceName):
+                GeometryReader { proxy in
+                    let tileW = max(uiImg.size.width, 64.0)
+                    let tileH = max(uiImg.size.height, 64.0)
+                    let contentFrame = proxy.frame(in: .named(spaceName))
 
-                // 本地视图左上角的偏移量：使本地 (0, 0) 恰好对齐 globalFrame 在网格中的相对位置
-                let offsetX = -phaseX
-                let offsetY = -phaseY
+                    // 在内容坐标系（非屏幕坐标系）中取正模相位：
+                    // 滚动时 contentFrame 相对内容容器恒定，纹理紧密附着于漫画同步滚动，
+                    // 同时相邻切片交界处的相位严丝合缝，彻底消除接缝断层。
+                    let rawX = contentFrame.minX.truncatingRemainder(dividingBy: tileW)
+                    let phaseX = rawX >= 0 ? rawX : rawX + tileW
 
-                // 感知透明度：程序化微粒采用 Gamma 0.66 校准，其它材质保留标准线性
-                let effectiveOpacity = (texture == .proceduralStucco)
-                    ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
-                    : opacity
+                    let rawY = contentFrame.minY.truncatingRemainder(dividingBy: tileH)
+                    let phaseY = rawY >= 0 ? rawY : rawY + tileH
 
-                // 核心关键架构：
-                // 1. ZStack(alignment: .topLeading) 锁定左上基准，彻底消除居中对齐导致的中心点随尺寸漂移；
-                // 2. 平铺图层尺寸覆盖 view 尺寸 + 1 个 tileSize，确保视口无死角覆盖；
-                // 3. 最外层严格限制在 proxy.size 并 clipped()，彻底杜绝外溢，消除跨页面正片叠底双重叠加暗斑！
-                ZStack(alignment: .topLeading) {
-                    Image(uiImage: uiImg)
-                        .resizable(resizingMode: .tile)
-                        .frame(
-                            width: proxy.size.width + tileSize,
-                            height: proxy.size.height + tileSize
-                        )
-                        .offset(x: offsetX, y: offsetY)
-                        .blendMode(.multiply)
-                        .opacity(effectiveOpacity)
+                    ZStack(alignment: .topLeading) {
+                        Image(uiImage: uiImg)
+                            .resizable(resizingMode: .tile)
+                            .frame(
+                                width: proxy.size.width + tileW,
+                                height: proxy.size.height + tileH
+                            )
+                            .offset(x: -phaseX, y: -phaseY)
+                            .blendMode(.multiply)
+                            .opacity(effectiveOpacity)
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                    .allowsHitTesting(false)
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipped()
-                .allowsHitTesting(false)
             }
         }
     }
@@ -366,13 +392,15 @@ public struct PaperTextureOverlayView: View {
 /// MangaPrism 独家粉刷颗粒独立覆盖层 (SwiftUI)
 public struct ProceduralStuccoOverlayView: View {
     public let opacity: Double
+    public let phaseAnchor: TexturePhaseAnchor
 
-    public init(opacity: Double = 0.4) {
+    public init(opacity: Double = 0.4, phaseAnchor: TexturePhaseAnchor = .local) {
         self.opacity = opacity
+        self.phaseAnchor = phaseAnchor
     }
 
     public var body: some View {
-        PaperTextureOverlayView(texture: .proceduralStucco, opacity: opacity)
+        PaperTextureOverlayView(texture: .proceduralStucco, opacity: opacity, phaseAnchor: phaseAnchor)
     }
 }
 

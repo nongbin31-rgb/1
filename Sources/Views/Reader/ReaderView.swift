@@ -328,7 +328,7 @@ public struct ReaderView: View {
                                     texture: store.readerTextureType,
                                     textureOpacity: store.readerTextureOpacity,
                                     textureTarget: store.readerTextureTarget,
-                                    isUnifiedTextureManaged: true,
+                                    texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
                                     onStatusUpdate: { text in
                                         if page.index == currentPageIndex {
                                             currentHUDText = text
@@ -346,19 +346,7 @@ public struct ReaderView: View {
                                 }
                             }
                         }
-                    }
-
-                    // 条漫全局统一无缝物理纸张正片叠底层 (Unified Webtoon Paper Texture)
-                    // 彻底解决切片独立覆盖导致的相位相移、边界黑带、接缝断层与滑动掉帧
-                    if store.preferredReaderBackground == .texture &&
-                       (store.readerTextureTarget == .both || store.readerTextureTarget == .imageOnly) {
-                        PaperTextureOverlayView(
-                            texture: store.readerTextureType,
-                            opacity: store.readerTextureOpacity
-                        )
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .allowsHitTesting(false)
+                        .coordinateSpace(name: "webtoon_scroll_content")
                     }
                 }
                 .contentShape(Rectangle())
@@ -720,11 +708,19 @@ private struct VerticalMangaPageCell: View {
     var texture: ReaderTextureType = .classic
     var textureOpacity: Double = 0.4
     var textureTarget: ReaderTextureTarget = .both
-    var isUnifiedTextureManaged: Bool = false
+    var texturePhaseAnchor: TexturePhaseAnchor = .local
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
 
     @StateObject private var slot = ReaderPageSlot()
+
+    private var shouldApplyImageTexture: Bool {
+        background == .texture && (textureTarget == .both || textureTarget == .imageOnly)
+    }
+
+    private var shouldApplyPlaceholderTexture: Bool {
+        background == .texture && (textureTarget == .both || textureTarget == .backgroundOnly)
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -736,6 +732,12 @@ private struct VerticalMangaPageCell: View {
                     // 向上对齐物理像素，彻底杜绝向下取整造成的像素缺失
                     let alignedHeight = max(pixelSize, ceil(rawHeight * scale) / scale)
 
+                    // 透明漫画兜底白底，避免透出底层静态背景造成纹理重影
+                    if shouldApplyImageTexture {
+                        Color.white
+                            .frame(width: contentWidth, height: alignedHeight)
+                    }
+
                     // 核心抗接缝设计 (Subpixel Anti-Seam Overlap)：
                     // 图片高度增加 1 物理像素微重叠，并在显示上严格无缝衔接
                     Image(uiImage: displayImage)
@@ -746,33 +748,41 @@ private struct VerticalMangaPageCell: View {
                         .clipped()
 
                     // 真实物理纸张原生底色正片叠底 (彻底解决条漫纯白背景与四周纸浆底色色差)
-                    if background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
+                    if shouldApplyImageTexture {
                         texture.basePaperSwiftUIColor
                             .blendMode(.multiply)
                             .frame(width: contentWidth, height: alignedHeight)
                             .clipped()
-                    }
 
-                    // 拟真纸质材质纹理正片叠底 (当未由外层条漫全局视口统一托管时降级为单单元格覆盖)
-                    if !isUnifiedTextureManaged && background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
-                        PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
-                            .frame(width: contentWidth, height: alignedHeight)
-                            .clipped()
+                        // 拟真纸质材质纹理正片叠底：绑定滚动内容坐标系，随漫画紧贴同步滚动且多图接缝无缝对齐
+                        PaperTextureOverlayView(
+                            texture: texture,
+                            opacity: textureOpacity,
+                            phaseAnchor: texturePhaseAnchor
+                        )
+                        .frame(width: contentWidth, height: alignedHeight)
+                        .clipped()
                     }
                 } else {
+                    if shouldApplyImageTexture {
+                        Color.white
+                    }
+
                     Image(uiImage: displayImage)
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity)
 
-                    if background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
+                    if shouldApplyImageTexture {
                         texture.basePaperSwiftUIColor
                             .blendMode(.multiply)
-                    }
 
-                    if !isUnifiedTextureManaged && background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
-                        PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
-                            .clipped()
+                        PaperTextureOverlayView(
+                            texture: texture,
+                            opacity: textureOpacity,
+                            phaseAnchor: texturePhaseAnchor
+                        )
+                        .clipped()
                     }
                 }
 
@@ -789,30 +799,56 @@ private struct VerticalMangaPageCell: View {
                     .padding(8)
                 }
             } else if let err = slot.errorMessage {
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(textColorForBackground.opacity(0.8))
-                    Button("重试") {
-                        Task { await triggerLoad() }
+                ZStack {
+                    if shouldApplyPlaceholderTexture {
+                        texture.basePaperSwiftUIColor
+                        PaperTextureOverlayView(
+                            texture: texture,
+                            opacity: textureOpacity,
+                            phaseAnchor: texturePhaseAnchor
+                        )
+                    } else {
+                        Color.white.opacity(0.06)
                     }
-                    .buttonStyle(.borderedProminent)
+
+                    VStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(textColorForBackground.opacity(0.8))
+                        Button("重试") {
+                            Task { await triggerLoad() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 260)
-                .background(Color.white.opacity(0.06))
+                .clipped()
             } else {
-                VStack(spacing: 10) {
-                    ProgressView().tint(textColorForBackground)
-                    Text("加载第 \(page.index + 1) 页...")
-                        .font(.caption)
-                        .foregroundStyle(textColorForBackground.opacity(0.75))
+                ZStack {
+                    if shouldApplyPlaceholderTexture {
+                        texture.basePaperSwiftUIColor
+                        PaperTextureOverlayView(
+                            texture: texture,
+                            opacity: textureOpacity,
+                            phaseAnchor: texturePhaseAnchor
+                        )
+                    } else {
+                        Color.white.opacity(0.05)
+                    }
+
+                    VStack(spacing: 10) {
+                        ProgressView().tint(textColorForBackground)
+                        Text("加载第 \(page.index + 1) 页...")
+                            .font(.caption)
+                            .foregroundStyle(textColorForBackground.opacity(0.75))
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 380)
-                .background(Color.white.opacity(0.05))
+                .clipped()
             }
         }
         .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)") {

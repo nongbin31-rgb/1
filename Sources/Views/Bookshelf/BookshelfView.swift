@@ -18,7 +18,7 @@ public struct BookshelfView: View {
     }
 
     private let columns = [
-        GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14)
+        GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14, alignment: .top)
     ]
 
     public var body: some View {
@@ -140,32 +140,26 @@ struct MangaGridCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomLeading) {
-                AsyncMangaCoverView(
-                    urlString: manga.coverURL,
-                    headers: manga.coverHeaders,
-                    cornerRadius: 10
-                )
-                    .aspectRatio(0.7, contentMode: .fit)
-                    .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-
+            AsyncMangaCoverView(
+                urlString: manga.coverURL,
+                headers: manga.coverHeaders,
+                cornerRadius: 10
+            )
+            .frame(maxWidth: .infinity)
+            .aspectRatio(0.7, contentMode: .fit)
+            .overlay(alignment: .topTrailing) {
                 if let sourceBadge, !sourceBadge.isEmpty {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            Text(sourceBadge)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2.5)
-                                .background(.black.opacity(0.62), in: Capsule())
-                                .padding(6)
-                        }
-                        Spacer()
-                    }
+                    Text(sourceBadge)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2.5)
+                        .background(.black.opacity(0.62), in: Capsule())
+                        .padding(6)
                 }
-
+            }
+            .overlay(alignment: .bottomLeading) {
                 if let progress {
                     Text("P\(progress.pageIndex + 1)")
                         .font(.caption2.weight(.semibold))
@@ -176,12 +170,14 @@ struct MangaGridCard: View {
                         .padding(6)
                 }
             }
+            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
 
             Text(manga.title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2, reservesSpace: true)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
 
             if !manga.statusText.isEmpty {
                 HStack(spacing: 3) {
@@ -201,5 +197,6 @@ struct MangaGridCard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

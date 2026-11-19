@@ -368,7 +368,7 @@ public final class SnapPageViewController: UIViewController {
     func applyConfiguration(pages: [MangaPage], isRightToLeft: Bool, targetIndex: Int, animated: Bool) {
         guard isViewLoaded else { return }
 
-        let oldPagesCount = self.pages.count
+        let oldPages = self.pages
         self.pages = pages
 
         let semantic: UISemanticContentAttribute = isRightToLeft ? .forceRightToLeft : .forceLeftToRight
@@ -380,8 +380,8 @@ public final class SnapPageViewController: UIViewController {
             return
         }
 
-        let isFirstDataLoad = (oldPagesCount == 0 && !pages.isEmpty)
-        if oldPagesCount != pages.count {
+        let isFirstDataLoad = (oldPages.isEmpty && !pages.isEmpty)
+        if oldPages != pages {
             collectionView.reloadData()
         }
 
@@ -420,6 +420,10 @@ public final class SnapPageViewController: UIViewController {
         if let current = determineCurrentPageIndex(), current == index {
             isProgrammaticScrolling = false
             return
+        }
+
+        if !collectionView.isScrollEnabled {
+            collectionView.isScrollEnabled = true
         }
 
         if animated {
@@ -462,11 +466,21 @@ public final class SnapPageViewController: UIViewController {
     }
 }
 
+/// 通过显式绑定 page.id 保证 UICollectionViewCell 复用时 SwiftUI 正确重建单页状态与缩放视图；
+/// 同一页面更新超分/对比/背景配置时 page.id 不变，保留已加载原图并原地刷新
+private struct SnapPageRootView: View {
+    let pageView: ComicPageCellView
+
+    var body: some View {
+        pageView.id(pageView.page.id)
+    }
+}
+
 /// 承载 ComicPageCellView 的 UICollectionViewCell
 final class SnapPageHostingCell: UICollectionViewCell {
     static let reuseIdentifier = "SnapPageHostingCell"
 
-    private var hostingController: UIHostingController<ComicPageCellView>?
+    private var hostingController: UIHostingController<SnapPageRootView>?
     private var currentPage: MangaPage?
     private var currentConfig: ImageUpscalerConfig?
     private var currentIsEnabled: Bool = false
@@ -513,12 +527,12 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentOnZoomChanged = onZoomChanged
         self.currentOnImageLoaded = onImageLoaded
 
-        let pageView = buildPageView()
+        let rootView = SnapPageRootView(pageView: buildPageView())
 
         if let existing = hostingController {
-            existing.rootView = pageView
+            existing.rootView = rootView
         } else {
-            let hc = UIHostingController(rootView: pageView)
+            let hc = UIHostingController(rootView: rootView)
             hc.view.backgroundColor = .clear
             hc.view.frame = contentView.bounds
             hc.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -539,6 +553,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
         textureOpacity: Double,
         textureTarget: ReaderTextureTarget
     ) {
+        guard currentPage != nil else { return }
+
         let upscalerChanged = currentConfig != config
             || currentIsEnabled != isEnabled
             || currentTransitionAfterUpscaled != transitionAfterUpscaled
@@ -566,15 +582,15 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentTextureTarget = textureTarget
 
         if let existing = hostingController {
-            existing.rootView = buildPageView()
+            existing.rootView = SnapPageRootView(pageView: buildPageView())
         }
     }
 
     func updateCompareMode(_ isCompareMode: Bool) {
-        guard currentIsCompareMode != isCompareMode else { return }
+        guard currentPage != nil, currentIsCompareMode != isCompareMode else { return }
         self.currentIsCompareMode = isCompareMode
         if let existing = hostingController {
-            existing.rootView = buildPageView()
+            existing.rootView = SnapPageRootView(pageView: buildPageView())
         }
     }
 
@@ -638,5 +654,6 @@ final class SnapPageHostingCell: UICollectionViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        currentPage = nil
     }
 }

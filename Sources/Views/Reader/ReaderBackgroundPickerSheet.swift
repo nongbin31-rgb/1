@@ -140,13 +140,22 @@ public struct ReaderBackgroundPickerSheet: View {
                     item.basePaperSwiftUIColor
 
                     if let img = ReaderTextureCache.shared.textureImage(for: item) {
-                        Image(uiImage: img)
-                            .resizable(resizingMode: item == .proceduralStucco ? .tile : .stretch)
-                            .scaledToFill()
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                            .frame(height: 72)
-                            .clipped()
-                            .blendMode(.multiply)
+                        if item == .proceduralStucco {
+                            Image(uiImage: img)
+                                .resizable(resizingMode: .tile)
+                                .frame(minWidth: 0, maxWidth: .infinity)
+                                .frame(height: 72)
+                                .clipped()
+                                .blendMode(.multiply)
+                        } else {
+                            Image(uiImage: img)
+                                .resizable(resizingMode: .stretch)
+                                .scaledToFill()
+                                .frame(minWidth: 0, maxWidth: .infinity)
+                                .frame(height: 72)
+                                .clipped()
+                                .blendMode(.multiply)
+                        }
                     } else {
                         Color(uiColor: .secondarySystemBackground)
                             .frame(minWidth: 0, maxWidth: .infinity)

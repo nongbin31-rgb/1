@@ -11,8 +11,10 @@ public final class ComicPageSlot: ObservableObject {
     @Published public var isUpscaling = false
     @Published public var errorMessage: String?
 
+    private var loadedPageID: String?
     private var lastAppliedConfig: ImageUpscalerConfig?
     private var lastIsEnabled: Bool?
+    private var loadGeneration: UInt64 = 0
 
     public init() {}
 
@@ -22,9 +24,22 @@ public final class ComicPageSlot: ObservableObject {
         isEnabled: Bool,
         transitionAfterUpscaled: Bool
     ) async {
-        errorMessage = nil
+        // 页面切换（例如 UICollectionViewCell 复用）时，必须清空上一页缓存的图片与状态
+        if loadedPageID != page.id {
+            loadedPageID = page.id
+            originalImage = nil
+            processed = nil
+            displayImage = nil
+            errorMessage = nil
+            isLoading = true
+            isUpscaling = false
+            lastAppliedConfig = nil
+            lastIsEnabled = nil
+        } else {
+            errorMessage = nil
+        }
 
-        // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
+        // 如果当前页原图已经存在，检查是否已经达到目标状态以避免重复计算
         if let original = originalImage {
             if !isEnabled {
                 if lastIsEnabled == false, processed?.appliedModel == nil, displayImage === original {
@@ -38,6 +53,9 @@ public final class ComicPageSlot: ObservableObject {
             }
         }
 
+        loadGeneration &+= 1
+        let currentGeneration = loadGeneration
+
         if originalImage == nil {
             isLoading = true
             do {
@@ -45,15 +63,26 @@ public final class ComicPageSlot: ObservableObject {
                     urlString: page.imageURL,
                     headers: page.headers
                 )
+                guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                    return
+                }
                 self.originalImage = img
                 self.displayImage = img
+            } catch is CancellationError {
+                return
             } catch {
+                guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                    return
+                }
                 errorMessage = error.localizedDescription
                 isLoading = false
                 return
             }
             isLoading = false
             await Task.yield()
+            guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                return
+            }
         }
 
         guard let original = originalImage else { return }
@@ -78,7 +107,11 @@ public final class ComicPageSlot: ObservableObject {
         }
 
         isUpscaling = true
-        defer { isUpscaling = false }
+        defer {
+            if loadGeneration == currentGeneration {
+                isUpscaling = false
+            }
+        }
 
         let result = await PageUpscalerPipeline.shared.process(
             image: original,
@@ -86,6 +119,9 @@ public final class ComicPageSlot: ObservableObject {
             config: config,
             isEnabled: isEnabled
         )
+        guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+            return
+        }
         self.processed = result
         self.lastIsEnabled = true
         self.lastAppliedConfig = config
@@ -102,6 +138,8 @@ public final class ComicPageSlot: ObservableObject {
 
     /// 释放大图内存以应对长列表/长时间翻页，仅保留占位状态
     public func releaseImageMemory() {
+        loadGeneration &+= 1
+        loadedPageID = nil
         originalImage = nil
         processed = nil
         displayImage = nil
@@ -249,16 +287,6 @@ public struct ComicPageCellView: View {
         .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)") {
             await triggerLoad()
         }
-        .onChange(of: isEnabled) { _ in
-            Task {
-                await triggerLoad()
-            }
-        }
-        .onChange(of: config.reloadKey) { _ in
-            Task {
-                await triggerLoad()
-            }
-        }
         .onChange(of: slot.displayImage) { newImg in
             if let newImg {
                 onImageLoaded?(newImg)
@@ -300,6 +328,7 @@ public struct ComicPageCellView: View {
             isEnabled: isEnabled,
             transitionAfterUpscaled: transitionAfterUpscaled
         )
+        guard !Task.isCancelled else { return }
         if let p = slot.processed {
             let orig = "\(Int(p.originalSize.width))×\(Int(p.originalSize.height))"
             let out = "\(Int(p.outputSize.width))×\(Int(p.outputSize.height))"

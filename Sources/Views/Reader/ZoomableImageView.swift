@@ -5,7 +5,9 @@ import UIKit
 final class ComicContainerImageView: UIImageView {
     /// Layer 1: 真实物理纸张基准底色正片叠底覆盖层 (使漫画纯白线稿与四周留白纸浆底色100%无缝吻合)
     let paperTintOverlayView = UIImageView()
-    /// Layer 2: 真实纸张材质纹理覆盖层 (平铺微粒与纤维，随缩放平移天然跟随)
+    /// Layer 2 裁剪容器：严格限定在漫画画面区域内，不溢出到四周留白
+    let textureClipContainer = UIView()
+    /// Layer 2: 真实纸张材质纹理覆盖层 (原点对齐整页坐标系，且随缩放平移紧密附着于漫画画面)
     let textureOverlayView = UIImageView()
 
     override init(image: UIImage?) {
@@ -32,11 +34,17 @@ final class ComicContainerImageView: UIImageView {
         paperTintOverlayView.isHidden = true
         addSubview(paperTintOverlayView)
 
+        textureClipContainer.clipsToBounds = true
+        textureClipContainer.isUserInteractionEnabled = false
+        textureClipContainer.backgroundColor = .clear
+        textureClipContainer.layer.compositingFilter = "multiplyBlendMode"
+        textureClipContainer.isHidden = true
+        addSubview(textureClipContainer)
+
+        textureOverlayView.contentMode = .scaleToFill
         textureOverlayView.clipsToBounds = true
         textureOverlayView.isUserInteractionEnabled = false
-        textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
-        textureOverlayView.isHidden = true
-        addSubview(textureOverlayView)
+        textureClipContainer.addSubview(textureOverlayView)
     }
 
     override func layoutSubviews() {
@@ -51,7 +59,14 @@ final class ComicContainerImageView: UIImageView {
             bounds: bounds
         )
         paperTintOverlayView.frame = targetRect
-        textureOverlayView.frame = targetRect
+        textureClipContainer.frame = targetRect
+        // 反向定位使平铺原点对齐整页 (0, 0)，与页面四周留白纸张纹理相位 100% 无缝衔接
+        textureOverlayView.frame = CGRect(
+            x: -targetRect.minX,
+            y: -targetRect.minY,
+            width: bounds.width,
+            height: bounds.height
+        )
     }
 }
 
@@ -168,23 +183,26 @@ public struct ZoomableImageView: UIViewRepresentable {
 
                 // 2. 真实物理纸张材质微粒/纹理正片叠底
                 if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
-                    imageView.textureOverlayView.isHidden = false
+                    imageView.textureClipContainer.isHidden = false
                     if texture == .proceduralStucco {
-                        // 程序化粉刷颗粒保持无缝环形平铺，绝对保持 256x256 物理颗粒度，杜绝放大失真
+                        // 程序化粉刷颗粒保持无缝环形平铺，严格按 @3x 逻辑点尺寸平铺，杜绝放大发粗
+                        imageView.textureOverlayView.contentMode = .scaleToFill
                         imageView.textureOverlayView.image = texImg.resizableImage(withCapInsets: .zero, resizingMode: .tile)
                     } else {
+                        imageView.textureOverlayView.contentMode = .scaleAspectFill
                         imageView.textureOverlayView.image = texImg
                     }
                     let effectiveOpacity = (texture == .proceduralStucco)
                         ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
                         : opacity
-                    imageView.textureOverlayView.alpha = CGFloat(effectiveOpacity)
+                    imageView.textureClipContainer.alpha = CGFloat(effectiveOpacity)
+                    imageView.textureOverlayView.alpha = 1.0
                 } else {
-                    imageView.textureOverlayView.isHidden = true
+                    imageView.textureClipContainer.isHidden = true
                 }
             } else {
                 imageView.paperTintOverlayView.isHidden = true
-                imageView.textureOverlayView.isHidden = true
+                imageView.textureClipContainer.isHidden = true
             }
         }
 

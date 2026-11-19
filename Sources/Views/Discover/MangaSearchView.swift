@@ -44,7 +44,7 @@ public struct MangaSearchView: View {
     @State private var noticeDismissTask: Task<Void, Never>?
 
     private let columns = [
-        GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14)
+        GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14, alignment: .top)
     ]
 
     public init(
