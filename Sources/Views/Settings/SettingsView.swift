@@ -11,6 +11,26 @@ public struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    HStack(spacing: 16) {
+                        Image("AppLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("清阅在线漫画")
+                                .font(.headline.weight(.bold))
+                            Text("版本 1.0.0 · 双核 AI 超分引擎")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section {
                     Toggle("启用 AI 画质增强（会有额外功耗）", isOn: $store.enableImageUpscaler)
 
                     if store.enableImageUpscaler {
