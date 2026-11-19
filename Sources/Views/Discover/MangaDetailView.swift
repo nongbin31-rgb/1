@@ -100,6 +100,8 @@ public struct MangaDetailView: View {
                             systemImage: "play.fill"
                         )
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
