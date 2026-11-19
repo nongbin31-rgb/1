@@ -256,7 +256,7 @@ public struct DiscoverView: View {
                                 isSelected ? Color.accentColor : Color(.secondarySystemFill),
                                 in: Capsule()
                             )
-                            .foregroundStyle(isSelected ? .white : .primary)
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -284,7 +284,7 @@ public struct DiscoverView: View {
                                 isSelected ? Color.accentColor.opacity(0.18) : Color(.tertiarySystemFill),
                                 in: Capsule()
                             )
-                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -336,7 +336,7 @@ public struct DiscoverView: View {
                         currentPage > 1 ? Color(.secondarySystemFill) : Color(.tertiarySystemFill).opacity(0.4),
                         in: Capsule()
                     )
-                    .foregroundStyle(currentPage > 1 ? .primary : .secondary.opacity(0.4))
+                    .foregroundStyle(currentPage > 1 ? Color.primary : Color.secondary.opacity(0.4))
                 }
                 .buttonStyle(.plain)
                 .disabled(currentPage <= 1 || isLoading || isLoadingMore)
@@ -382,7 +382,7 @@ public struct DiscoverView: View {
                         canLoadMore ? Color.accentColor : Color(.tertiarySystemFill).opacity(0.4),
                         in: Capsule()
                     )
-                    .foregroundStyle(canLoadMore ? .white : .secondary.opacity(0.4))
+                    .foregroundStyle(canLoadMore ? Color.white : Color.secondary.opacity(0.4))
                 }
                 .buttonStyle(.plain)
                 .disabled(!canLoadMore || isLoading || isLoadingMore)

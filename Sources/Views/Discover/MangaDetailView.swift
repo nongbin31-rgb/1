@@ -186,7 +186,7 @@ public struct MangaDetailView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(chapter.title)
                                         .font(.subheadline.weight(isCurrent ? .semibold : .regular))
-                                        .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                                        .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
                                     if !chapter.updatedAt.isEmpty {
                                         Text(chapter.updatedAt)
                                             .font(.caption2)
