@@ -52,7 +52,9 @@ public struct BuiltinDemoSource: MangaSourceProtocol {
         guard !keyword.isEmpty else { return all }
         return all.filter {
             $0.title.localizedCaseInsensitiveContains(keyword)
+            || $0.author.localizedCaseInsensitiveContains(keyword)
             || $0.summary.localizedCaseInsensitiveContains(keyword)
+            || $0.statusText.localizedCaseInsensitiveContains(keyword)
             || $0.tags.contains(where: { $0.localizedCaseInsensitiveContains(keyword) })
         }
     }

@@ -8,6 +8,9 @@ public protocol MangaSourceProtocol: Sendable {
     /// 可选分类筛选列表
     var exploreCategories: [MangaCategoryOption] { get }
 
+    /// 搜索支持的排序方式
+    var supportedSearchSorts: [MangaSearchSort] { get }
+
     /// 获取热门 / 推荐列表
     func fetchPopular(page: Int) async throws -> [Manga]
 
@@ -16,6 +19,9 @@ public protocol MangaSourceProtocol: Sendable {
 
     /// 关键词搜索
     func search(query: String, page: Int) async throws -> [Manga]
+
+    /// 带排序方式的关键词搜索
+    func search(query: String, sort: MangaSearchSort, page: Int) async throws -> [Manga]
 
     /// 获取漫画完整详情与章节列表
     func fetchDetail(for manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter])
@@ -30,8 +36,14 @@ public protocol MangaSourceProtocol: Sendable {
 public extension MangaSourceProtocol {
     var exploreCategories: [MangaCategoryOption] { [] }
 
+    var supportedSearchSorts: [MangaSearchSort] { [.latest] }
+
     func fetchPopular(category: String, page: Int) async throws -> [Manga] {
         try await fetchPopular(page: page)
+    }
+
+    func search(query: String, sort: MangaSearchSort, page: Int) async throws -> [Manga] {
+        try await search(query: query, page: page)
     }
 
     func fetchDetail(for manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter]) {

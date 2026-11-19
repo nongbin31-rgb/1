@@ -75,10 +75,32 @@ public struct MangaDetailView: View {
 
                 let displayAuthor = currentManga.displayAuthor
                 if !displayAuthor.isEmpty {
-                    Label(displayAuthor, systemImage: "person")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    let isSearchableAuthor = displayAuthor != "佚名" && displayAuthor != "绅士本"
+                    if isSearchableAuthor {
+                        NavigationLink(
+                            value: MangaSearchRoute(
+                                initialQuery: displayAuthor,
+                                initialSourceID: currentManga.sourceID,
+                                autoSubmit: true
+                            )
+                        ) {
+                            HStack(spacing: 4) {
+                                Label(displayAuthor, systemImage: "person")
+                                Image(systemName: "magnifyingglass")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Label(displayAuthor, systemImage: "person")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
 
                 let status = currentStatusText
@@ -91,7 +113,16 @@ public struct MangaDetailView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(tags, id: \.self) { tag in
-                                mangaTagBadge(tag)
+                                NavigationLink(
+                                    value: MangaSearchRoute(
+                                        initialQuery: tag,
+                                        initialSourceID: currentManga.sourceID,
+                                        autoSubmit: true
+                                    )
+                                ) {
+                                    mangaTagBadge(tag)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }

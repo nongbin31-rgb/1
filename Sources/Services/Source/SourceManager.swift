@@ -52,6 +52,9 @@ public final class AppStore: ObservableObject {
     @Published public var discoverPaginationMode: DiscoverPaginationMode = .pageByPage {
         didSet { save(discoverPaginationMode, key: Keys.discoverPaginationMode) }
     }
+    @Published public var searchHistory: [String] = [] {
+        didSet { save(searchHistory, key: Keys.searchHistory) }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -71,6 +74,7 @@ public final class AppStore: ObservableObject {
         static let readerTextureTarget = "keda_online_reader_texture_target_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
+        static let searchHistory = "keda_online_search_history_v1"
     }
 
     public init() {
@@ -127,6 +131,7 @@ public final class AppStore: ObservableObject {
         self.readerTextureTarget = load(key: Keys.readerTextureTarget) ?? .both
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
+        self.searchHistory = load(key: Keys.searchHistory) ?? []
     }
 
     public var enabledSources: [MangaSourceConfig] {
@@ -185,6 +190,25 @@ public final class AppStore: ObservableObject {
         if selectedSourceID == id {
             selectedSourceID = sources.first?.id ?? ""
         }
+    }
+
+    public func recordSearchHistory(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var updated = searchHistory.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }
+        updated.insert(trimmed, at: 0)
+        if updated.count > 20 {
+            updated = Array(updated.prefix(20))
+        }
+        searchHistory = updated
+    }
+
+    public func removeSearchHistory(_ query: String) {
+        searchHistory.removeAll { $0 == query }
+    }
+
+    public func clearSearchHistory() {
+        searchHistory = []
     }
 
     private func save<T: Encodable>(_ value: T, key: String) {

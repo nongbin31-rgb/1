@@ -11,6 +11,9 @@ public final class ComicPageSlot: ObservableObject {
     @Published public var isUpscaling = false
     @Published public var errorMessage: String?
 
+    private var lastAppliedConfig: ImageUpscalerConfig?
+    private var lastIsEnabled: Bool?
+
     public init() {}
 
     public func loadAndProcess(
@@ -24,11 +27,12 @@ public final class ComicPageSlot: ObservableObject {
         // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
         if let original = originalImage {
             if !isEnabled {
-                if processed?.appliedModel == nil, displayImage === original {
+                if lastIsEnabled == false, processed?.appliedModel == nil, displayImage === original {
                     return
                 }
-            } else if let currentProcessed = processed,
-                      currentProcessed.appliedModel == config.model,
+            } else if lastIsEnabled == true,
+                      lastAppliedConfig == config,
+                      let currentProcessed = processed,
                       displayImage === currentProcessed.image {
                 return
             }
@@ -67,6 +71,8 @@ public final class ComicPageSlot: ObservableObject {
                 elapsedMs: 0,
                 appliedModel: nil
             )
+            lastIsEnabled = false
+            lastAppliedConfig = nil
             displayImage = original
             return
         }
@@ -81,6 +87,8 @@ public final class ComicPageSlot: ObservableObject {
             isEnabled: isEnabled
         )
         self.processed = result
+        self.lastIsEnabled = true
+        self.lastAppliedConfig = config
 
         // 增强后平滑淡入（可达阅读器 transitionAfterImageUpscaled 逻辑）
         if transitionAfterUpscaled {
@@ -99,6 +107,8 @@ public final class ComicPageSlot: ObservableObject {
         displayImage = nil
         isLoading = false
         isUpscaling = false
+        lastAppliedConfig = nil
+        lastIsEnabled = nil
     }
 }
 
@@ -236,7 +246,7 @@ public struct ComicPageCellView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
-        .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
+        .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)") {
             await triggerLoad()
         }
         .onChange(of: isEnabled) { _ in
@@ -244,7 +254,7 @@ public struct ComicPageCellView: View {
                 await triggerLoad()
             }
         }
-        .onChange(of: config.cacheKey) { _ in
+        .onChange(of: config.reloadKey) { _ in
             Task {
                 await triggerLoad()
             }

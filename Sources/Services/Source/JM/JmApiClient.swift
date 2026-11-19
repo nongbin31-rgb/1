@@ -375,16 +375,25 @@ public actor JmApiClient {
         return parseMangaList(data, sourceID: sourceID)
     }
 
-    public func search(sourceID: String, query: String, page: Int = 1) async throws -> [Manga] {
+    public func search(
+        sourceID: String,
+        query: String,
+        order: String = "mr",
+        page: Int = 1
+    ) async throws -> [Manga] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
+
+        let directInfo = extractDirectAlbumID(from: trimmed)
+        // 若用户显式输入 JM123456 / jm 123456，传纯数字给接口以便触发官方 redirect_aid 精准定位
+        let effectiveQuery = (directInfo?.hasExplicitPrefix == true) ? directInfo!.id : trimmed
 
         let data = try await requestDecryptedJson(
             path: "/search",
             queryParameters: [
-                "search_query": trimmed,
+                "search_query": effectiveQuery,
                 "page": String(page),
-                "o": "mr",
+                "o": order.isEmpty ? "mr" : order,
             ]
         )
 
@@ -392,6 +401,7 @@ public actor JmApiClient {
             if let redirectAidRaw = map["redirect_aid"] {
                 let redirectAid = String(describing: redirectAidRaw).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !redirectAid.isEmpty, redirectAid != "0", redirectAid != "<null>" {
+                    if page > 1 { return [] }
                     if let albumData = try await requestDecryptedJson(
                         path: "/album",
                         queryParameters: ["id": redirectAid]
@@ -400,9 +410,54 @@ public actor JmApiClient {
                     }
                 }
             }
-            return parseMangaList(map["content"], sourceID: sourceID)
+            let list = parseMangaList(map["content"], sourceID: sourceID)
+            if !list.isEmpty {
+                return list
+            }
+        } else {
+            let list = parseMangaList(data, sourceID: sourceID)
+            if !list.isEmpty {
+                return list
+            }
         }
-        return parseMangaList(data, sourceID: sourceID)
+
+        // 车牌号 / JM 编号直达兜底（仅第 1 页）
+        if page == 1, let albumID = directInfo?.id {
+            if let albumData = try? await requestDecryptedJson(
+                path: "/album",
+                queryParameters: ["id": albumID]
+            ) as? [String: Any],
+               cleanField(albumData["name"]) != nil {
+                return [parseMangaItem(albumData, sourceID: sourceID, fallbackId: albumID)]
+            }
+        }
+
+        return []
+    }
+
+    private func extractDirectAlbumID(from raw: String) -> (id: String, hasExplicitPrefix: Bool)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+
+        if let prefixRegex = try? NSRegularExpression(
+            pattern: #"^(?:jm|album|aid)[\s\-_:#]*(\d{4,9})$"#,
+            options: [.caseInsensitive]
+        ),
+           let match = prefixRegex.firstMatch(in: trimmed, range: range),
+           match.numberOfRanges > 1,
+           let idRange = Range(match.range(at: 1), in: trimmed) {
+            return (String(trimmed[idRange]), true)
+        }
+
+        if let numericRegex = try? NSRegularExpression(pattern: #"^#?(\d{5,9})$"#),
+           let match = numericRegex.firstMatch(in: trimmed, range: range),
+           match.numberOfRanges > 1,
+           let idRange = Range(match.range(at: 1), in: trimmed) {
+            return (String(trimmed[idRange]), false)
+        }
+
+        return nil
     }
 
     public func getDetail(sourceID: String, manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter]) {
@@ -598,8 +653,9 @@ public actor JmApiClient {
     // MARK: - Parsing Helpers
 
     private func parseMangaList(_ rawList: Any?, sourceID: String) -> [Manga] {
-        guard let list = rawList as? [[String: Any]] else { return [] }
-        return list.compactMap { item in
+        guard let list = rawList as? [Any] else { return [] }
+        return list.compactMap { entry -> Manga? in
+            guard let item = entry as? [String: Any] else { return nil }
             let parsed = parseMangaItem(item, sourceID: sourceID)
             return parsed.id.isEmpty ? nil : parsed
         }

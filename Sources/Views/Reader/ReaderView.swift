@@ -10,6 +10,9 @@ private final class ReaderPageSlot: ObservableObject {
     @Published var isUpscaling = false
     @Published var errorMessage: String?
 
+    private var lastAppliedConfig: ImageUpscalerConfig?
+    private var lastIsEnabled: Bool?
+
     func loadAndProcess(
         page: MangaPage,
         config: ImageUpscalerConfig,
@@ -21,11 +24,12 @@ private final class ReaderPageSlot: ObservableObject {
         // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
         if let original = originalImage {
             if !isEnabled {
-                if processed?.appliedModel == nil, displayImage === original {
+                if lastIsEnabled == false, processed?.appliedModel == nil, displayImage === original {
                     return
                 }
-            } else if let currentProcessed = processed,
-                      currentProcessed.appliedModel == config.model,
+            } else if lastIsEnabled == true,
+                      lastAppliedConfig == config,
+                      let currentProcessed = processed,
                       displayImage === currentProcessed.image {
                 return
             }
@@ -63,6 +67,8 @@ private final class ReaderPageSlot: ObservableObject {
                 elapsedMs: 0,
                 appliedModel: nil
             )
+            lastIsEnabled = false
+            lastAppliedConfig = nil
             displayImage = original
             return
         }
@@ -76,6 +82,8 @@ private final class ReaderPageSlot: ObservableObject {
             isEnabled: isEnabled
         )
         self.processed = result
+        self.lastIsEnabled = true
+        self.lastAppliedConfig = config
 
         if transitionAfterUpscaled {
             withAnimation(.easeInOut(duration: 0.35)) {
@@ -91,6 +99,8 @@ private final class ReaderPageSlot: ObservableObject {
         originalImage = nil
         processed = nil
         displayImage = nil
+        lastAppliedConfig = nil
+        lastIsEnabled = nil
     }
 }
 
@@ -805,7 +815,7 @@ private struct VerticalMangaPageCell: View {
                 .background(Color.white.opacity(0.05))
             }
         }
-        .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
+        .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)") {
             await triggerLoad()
         }
         .onChange(of: isEnabled) { _ in
@@ -813,7 +823,7 @@ private struct VerticalMangaPageCell: View {
                 await triggerLoad()
             }
         }
-        .onChange(of: config.cacheKey) { _ in
+        .onChange(of: config.reloadKey) { _ in
             Task {
                 await triggerLoad()
             }
@@ -900,9 +910,10 @@ private struct ReaderUpscalerSheet: View {
                     }
                 }
 
-                Section("画质超分选项") {
+                Section {
                     Toggle("启用 AI 画质增强", isOn: $enableUpscaler)
                     Toggle("增强后平滑淡入", isOn: $transitionAfterUpscaled)
+                    Toggle("解除超分尺寸限制（慎用）", isOn: $config.bypassSizeLimit)
 
                     Picker("超分引擎", selection: $config.model) {
                         ForEach(ImageUpscalerModel.allCases) { model in
@@ -923,6 +934,14 @@ private struct ReaderUpscalerSheet: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+                } header: {
+                    Text("画质超分选项")
+                } footer: {
+                    Text(
+                        config.bypassSizeLimit
+                            ? "已解除 1200 万总像素限制，超巨图可能内存飙升或闪退；Anime4K 仍受 Metal 8192px 单边硬件限制。"
+                            : "默认采用 1200 万总像素保护，支持 800×8000 等模糊条漫长图直接超分。"
+                    )
                 }
             }
             .navigationTitle("画质超分与阅读设置")

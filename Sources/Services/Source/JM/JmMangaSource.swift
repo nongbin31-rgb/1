@@ -13,6 +13,10 @@ public struct JmMangaSource: MangaSourceProtocol {
         ]
     }
 
+    public var supportedSearchSorts: [MangaSearchSort] {
+        [.latest, .popular, .favorites, .mostPages]
+    }
+
     public init(config: MangaSourceConfig) {
         self.config = config
     }
@@ -26,7 +30,18 @@ public struct JmMangaSource: MangaSourceProtocol {
     }
 
     public func search(query: String, page: Int) async throws -> [Manga] {
-        try await JmApiClient.shared.search(sourceID: config.id, query: query, page: page)
+        try await search(query: query, sort: .latest, page: page)
+    }
+
+    public func search(query: String, sort: MangaSearchSort, page: Int) async throws -> [Manga] {
+        let order: String
+        switch sort {
+        case .latest:    order = "mr"
+        case .popular:   order = "mv"
+        case .favorites: order = "tf"
+        case .mostPages: order = "mp"
+        }
+        return try await JmApiClient.shared.search(sourceID: config.id, query: query, order: order, page: page)
     }
 
     public func fetchDetail(for manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter]) {

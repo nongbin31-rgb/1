@@ -1,12 +1,14 @@
 import CoreGraphics
 import CoreML
+import Darwin
 import Foundation
 import UIKit
 
 public enum Waifu2xServiceError: LocalizedError {
     case imageTooSmall(width: Int, height: Int)
-    case imageTooLarge(width: Int, height: Int)
+    case imageTooLarge(width: Int, height: Int, maxPixels: Int)
     case decodeFailed
+    case memoryAllocationFailed
     case modelNotFound(String)
     case inferenceFailed(String)
 
@@ -14,10 +16,14 @@ public enum Waifu2xServiceError: LocalizedError {
         switch self {
         case let .imageTooSmall(w, h):
             return "图片尺寸过小 (\(w)×\(h))，Waifu2x 要求最小边 ≥ 32px"
-        case let .imageTooLarge(w, h):
-            return "图片尺寸过大 (\(w)×\(h))，超过 2500px 上限已跳过超分"
+        case let .imageTooLarge(w, h, maxPixels):
+            let mp = String(format: "%.1f", Double(w * h) / 1_000_000.0)
+            let limitMP = maxPixels / 1_000_000
+            return "图片总像素过大 (\(w)×\(h)，约 \(mp)M)，超过默认 \(limitMP)M 上限已跳过超分"
         case .decodeFailed:
             return "位图预解码失败"
+        case .memoryAllocationFailed:
+            return "设备可用内存不足，无法分配超分位图缓冲区"
         case let .modelNotFound(name):
             return "未找到 CoreML 模型包: \(name)"
         case let .inferenceFailed(msg):
@@ -33,7 +39,8 @@ public final class Waifu2xService: @unchecked Sendable {
     public static let shared = Waifu2xService()
 
     public static let minDimension: Int = 32
-    public static let maxDimension: Int = 2500
+    /// 默认最大允许总像素（1200 万像素，兼容 800×8000 等模糊条漫长图）
+    public static let maxPixelCount: Int = ImageUpscalerConfig.maxPixelCountThreshold
 
     /// 严格串行调度队列，避免多页并发导致显存瞬间挤爆
     private let serialQueue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.waifu2x.serial", qos: .userInitiated)
@@ -48,27 +55,40 @@ public final class Waifu2xService: @unchecked Sendable {
     /// - Parameters:
     ///   - image: 输入原始图像
     ///   - model: 10 组模型之一（漫画/照片，不同降噪等级）
+    ///   - bypassSizeLimit: 是否解除默认总像素上限
     ///   - progress: 进度回调 (0% ~ 100%)
     /// - Returns: 2 倍放大后的高清 UIImage
     public func enhance(
         image: UIImage,
         model: Waifu2xModel = .anime_noise1_scale2x,
+        bypassSizeLimit: Bool = false,
         progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> UIImage {
-        // 1. 强制位图预解码并统一为 scale = 1.0、orientation = .up，规避 iOS 延迟解码崩溃
-        guard let preparedImage = Self.forceDecodeToPixelImage(image) else {
-            throw Waifu2xServiceError.decodeFailed
-        }
-
-        let width = Int(preparedImage.size.width)
-        let height = Int(preparedImage.size.height)
-
-        // 2. 双向尺寸安全阈值拦截
+        // 1. 先检查像素尺寸（避免超限图先做位图解码浪费内存）
+        let (width, height) = Self.pixelDimensions(of: image)
         guard width >= Self.minDimension && height >= Self.minDimension else {
             throw Waifu2xServiceError.imageTooSmall(width: width, height: height)
         }
-        guard width <= Self.maxDimension && height <= Self.maxDimension else {
-            throw Waifu2xServiceError.imageTooLarge(width: width, height: height)
+        if !bypassSizeLimit {
+            let pixelCount = width * height
+            guard pixelCount <= Self.maxPixelCount else {
+                throw Waifu2xServiceError.imageTooLarge(
+                    width: width,
+                    height: height,
+                    maxPixels: Self.maxPixelCount
+                )
+            }
+        }
+
+        // 2. 若原图已是正向 CGImage 则免去冗余中间拷贝，仅方向非 .up 或缺失 cgImage 时预解码规范化
+        let preparedImage: UIImage
+        if image.cgImage != nil && image.imageOrientation == .up {
+            preparedImage = image
+        } else {
+            guard let decoded = Self.forceDecodeToPixelImage(image) else {
+                throw Waifu2xServiceError.decodeFailed
+            }
+            preparedImage = decoded
         }
 
         // 3. 在专用串行队列中排队执行 CoreML 原生分块推理
@@ -100,12 +120,22 @@ public final class Waifu2xService: @unchecked Sendable {
         let width = cgImage.width
         let height = cgImage.height
 
-        // 1. 提取原图 8-bit RGBA 像素数据
-        var srcPixels = [UInt8](repeating: 0, count: width * height * 4)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        // 1. 提取原图 8-bit RGBA 像素数据（推理结束后立刻释放）
+        let srcBytes = width * height * 4
+        guard srcBytes > 0, let srcRawPtr = calloc(srcBytes, 1) else {
+            throw Waifu2xServiceError.memoryAllocationFailed
+        }
+        var srcFreed = false
+        defer {
+            if !srcFreed {
+                free(srcRawPtr)
+            }
+        }
+
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         let srcBitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
         guard let context = CGContext(
-            data: &srcPixels,
+            data: srcRawPtr,
             width: width,
             height: height,
             bitsPerComponent: 8,
@@ -116,6 +146,7 @@ public final class Waifu2xService: @unchecked Sendable {
             throw Waifu2xServiceError.decodeFailed
         }
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let srcPtr = srcRawPtr.bindMemory(to: UInt8.self, capacity: srcBytes)
 
         // 2. Waifu2x 官方 2x 模型数学规格
         let blockSize = 142
@@ -126,8 +157,19 @@ public final class Waifu2xService: @unchecked Sendable {
         let targetWidth = width * outScale
         let targetHeight = height * outScale
 
-        // 分配目标大图像素缓冲区（初始化为不透明白/黑底）
-        var dstPixels = [UInt8](repeating: 255, count: targetWidth * targetHeight * 4)
+        // 分配目标大图像素缓冲区（零拷贝移交 CGDataProvider，彻底消除 Data(dstPixels) 双倍内存峰值）
+        let targetBytes = targetWidth * targetHeight * 4
+        guard targetBytes > 0, let dstRawPtr = malloc(targetBytes) else {
+            throw Waifu2xServiceError.memoryAllocationFailed
+        }
+        memset(dstRawPtr, 255, targetBytes)
+        var dstOwnershipTransferred = false
+        defer {
+            if !dstOwnershipTransferred {
+                free(dstRawPtr)
+            }
+        }
+        let dstPtr = dstRawPtr.bindMemory(to: UInt8.self, capacity: targetBytes)
 
         // 3. 计算覆盖原图的全部切片区域
         let rects = Self.computeTileRects(width: width, height: height, step: blockSize)
@@ -165,9 +207,9 @@ public final class Waifu2xService: @unchecked Sendable {
                     let sampleX = min(max(originX - shrinkSize + px, 0), width - 1)
                     let pixelIdx = (rowOffset + sampleX) * 4
 
-                    let r = Double(srcPixels[pixelIdx]) / 255.0
-                    let g = Double(srcPixels[pixelIdx + 1]) / 255.0
-                    let b = Double(srcPixels[pixelIdx + 2]) / 255.0
+                    let r = Double(srcPtr[pixelIdx]) / 255.0
+                    let g = Double(srcPtr[pixelIdx + 1]) / 255.0
+                    let b = Double(srcPtr[pixelIdx + 2]) / 255.0
 
                     let offsetInPlane = planeRow + px
                     inputPtr[offsetInPlane] = r
@@ -176,32 +218,45 @@ public final class Waifu2xService: @unchecked Sendable {
                 }
             }
 
-            // 运行模型预测
-            let prediction = try mlModel.prediction(from: featureProvider)
-            guard let outputArray = prediction.featureValue(for: "conv7")?.multiArrayValue else {
-                throw Waifu2xServiceError.inferenceFailed("未找到输出层 conv7")
-            }
+            // 单块推理放入 autoreleasepool，防止超长条漫数百个分块导致 CoreML 临时对象持续堆积
+            try autoreleasepool {
+                let prediction = try mlModel.prediction(from: featureProvider)
+                guard let outputArray = prediction.featureValue(for: "conv7")?.multiArrayValue else {
+                    throw Waifu2xServiceError.inferenceFailed("未找到输出层 conv7")
+                }
 
-            // 将 conv7 [3, 284, 284] 输出写入目标大图
-            Self.writeOutputTile(
-                outputArray: outputArray,
-                outputTileSize: outputTileSize,
-                destOriginX: originX * outScale,
-                destOriginY: originY * outScale,
-                targetWidth: targetWidth,
-                targetHeight: targetHeight,
-                dstPixels: &dstPixels
-            )
+                // 将 conv7 [3, 284, 284] 输出写入目标大图
+                Self.writeOutputTile(
+                    outputArray: outputArray,
+                    outputTileSize: outputTileSize,
+                    destOriginX: originX * outScale,
+                    destOriginY: originY * outScale,
+                    targetWidth: targetWidth,
+                    targetHeight: targetHeight,
+                    dstPixels: dstPtr
+                )
+            }
 
             let percent = Int(Double(tileIndex + 1) / Double(totalTiles) * 100)
             progress?("\(percent)%")
         }
 
-        // 7. 用像素缓冲区构建最终 UIImage
-        let cfData = Data(dstPixels) as CFData
-        guard let provider = CGDataProvider(data: cfData) else {
+        // 提前释放原图像素缓冲
+        free(srcRawPtr)
+        srcFreed = true
+
+        // 7. 零拷贝移交目标像素缓冲区所有权构建最终 UIImage
+        guard let provider = CGDataProvider(
+            dataInfo: nil,
+            data: dstRawPtr,
+            size: targetBytes,
+            releaseData: { _, data, _ in
+                free(UnsafeMutableRawPointer(mutating: data))
+            }
+        ) else {
             throw Waifu2xServiceError.inferenceFailed("无法创建位图数据提供者")
         }
+        dstOwnershipTransferred = true
 
         let outBitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
         guard let finalCG = CGImage(
@@ -258,7 +313,7 @@ public final class Waifu2xService: @unchecked Sendable {
         return rects
     }
 
-    /// 安全读取 conv7 [3, 284, 284] 输出并写入目标大图像素数组（支持 Double、Float32、Float16 任意精度，杜绝越界）
+    /// 安全读取 conv7 [3, 284, 284] 输出并直接写入目标像素指针（零拷贝，支持 Double、Float32、Float16 任意精度）
     private static func writeOutputTile(
         outputArray: MLMultiArray,
         outputTileSize: Int, // 284
@@ -266,7 +321,7 @@ public final class Waifu2xService: @unchecked Sendable {
         destOriginY: Int,
         targetWidth: Int,
         targetHeight: Int,
-        dstPixels: inout [UInt8]
+        dstPixels: UnsafeMutablePointer<UInt8>
     ) {
         let planeSize = outputTileSize * outputTileSize
         let dataType = outputArray.dataType
@@ -404,25 +459,22 @@ public final class Waifu2xService: @unchecked Sendable {
         return nil
     }
 
-    // MARK: - 辅助位图预解码（确保位图内存已就绪且 scale=1.0, orientation=.up）
+    // MARK: - 辅助位图预解码（确保位图内存已就绪且 scale=1.0, orientation=.up，避免重复双份绘制）
+
+    private static func pixelDimensions(of image: UIImage) -> (width: Int, height: Int) {
+        if let cg = image.cgImage {
+            switch image.imageOrientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                return (cg.height, cg.width)
+            default:
+                return (cg.width, cg.height)
+            }
+        }
+        return (Int(image.size.width * image.scale), Int(image.size.height * image.scale))
+    }
 
     public static func forceDecodeToPixelImage(_ image: UIImage) -> UIImage? {
-        let pixelWidth: Int
-        let pixelHeight: Int
-        if let cg = image.cgImage {
-            if image.imageOrientation == .left || image.imageOrientation == .leftMirrored ||
-               image.imageOrientation == .right || image.imageOrientation == .rightMirrored {
-                pixelWidth = cg.height
-                pixelHeight = cg.width
-            } else {
-                pixelWidth = cg.width
-                pixelHeight = cg.height
-            }
-        } else {
-            pixelWidth = Int(image.size.width * image.scale)
-            pixelHeight = Int(image.size.height * image.scale)
-        }
-
+        let (pixelWidth, pixelHeight) = pixelDimensions(of: image)
         guard pixelWidth > 0 && pixelHeight > 0 else { return nil }
 
         let format = UIGraphicsImageRendererFormat()
@@ -437,25 +489,8 @@ public final class Waifu2xService: @unchecked Sendable {
         let rendered = renderer.image { _ in
             image.draw(in: CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
         }
-
         guard let cgImage = rendered.cgImage else { return nil }
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-        guard let context = CGContext(
-            data: nil,
-            width: cgImage.width,
-            height: cgImage.height,
-            bitsPerComponent: 8,
-            bytesPerRow: cgImage.width * 4,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else {
-            return nil
-        }
-
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
-        guard let decompressed = context.makeImage() else { return nil }
-        return UIImage(cgImage: decompressed, scale: 1.0, orientation: .up)
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
     }
 }
 

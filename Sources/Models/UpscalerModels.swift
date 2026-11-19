@@ -217,21 +217,43 @@ public struct ImageUpscalerConfig: Codable, Equatable, Hashable {
     public var anime4k: Anime4kConfig
     /// Waifu2x 模型预设
     public var waifu2x: Waifu2xModel
+    /// 是否解除超分尺寸限制（默认关闭：使用 1200 万总像素智能保护；开启后跳过软件尺寸拦截，仅受硬件限制）
+    public var bypassSizeLimit: Bool
 
-    /// 硬上限保护阈值（防 Jetsam OOM 内存杀死）
-    public static let maxDimensionThreshold: CGFloat = 2500.0
+    /// 默认总像素保护上限（1200 万像素 ≈ 2x 输出位图 192MB，兼顾 800×8000 等模糊条漫长图与防 Jetsam OOM）
+    public static let maxPixelCountThreshold: Int = 12_000_000
+
+    /// Anime4K / Metal 2x 纹理输入单边硬件理论上限（Apple4+ GPU 纹理单边上限 16384px，对应输入 ≤ 8192px）
+    public static let maxMetalInputDimension: Int = 8192
 
     /// Anime4K 官方进阶说明文档链接
     public static let anime4kTipURL: URL = URL(string: "https://github.com/bloc97/Anime4K/blob/master/md/GLSL_Instructions_Advanced.md")!
 
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case anime4k
+        case waifu2x
+        case bypassSizeLimit
+    }
+
     public init(
         model: ImageUpscalerModel = .anime4k,
         anime4k: Anime4kConfig = Anime4kConfig(),
-        waifu2x: Waifu2xModel = .anime_noise1_scale2x
+        waifu2x: Waifu2xModel = .anime_noise1_scale2x,
+        bypassSizeLimit: Bool = false
     ) {
         self.model = model
         self.anime4k = anime4k
         self.waifu2x = waifu2x
+        self.bypassSizeLimit = bypassSizeLimit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.model = try container.decodeIfPresent(ImageUpscalerModel.self, forKey: .model) ?? .anime4k
+        self.anime4k = try container.decodeIfPresent(Anime4kConfig.self, forKey: .anime4k) ?? Anime4kConfig()
+        self.waifu2x = try container.decodeIfPresent(Waifu2xModel.self, forKey: .waifu2x) ?? .anime_noise1_scale2x
+        self.bypassSizeLimit = try container.decodeIfPresent(Bool.self, forKey: .bypassSizeLimit) ?? false
     }
 
     public var cacheKey: String {
@@ -241,6 +263,11 @@ public struct ImageUpscalerConfig: Codable, Equatable, Hashable {
         case .waifu2x:
             return "w2x_\(waifu2x.rawValue)"
         }
+    }
+
+    /// 视图重载标识（含尺寸限制开关状态，切换时立即触发页面重新评估是否执行超分）
+    public var reloadKey: String {
+        "\(cacheKey)_b\(bypassSizeLimit ? 1 : 0)"
     }
 
     public var summaryText: String {

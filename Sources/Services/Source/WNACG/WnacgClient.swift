@@ -311,10 +311,27 @@ public actor WnacgClient {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
+        let directInfo = extractDirectAid(from: trimmed)
+
+        // 显式输入 wnacg123456 / aid-123456 时优先直达作品详情（仅第 1 页）
+        if let directInfo, directInfo.hasExplicitPrefix {
+            if page > 1 { return [] }
+            let stub = Manga(id: directInfo.id, sourceID: sourceID, title: "")
+            if let detail = try? await getDetail(sourceID: sourceID, manga: stub),
+               !detail.manga.title.isEmpty,
+               detail.manga.title != "WNACG \(directInfo.id)" {
+                return [detail.manga]
+            }
+        }
+
         do {
-            let apiItems = try await searchViaApi(sourceID: sourceID, query: trimmed, page: page)
-            if !apiItems.isEmpty || page > 1 {
-                return apiItems
+            let apiResult = try await searchViaApi(sourceID: sourceID, query: trimmed, page: page)
+            if !apiResult.items.isEmpty {
+                return apiResult.items
+            }
+            // 仅当 API 明确存在命中总数时，第 2+ 页返回空表示已翻到底，避免误退 Web
+            if apiResult.total > 0 && page > 1 {
+                return []
             }
         } catch {}
 
@@ -333,7 +350,43 @@ public actor WnacgClient {
                 return items
             }
         }
+
+        // 支持直接输入纯数字作品 aid 精准直达兜底（仅第 1 页）
+        if let aid = directInfo?.id, directInfo?.hasExplicitPrefix == false {
+            let stub = Manga(id: aid, sourceID: sourceID, title: "")
+            if let detail = try? await getDetail(sourceID: sourceID, manga: stub),
+               !detail.manga.title.isEmpty,
+               detail.manga.title != "WNACG \(aid)" {
+                return [detail.manga]
+            }
+        }
+
         return []
+    }
+
+    private func extractDirectAid(from raw: String) -> (id: String, hasExplicitPrefix: Bool)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+
+        if let prefixRegex = try? NSRegularExpression(
+            pattern: #"^(?:wnacg|aid)[\s\-_:#]*(\d{4,9})$"#,
+            options: [.caseInsensitive]
+        ),
+           let match = prefixRegex.firstMatch(in: trimmed, range: range),
+           match.numberOfRanges > 1,
+           let idRange = Range(match.range(at: 1), in: trimmed) {
+            return (String(trimmed[idRange]), true)
+        }
+
+        if let numericRegex = try? NSRegularExpression(pattern: #"^#?(\d{5,9})$"#),
+           let match = numericRegex.firstMatch(in: trimmed, range: range),
+           match.numberOfRanges > 1,
+           let idRange = Range(match.range(at: 1), in: trimmed) {
+            return (String(trimmed[idRange]), false)
+        }
+
+        return nil
     }
 
     public func getDetail(sourceID: String, manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter]) {
@@ -404,7 +457,7 @@ public actor WnacgClient {
         return parseApiMangaList(data["list"], sourceID: sourceID)
     }
 
-    private func searchViaApi(sourceID: String, query: String, page: Int) async throws -> [Manga] {
+    private func searchViaApi(sourceID: String, query: String, page: Int) async throws -> (items: [Manga], total: Int) {
         let rawData = try await executeApiWithFailover { domain in
             try await self.getApiJsonData(
                 action: "search",
@@ -417,8 +470,10 @@ public actor WnacgClient {
             )
         }
         let payload = try decodeJsonObject(rawData)
-        guard let data = payload["data"] as? [String: Any] else { return [] }
-        return parseApiMangaList(data["list"], sourceID: sourceID)
+        guard let data = payload["data"] as? [String: Any] else { return ([], 0) }
+        let items = parseApiMangaList(data["list"], sourceID: sourceID)
+        let total = readInt(data["total"])
+        return (items, max(total, items.count))
     }
 
     private func fetchApiDetail(
@@ -544,9 +599,10 @@ public actor WnacgClient {
     }
 
     private func parseApiMangaList(_ rawList: Any?, sourceID: String) -> [Manga] {
-        guard let list = rawList as? [[String: Any]] else { return [] }
+        guard let list = rawList as? [Any] else { return [] }
         var items: [Manga] = []
-        for entry in list {
+        for rawEntry in list {
+            guard let entry = rawEntry as? [String: Any] else { continue }
             let id = cleanString(entry["id"])
             let title = cleanString(entry["title"])
             guard !id.isEmpty, !title.isEmpty else { continue }

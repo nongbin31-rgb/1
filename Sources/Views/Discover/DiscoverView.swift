@@ -3,24 +3,26 @@ import SwiftUI
 import UIKit
 #endif
 
-/// 在线图源发现与搜索页（支持双模式分页：经典单页翻阅 + 瀑布流滚动追加，集成上一页/下一页/指定页快速跳转）
+/// 在线图源发现页（支持常驻全源/单源搜索入口、分类筛选与双模式分页：经典单页翻阅 + 瀑布流滚动追加）
 public struct DiscoverView: View {
     @EnvironmentObject private var store: AppStore
 
     @State private var mangas: [Manga] = []
-    @State private var searchQuery = ""
     @State private var selectedCategoryID = ""
     @State private var currentPage = 1
     @State private var canLoadMore = false
     @State private var isLoading = false
     @State private var isLoadingMore = false
     @State private var errorMessage: String?
+    @State private var requestGeneration = 0
+    @State private var loadTask: Task<Void, Never>?
 
     // 分页跳页状态
     @State private var showingJumpSheet = false
     @State private var jumpTargetPageInput = "1"
     @State private var noticeMessage: String?
     @State private var showNoticeBanner = false
+    @State private var noticeDismissTask: Task<Void, Never>?
 
     private let columns = [
         GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14)
@@ -39,6 +41,38 @@ public struct DiscoverView: View {
         return adapter.exploreCategories
     }
 
+    /// 从当前已加载漫画中提取高频标签，供搜索页快捷标签使用
+    private var suggestedSearchTags: [String] {
+        var counts: [String: Int] = [:]
+        for manga in mangas {
+            for rawTag in manga.tags {
+                let tag = rawTag.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !tag.isEmpty,
+                      tag.count <= 12,
+                      !MangaSerialStatusHelper.isStatusTag(tag),
+                      tag != "绅士漫画",
+                      tag != "禁漫单行本" else {
+                    continue
+                }
+                counts[tag, default: 0] += 1
+            }
+        }
+        return counts
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                return lhs.key < rhs.key
+            }
+            .prefix(8)
+            .map(\.key)
+    }
+
+    private var currentSearchRoute: MangaSearchRoute {
+        MangaSearchRoute(
+            initialSourceID: activeSource?.id,
+            suggestedTags: suggestedSearchTags
+        )
+    }
+
     /// 当前图源每页估算获取条数描述
     private var sourcePageSizeDescription: String {
         switch activeSource?.kind {
@@ -55,12 +89,14 @@ public struct DiscoverView: View {
         NavigationStack {
             ScrollViewReader { scrollProxy in
                 VStack(spacing: 0) {
+                    discoverSearchEntryBar
+
                     if store.enabledSources.count > 1 {
                         sourcePickerBar
                     }
 
-                    if !activeCategories.isEmpty && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        categoryPickerBar
+                    if !activeCategories.isEmpty {
+                        categoryPickerBar(scrollProxy: scrollProxy)
                     }
 
                     if showNoticeBanner, let noticeMessage {
@@ -148,9 +184,15 @@ public struct DiscoverView: View {
                 }
                 .navigationTitle(activeSource?.name ?? "发现")
                 .navigationBarTitleDisplayMode(.large)
-                .searchable(text: $searchQuery, prompt: "在当前在线源搜索漫画")
                 .toolbar {
                     ToolbarItemGroup(placement: .topBarTrailing) {
+                        // 顶部常驻搜索按钮（滚动至页面深处时亦可随时搜索）
+                        NavigationLink(value: currentSearchRoute) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .accessibilityLabel("搜索漫画")
+
                         // 顶部快速跳页胶囊
                         Button {
                             jumpTargetPageInput = "\(currentPage)"
@@ -186,7 +228,7 @@ public struct DiscoverView: View {
 
                             Section("快速分页跳转") {
                                 Button {
-                                    Task { await switchToPage(1, scrollProxy: scrollProxy) }
+                                    scheduleReload(scrollProxy: scrollProxy)
                                 } label: {
                                     Label("跳转到第 1 页", systemImage: "arrow.up.to.line")
                                 }
@@ -205,17 +247,9 @@ public struct DiscoverView: View {
                         }
                     }
                 }
-                .onSubmit(of: .search) {
-                    Task { await reload(scrollProxy: scrollProxy) }
-                }
-                .onChange(of: searchQuery) { newValue in
-                    if newValue.isEmpty {
-                        Task { await reload(scrollProxy: scrollProxy) }
-                    }
-                }
                 .onChange(of: store.selectedSourceID) { _ in
                     selectedCategoryID = activeCategories.first?.id ?? ""
-                    Task { await reload(scrollProxy: scrollProxy) }
+                    scheduleReload(scrollProxy: scrollProxy)
                 }
                 .task {
                     if store.selectedSourceID.isEmpty, let first = store.enabledSources.first {
@@ -228,6 +262,9 @@ public struct DiscoverView: View {
                         await reload(scrollProxy: scrollProxy)
                     }
                 }
+                .onDisappear {
+                    noticeDismissTask?.cancel()
+                }
                 .sheet(isPresented: $showingJumpSheet) {
                     jumpPageSheet(scrollProxy: scrollProxy)
                 }
@@ -235,10 +272,55 @@ public struct DiscoverView: View {
             .navigationDestination(for: Manga.self) { manga in
                 MangaDetailView(manga: manga)
             }
+            .navigationDestination(for: MangaSearchRoute.self) { route in
+                MangaSearchView(
+                    initialQuery: route.initialQuery,
+                    initialSourceID: route.initialSourceID,
+                    suggestedTags: route.suggestedTags,
+                    autoSubmit: route.autoSubmit
+                )
+            }
         }
     }
 
     // MARK: - Subviews
+
+    private var discoverSearchEntryBar: some View {
+        NavigationLink(value: currentSearchRoute) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Text(
+                    activeSource.map { "在「\($0.name)」或全部源搜索漫画..." }
+                        ?? "搜索漫画名、作者、标签或编号..."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+                Spacer()
+
+                if store.enabledSources.count > 1 {
+                    Text("全源")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("搜索在线漫画")
+    }
 
     private var sourcePickerBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -266,7 +348,7 @@ public struct DiscoverView: View {
         }
     }
 
-    private var categoryPickerBar: some View {
+    private func categoryPickerBar(scrollProxy: ScrollViewProxy) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(activeCategories) { cat in
@@ -274,7 +356,7 @@ public struct DiscoverView: View {
                     let isSelected = cat.id == current
                     Button {
                         selectedCategoryID = cat.id
-                        Task { await reload() }
+                        scheduleReload(scrollProxy: scrollProxy)
                     } label: {
                         Text(cat.title)
                             .font(.caption.weight(isSelected ? .semibold : .regular))
@@ -564,28 +646,46 @@ public struct DiscoverView: View {
 
     // MARK: - Core Pagination Logic
 
+    private func scheduleReload(scrollProxy: ScrollViewProxy? = nil) {
+        loadTask?.cancel()
+        loadTask = Task {
+            await reload(scrollProxy: scrollProxy)
+        }
+    }
+
     private func reload(scrollProxy: ScrollViewProxy? = nil) async {
-        guard let sourceID = activeSource?.id,
-              let adapter = store.adapter(for: sourceID) else {
+        guard let source = activeSource,
+              let adapter = store.adapter(for: source.id) else {
             mangas = []
             canLoadMore = false
             errorMessage = "当前没有启用的在线图源，请先在「在线源」页启用或添加。"
             return
         }
 
+        requestGeneration += 1
+        let generation = requestGeneration
         isLoading = true
+        isLoadingMore = false
         errorMessage = nil
         currentPage = 1
-        defer { isLoading = false }
+        defer {
+            if generation == requestGeneration {
+                isLoading = false
+            }
+        }
 
         do {
             let fetched = try await fetchPage(adapter: adapter, page: 1)
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             mangas = fetched
-            canLoadMore = !fetched.isEmpty && activeSource?.kind != .demo
+            canLoadMore = !fetched.isEmpty && source.kind != .demo
             withAnimation(.easeInOut(duration: 0.25)) {
                 scrollProxy?.scrollTo("discover_top_anchor", anchor: .top)
             }
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             errorMessage = error.localizedDescription
             mangas = []
             canLoadMore = false
@@ -594,17 +694,24 @@ public struct DiscoverView: View {
 
     private func switchToPage(_ targetPage: Int, scrollProxy: ScrollViewProxy? = nil) async {
         guard targetPage >= 1, !isLoading else { return }
-        guard let sourceID = activeSource?.id,
-              let adapter = store.adapter(for: sourceID) else {
+        guard let source = activeSource,
+              let adapter = store.adapter(for: source.id) else {
             return
         }
 
+        requestGeneration += 1
+        let generation = requestGeneration
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            if generation == requestGeneration {
+                isLoading = false
+            }
+        }
 
         do {
             let fetched = try await fetchPage(adapter: adapter, page: targetPage)
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             if fetched.isEmpty {
                 showNotice("第 \(targetPage) 页暂无更多漫画")
                 if targetPage > currentPage {
@@ -615,13 +722,16 @@ public struct DiscoverView: View {
 
             mangas = fetched
             currentPage = targetPage
-            canLoadMore = !fetched.isEmpty && activeSource?.kind != .demo
+            canLoadMore = !fetched.isEmpty && source.kind != .demo
 
             withAnimation(.easeInOut(duration: 0.25)) {
                 scrollProxy?.scrollTo("discover_top_anchor", anchor: .top)
             }
             triggerHaptic()
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             showNotice("加载第 \(targetPage) 页失败: \(error.localizedDescription)")
         }
     }
@@ -633,12 +743,18 @@ public struct DiscoverView: View {
             return
         }
 
+        let generation = requestGeneration
         isLoadingMore = true
-        defer { isLoadingMore = false }
+        defer {
+            if generation == requestGeneration {
+                isLoadingMore = false
+            }
+        }
         let nextPage = currentPage + 1
 
         do {
             let fetched = try await fetchPage(adapter: adapter, page: nextPage)
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             if fetched.isEmpty {
                 canLoadMore = false
                 showNotice("已到底部，无更多漫画")
@@ -653,17 +769,16 @@ public struct DiscoverView: View {
                 currentPage = nextPage
                 triggerHaptic()
             }
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             canLoadMore = false
             showNotice("加载下一页出错: \(error.localizedDescription)")
         }
     }
 
     private func fetchPage(adapter: any MangaSourceProtocol, page: Int) async throws -> [Manga] {
-        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return try await adapter.search(query: trimmed, page: page)
-        }
         let category = selectedCategoryID.isEmpty ? (adapter.exploreCategories.first?.id ?? "") : selectedCategoryID
         if category.isEmpty {
             return try await adapter.fetchPopular(page: page)
@@ -672,10 +787,12 @@ public struct DiscoverView: View {
     }
 
     private func showNotice(_ text: String) {
+        noticeDismissTask?.cancel()
         noticeMessage = text
         withAnimation { showNoticeBanner = true }
-        Task {
+        noticeDismissTask = Task {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation { showNoticeBanner = false }
         }
     }

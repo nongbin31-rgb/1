@@ -31,10 +31,19 @@ public struct ProcessedPageImage {
 public final class PageUpscalerPipeline: @unchecked Sendable {
     public static let shared = PageUpscalerPipeline()
 
+    /// 按设备物理内存自适应调整缓存预算（6GB+ 机型 240MB，其余 150MB）
+    private static let cacheTotalCostLimit: Int = {
+        let memGB = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        return memGB >= 5.5 ? 240 * 1024 * 1024 : 150 * 1024 * 1024
+    }()
+
+    /// 单张超分图入缓存的体积上限，避免单张超巨图长期霸占全部缓存空间
+    private static let maxSingleCachedImageCost: Int = cacheTotalCostLimit / 2
+
     private let resultCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 12
-        cache.totalCostLimit = 180 * 1024 * 1024 // 约 180MB 上限，防止多张 2x 大图挤爆显存导致 Jetsam 闪退
+        cache.totalCostLimit = PageUpscalerPipeline.cacheTotalCostLimit
         return cache
     }()
 
@@ -64,17 +73,23 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
             )
         }
 
-        // 2. 尺寸安全硬上限截断：max(w, h) <= 2500px
-        let maxSide = max(origSize.width, origSize.height)
-        guard maxSide <= ImageUpscalerConfig.maxDimensionThreshold else {
-            return ProcessedPageImage(
-                image: image,
-                originalSize: origSize,
-                outputSize: origSize,
-                elapsedMs: 0,
-                appliedModel: nil,
-                notice: "图像单边超过 2500px，已自动跳过超分"
-            )
+        // 2. 尺寸安全保护：默认采用 1200 万总像素上限（兼容 800×8000 等条漫长图），用户开启「解除超分尺寸限制」后跳过软件限制
+        let origW = Int(origSize.width)
+        let origH = Int(origSize.height)
+        let pixelCount = origW * origH
+        if !config.bypassSizeLimit {
+            guard pixelCount <= ImageUpscalerConfig.maxPixelCountThreshold else {
+                let mpText = String(format: "%.1f", Double(pixelCount) / 1_000_000.0)
+                let limitMP = ImageUpscalerConfig.maxPixelCountThreshold / 1_000_000
+                return ProcessedPageImage(
+                    image: image,
+                    originalSize: origSize,
+                    outputSize: origSize,
+                    elapsedMs: 0,
+                    appliedModel: nil,
+                    notice: "总像素 \(mpText)M 超过默认 \(limitMP)M 上限，已跳过超分"
+                )
+            }
         }
 
         let cacheKey = "\(pageKey)::\(config.cacheKey)" as NSString
@@ -94,15 +109,25 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
             let enhanced: UIImage
             switch config.model {
             case .anime4k:
-                enhanced = try await Anime4kService.shared.enhance(image: image, config: config.anime4k)
+                enhanced = try await Anime4kService.shared.enhance(
+                    image: image,
+                    config: config.anime4k,
+                    bypassSizeLimit: config.bypassSizeLimit
+                )
             case .waifu2x:
-                enhanced = try await Waifu2xService.shared.enhance(image: image, model: config.waifu2x)
+                enhanced = try await Waifu2xService.shared.enhance(
+                    image: image,
+                    model: config.waifu2x,
+                    bypassSizeLimit: config.bypassSizeLimit
+                )
             }
 
             let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
             let outSize = pixelSize(of: enhanced)
             let cost = Int(outSize.width * outSize.height * 4)
-            resultCache.setObject(enhanced, forKey: cacheKey, cost: cost)
+            if cost > 0 && cost <= Self.maxSingleCachedImageCost {
+                resultCache.setObject(enhanced, forKey: cacheKey, cost: cost)
+            }
 
             return ProcessedPageImage(
                 image: enhanced,
@@ -126,7 +151,12 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
 
     private func pixelSize(of image: UIImage) -> CGSize {
         if let cg = image.cgImage {
-            return CGSize(width: cg.width, height: cg.height)
+            switch image.imageOrientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                return CGSize(width: cg.height, height: cg.width)
+            default:
+                return CGSize(width: cg.width, height: cg.height)
+            }
         }
         return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
     }

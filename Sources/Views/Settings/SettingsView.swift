@@ -58,11 +58,16 @@ public struct SettingsView: View {
                         }
 
                         Toggle("增强后平滑淡入", isOn: $store.transitionAfterImageUpscaled)
+                        Toggle("解除超分尺寸限制（慎用）", isOn: $store.upscalerConfig.bypassSizeLimit)
                     }
                 } header: {
                     Text("画质增强 - 全局配置")
                 } footer: {
-                    Text("目前仅会增强宽高均在 2500px 内的图像，超过该大小画质增强的意义不大。")
+                    if store.upscalerConfig.bypassSizeLimit {
+                        Text("已解除 1200 万总像素限制，所有尺寸图像都会尝试 2x 超分。极端巨图可能导致内存飙升或闪退；Anime4K 仍受 Metal 单边 8192px 硬件上限约束。")
+                    } else {
+                        Text("默认采用 1200 万总像素智能保护（放行 800×8000 等模糊条漫长图，同时防爆内存）；Anime4K 单边受 Metal 硬件 8192px 上限约束。")
+                    }
                 }
 
                 Section("图源浏览与分页模式") {

@@ -207,7 +207,11 @@ public struct ReaderImageUpscalerConfigView: View {
                 .foregroundColor(.white)
                 .tint(.blue)
 
-            Text("目前仅会增强宽高均在 2500px 内的图像，超过该大小画质增强的意义不大。")
+            Text(
+                store.upscalerConfig.bypassSizeLimit
+                    ? "已解除 1200 万总像素限制，超巨图可能触发高内存占用或闪退（Anime4K 仍受 Metal 单边 8192px 硬件上限约束）。"
+                    : "默认按总像素上限（1200 万像素）智能保护，支持 800×8000 等条漫长图超分；需要处理更巨幅原图可开启下方解除开关。"
+            )
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -234,6 +238,12 @@ public struct ReaderImageUpscalerConfigView: View {
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .tint(.blue)
+
+            // 解除总像素尺寸限制开关
+            Toggle("解除超分尺寸限制（慎用）", isOn: $store.upscalerConfig.bypassSizeLimit)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
+                .tint(.orange)
 
             // 重新预览效果按钮
             Button {
@@ -361,12 +371,14 @@ public struct ReaderImageUpscalerConfigView: View {
             case .anime4k:
                 result = try await Anime4kService.shared.enhance(
                     image: target,
-                    config: store.upscalerConfig.anime4k
+                    config: store.upscalerConfig.anime4k,
+                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit
                 )
             case .waifu2x:
                 result = try await Waifu2xService.shared.enhance(
                     image: target,
-                    model: store.upscalerConfig.waifu2x
+                    model: store.upscalerConfig.waifu2x,
+                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit
                 )
             }
 
@@ -414,9 +426,9 @@ public struct ReaderImageUpscalerConfigView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("3. 2500px 尺寸保护机制")
+                        Text("3. 智能总像素保护与解除限制开关")
                             .font(.headline)
-                        Text("由于高倍率超分会成倍放大像素显存，当单张原图单边超过 2500px 时，系统会自动旁路跳过超分，杜绝 iOS 系统 Jetsam 强杀应用后台。")
+                        Text("默认使用 1200 万总像素上限替代旧版单边 2500px 截断，既能放行 800×8000 等低清条漫长图，又能配合显存释放与零拷贝机制防爆内存。若需对更巨幅原图超分，可手动开启「解除超分尺寸限制」（Anime4K 仍受 Apple GPU Metal 单边 8192px 纹理硬件上限约束，超长单边可切换 Waifu2x）。")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }

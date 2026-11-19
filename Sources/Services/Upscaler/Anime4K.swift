@@ -331,6 +331,14 @@ public final class Anime4K: @unchecked Sendable {
         encoder.endEncoding()
     }
 
+    /// 释放本次推理产生的全部中间 GPU 纹理（保留已编译的 MTLLibrary 与着色器管线状态，大幅降低大图显存驻留）
+    public func releaseIntermediateTextures() {
+        textureMap.removeAll(keepingCapacity: false)
+        nearestSamplerStates.removeAll(keepingCapacity: false)
+        linearSamplerStates.removeAll(keepingCapacity: false)
+        bufferIndex = -1
+    }
+
     // MARK: - 静态文件与辅助加载
 
     private static func locateShaderFile(name: String, subdir: String) -> URL? {

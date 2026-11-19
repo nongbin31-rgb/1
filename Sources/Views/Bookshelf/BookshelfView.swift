@@ -95,6 +95,14 @@ public struct BookshelfView: View {
             .navigationDestination(for: Manga.self) { manga in
                 MangaDetailView(manga: manga)
             }
+            .navigationDestination(for: MangaSearchRoute.self) { route in
+                MangaSearchView(
+                    initialQuery: route.initialQuery,
+                    initialSourceID: route.initialSourceID,
+                    suggestedTags: route.suggestedTags,
+                    autoSubmit: route.autoSubmit
+                )
+            }
         }
     }
 
@@ -128,6 +136,7 @@ public struct BookshelfView: View {
 struct MangaGridCard: View {
     let manga: Manga
     let progress: ReadingProgress?
+    var sourceBadge: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -139,6 +148,23 @@ struct MangaGridCard: View {
                 )
                     .aspectRatio(0.7, contentMode: .fit)
                     .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+
+                if let sourceBadge, !sourceBadge.isEmpty {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text(sourceBadge)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2.5)
+                                .background(.black.opacity(0.62), in: Capsule())
+                                .padding(6)
+                        }
+                        Spacer()
+                    }
+                }
 
                 if let progress {
                     Text("P\(progress.pageIndex + 1)")

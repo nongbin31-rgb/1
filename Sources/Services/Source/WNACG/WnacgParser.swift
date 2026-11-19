@@ -87,7 +87,7 @@ public enum WnacgParser {
     public static func parseListHtml(_ html: String, baseUrl: String, sourceID: String) -> [Manga] {
         guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         guard let doc = try? SwiftSoup.parse(html),
-              let elements = try? doc.select(".gallary_item") else {
+              let elements = try? doc.select(".gallary_item, .gallery_item") else {
             return []
         }
 
@@ -98,7 +98,15 @@ public enum WnacgParser {
             guard let aid = firstAidMatch(in: href) else { continue }
 
             let rawTitle = (try? aLink?.text())?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let title = (rawTitle?.isEmpty == false) ? rawTitle! : "WNACG \(aid)"
+            let attrTitle = (try? aLink?.attr("title"))?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title: String
+            if let rawTitle, !rawTitle.isEmpty {
+                title = rawTitle
+            } else if let attrTitle, !attrTitle.isEmpty {
+                title = attrTitle
+            } else {
+                title = "WNACG \(aid)"
+            }
 
             let imgEl = try? el.select(".pic_box img").first()
             let dataOrig = (try? imgEl?.attr("data-original")) ?? ""

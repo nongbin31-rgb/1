@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreImage
+import Darwin
 import Foundation
 import Metal
 import MetalKit
@@ -7,7 +8,8 @@ import UIKit
 
 public enum Anime4kServiceError: LocalizedError {
     case metalUnavailable
-    case imageTooLarge(width: Int, height: Int)
+    case imageTooLarge(width: Int, height: Int, maxPixels: Int)
+    case exceedsMetalTextureLimit(width: Int, height: Int, maxInputSide: Int)
     case imageNormalizationFailed
     case textureCreationFailed
     case commandBufferFailed
@@ -18,8 +20,12 @@ public enum Anime4kServiceError: LocalizedError {
         switch self {
         case .metalUnavailable:
             return "当前设备不支持 Metal GPU 计算"
-        case let .imageTooLarge(w, h):
-            return "图片尺寸过大 (\(w)×\(h))，超过 2500px 上限已跳过 Anime4K"
+        case let .imageTooLarge(w, h, maxPixels):
+            let mp = String(format: "%.1f", Double(w * h) / 1_000_000.0)
+            let limitMP = maxPixels / 1_000_000
+            return "图片总像素过大 (\(w)×\(h)，约 \(mp)M)，超过默认 \(limitMP)M 上限已跳过 Anime4K"
+        case let .exceedsMetalTextureLimit(w, h, maxInputSide):
+            return "图片单边过大 (\(w)×\(h))，超出 Metal 2x 纹理硬件上限 (\(maxInputSide)px)，可切换 Waifu2x 引擎"
         case .imageNormalizationFailed:
             return "图像色彩空间标准化失败"
         case .textureCreationFailed:
@@ -27,7 +33,7 @@ public enum Anime4kServiceError: LocalizedError {
         case .commandBufferFailed:
             return "Metal 命令缓冲提交失败"
         case .readbackFailed:
-            return "Metal 输出纹理读回失败"
+            return "Metal 输出纹理读回失败（内存不足或位图构造失败）"
         case .emptyShaderChain:
             return "Anime4K 着色器管线为空"
         }
@@ -38,8 +44,8 @@ public enum Anime4kServiceError: LocalizedError {
 public actor Anime4kService {
     public static let shared = Anime4kService()
 
-    /// 最大允许单边分辨率（对齐可达阅读器原版硬上限 2500px）
-    public static let maxDimension: Int = 2500
+    /// 默认最大允许总像素（1200 万像素，兼容 800×8000 等条漫长图）
+    public static let maxPixelCount: Int = ImageUpscalerConfig.maxPixelCountThreshold
 
     private let device: MTLDevice?
     private let commandQueue: MTLCommandQueue?
@@ -77,10 +83,39 @@ public actor Anime4kService {
     /// - Parameters:
     ///   - image: 输入原始图片
     ///   - config: 包含预设（AAFast/BBFast/CAFast/AAHQ/BBHQ/CAHQ）以及 thinLines 与 darkenLines 开关
+    ///   - bypassSizeLimit: 是否解除默认总像素上限（Metal 单边硬件上限仍生效）
     /// - Returns: 2 倍放大后的 UIImage
-    public func enhance(image: UIImage, config: Anime4kConfig = Anime4kConfig()) async throws -> UIImage {
+    public func enhance(
+        image: UIImage,
+        config: Anime4kConfig = Anime4kConfig(),
+        bypassSizeLimit: Bool = false
+    ) async throws -> UIImage {
         guard let device, let commandQueue, let textureLoader else {
             throw Anime4kServiceError.metalUnavailable
+        }
+
+        let hardwareMaxInputSide = Self.maxHardwareInputDimension(for: device)
+
+        // 0. 前置像素尺寸校验（在分配标准化位图前快速拦截超限图，避免无谓内存峰值）
+        let preSize = Self.pixelDimensions(of: image)
+        if preSize.width > 0 && preSize.height > 0 {
+            guard preSize.width <= hardwareMaxInputSide && preSize.height <= hardwareMaxInputSide else {
+                throw Anime4kServiceError.exceedsMetalTextureLimit(
+                    width: preSize.width,
+                    height: preSize.height,
+                    maxInputSide: hardwareMaxInputSide
+                )
+            }
+            if !bypassSizeLimit {
+                let pixelCount = preSize.width * preSize.height
+                guard pixelCount <= Self.maxPixelCount else {
+                    throw Anime4kServiceError.imageTooLarge(
+                        width: preSize.width,
+                        height: preSize.height,
+                        maxPixels: Self.maxPixelCount
+                    )
+                }
+            }
         }
 
         // 1. 标准化为 8-bit sRGB RGBA（修正方向与色彩空间）
@@ -91,15 +126,36 @@ public actor Anime4kService {
         let inWidth = normalizedCG.width
         let inHeight = normalizedCG.height
 
-        // 2. 尺寸硬上限检查（2500px 防爆显存）
-        guard inWidth <= Self.maxDimension && inHeight <= Self.maxDimension else {
-            throw Anime4kServiceError.imageTooLarge(width: inWidth, height: inHeight)
+        // 2. 标准化后二次校验 Metal 硬件上限与默认总像素上限
+        guard inWidth <= hardwareMaxInputSide && inHeight <= hardwareMaxInputSide else {
+            throw Anime4kServiceError.exceedsMetalTextureLimit(
+                width: inWidth,
+                height: inHeight,
+                maxInputSide: hardwareMaxInputSide
+            )
+        }
+        if !bypassSizeLimit {
+            let pixelCount = inWidth * inHeight
+            guard pixelCount <= Self.maxPixelCount else {
+                throw Anime4kServiceError.imageTooLarge(
+                    width: inWidth,
+                    height: inHeight,
+                    maxPixels: Self.maxPixelCount
+                )
+            }
         }
 
         // 3. 加载或复用该配置对应的多 Pass Anime4K 着色器链
         let pipeline = try loadOrCreatePipeline(config: config, device: device)
         guard !pipeline.isEmpty else {
             throw Anime4kServiceError.emptyShaderChain
+        }
+
+        // 无论正常结束还是异常退出，均释放全部中间 rgba16Float 纹理，杜绝显存常驻
+        defer {
+            for pass in pipeline {
+                pass.releaseIntermediateTextures()
+            }
         }
 
         // 4. 创建输入纹理（SRGB = false 保持线性采样数值与原图一致）
@@ -112,7 +168,7 @@ public actor Anime4kService {
             ]
         )
 
-        // 5. 创建 2x 目标输出纹理（shared 模式方便 CPU 无拷贝读回）
+        // 5. 创建 2x 目标输出纹理（shared 模式方便 CPU 读回）
         let targetWidth = inWidth * 2
         let targetHeight = inHeight * 2
 
@@ -171,16 +227,42 @@ public actor Anime4kService {
             commandBuffer.commit()
         }
 
+        // GPU 渲染已完成：立即先释放所有中间 rgba16Float 显存纹理，与下方 CPU 读回内存错峰！
+        for pass in pipeline {
+            pass.releaseIntermediateTextures()
+        }
+
         if let error = commandBuffer.error {
             throw error
         }
 
-        // 8. 读回像素并生成高质量 UIImage
+        // 8. 零拷贝读回像素并生成高质量 UIImage
         guard let outImage = Self.makeUIImage(from: outputTexture) else {
             throw Anime4kServiceError.readbackFailed
         }
 
         return outImage
+    }
+
+    private static func maxHardwareInputDimension(for device: MTLDevice) -> Int {
+        // Apple4 (A11) 及以上支持 16384×16384 2D 纹理，2x 超分输入单边上限 8192px；早期 GPU 为 8192px（输入 ≤ 4096px）
+        #if targetEnvironment(simulator)
+        return ImageUpscalerConfig.maxMetalInputDimension
+        #else
+        return device.supportsFamily(.apple4) ? ImageUpscalerConfig.maxMetalInputDimension : 4096
+        #endif
+    }
+
+    private static func pixelDimensions(of image: UIImage) -> (width: Int, height: Int) {
+        if let cg = image.cgImage {
+            switch image.imageOrientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                return (cg.height, cg.width)
+            default:
+                return (cg.width, cg.height)
+            }
+        }
+        return (Int(image.size.width * image.scale), Int(image.size.height * image.scale))
     }
 
     private func loadOrCreatePipeline(config: Anime4kConfig, device: MTLDevice) throws -> [Anime4K] {
@@ -252,25 +334,38 @@ public actor Anime4kService {
         }
     }
 
-    /// 从 shared MTLTexture 读回像素并构造 UIImage（确保 Alpha 为 100% 不透明，杜绝黑屏与全透明空图）
+    /// 从 shared MTLTexture 零拷贝读回像素并构造 UIImage（确保 Alpha 为 100% 不透明，彻底消除 Data 双倍拷贝峰值）
     private static func makeUIImage(from texture: MTLTexture) -> UIImage? {
         autoreleasepool {
             let width = texture.width
             let height = texture.height
             let bytesPerRow = width * 4
             let totalBytes = bytesPerRow * height
-
-            var rawBytes = [UInt8](repeating: 0, count: totalBytes)
-            let region = MTLRegionMake2D(0, 0, width, height)
-            texture.getBytes(&rawBytes, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
-
-            // 强制将第 4 通道 Alpha 设为 255（不透明），杜绝着色器 luma 计算导致 Alpha 为 0 呈现透明空图
-            for i in stride(from: 3, to: totalBytes, by: 4) {
-                rawBytes[i] = 255
+            guard totalBytes > 0, let rawPtr = malloc(totalBytes) else {
+                return nil
             }
 
-            let cfData = Data(rawBytes) as CFData
-            guard let provider = CGDataProvider(data: cfData) else { return nil }
+            let region = MTLRegionMake2D(0, 0, width, height)
+            texture.getBytes(rawPtr, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
+
+            // 强制将第 4 通道 Alpha 设为 255（不透明），杜绝着色器 luma 计算导致 Alpha 为 0 呈现透明空图
+            let bytePtr = rawPtr.bindMemory(to: UInt8.self, capacity: totalBytes)
+            for i in stride(from: 3, to: totalBytes, by: 4) {
+                bytePtr[i] = 255
+            }
+
+            // 零拷贝移交堆内存所有权给 CGDataProvider，UIImage/CGImage 释放时自动 free
+            guard let provider = CGDataProvider(
+                dataInfo: nil,
+                data: rawPtr,
+                size: totalBytes,
+                releaseData: { _, data, _ in
+                    free(UnsafeMutableRawPointer(mutating: data))
+                }
+            ) else {
+                free(rawPtr)
+                return nil
+            }
 
             let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
             let bitmapInfo = CGBitmapInfo(

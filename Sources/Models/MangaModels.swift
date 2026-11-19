@@ -70,6 +70,51 @@ public struct MangaCategoryOption: Identifiable, Hashable, Sendable {
     }
 }
 
+/// 漫画搜索排序方式
+public enum MangaSearchSort: String, Codable, CaseIterable, Identifiable, Sendable {
+    case latest = "latest"
+    case popular = "popular"
+    case favorites = "favorites"
+    case mostPages = "most_pages"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .latest:    return "最新"
+        case .popular:   return "热门"
+        case .favorites: return "最多收藏"
+        case .mostPages: return "最多图集"
+        }
+    }
+}
+
+/// 搜索范围（全启用源聚合 或 指定单图源）
+public enum MangaSearchScope: Hashable, Sendable {
+    case allEnabled
+    case source(String)
+}
+
+/// 导航栈搜索路由参数（供发现页、书架页、漫画详情页统一压栈进入搜索中心）
+public struct MangaSearchRoute: Hashable, Sendable {
+    public var initialQuery: String
+    public var initialSourceID: String?
+    public var suggestedTags: [String]
+    public var autoSubmit: Bool
+
+    public init(
+        initialQuery: String = "",
+        initialSourceID: String? = nil,
+        suggestedTags: [String] = [],
+        autoSubmit: Bool = false
+    ) {
+        self.initialQuery = initialQuery
+        self.initialSourceID = initialSourceID
+        self.suggestedTags = suggestedTags
+        self.autoSubmit = autoSubmit
+    }
+}
+
 /// 在线图源配置
 public struct MangaSourceConfig: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var id: String
