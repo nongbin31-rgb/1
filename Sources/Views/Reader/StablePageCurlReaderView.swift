@@ -11,6 +11,8 @@ import UIKit
 public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let pages: [MangaPage]
     public let upscalerConfig: ImageUpscalerConfig
+    public let enableUpscaler: Bool
+    public let transitionAfterUpscaled: Bool
     public let isCompareMode: Bool
     public let isRightToLeft: Bool
     public let soundEnabled: Bool
@@ -22,6 +24,8 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public init(
         pages: [MangaPage],
         upscalerConfig: ImageUpscalerConfig,
+        enableUpscaler: Bool = false,
+        transitionAfterUpscaled: Bool = true,
         isCompareMode: Bool,
         isRightToLeft: Bool,
         soundEnabled: Bool,
@@ -32,6 +36,8 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     ) {
         self.pages = pages
         self.upscalerConfig = upscalerConfig
+        self.enableUpscaler = enableUpscaler
+        self.transitionAfterUpscaled = transitionAfterUpscaled
         self.isCompareMode = isCompareMode
         self.isRightToLeft = isRightToLeft
         self.soundEnabled = soundEnabled
@@ -185,6 +191,8 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 pageIndex: index,
                 page: page,
                 config: parent.upscalerConfig,
+                isEnabled: parent.enableUpscaler,
+                transitionAfterUpscaled: parent.transitionAfterUpscaled,
                 isCompareMode: parent.isCompareMode,
                 showSpineShadow: parent.showSpineShadow,
                 isRightToLeft: parent.isRightToLeft,

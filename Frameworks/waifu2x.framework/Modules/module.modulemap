@@ -1,0 +1,5 @@
+framework module waifu2x {
+    umbrella header "waifu2x.h"
+    export *
+    module * { export * }
+}

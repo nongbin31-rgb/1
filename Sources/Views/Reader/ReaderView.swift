@@ -5,32 +5,39 @@ import SwiftUI
 private final class ReaderPageSlot: ObservableObject {
     @Published var originalImage: UIImage?
     @Published var processed: ProcessedPageImage?
+    @Published var displayImage: UIImage?
     @Published var isLoading = true
     @Published var isUpscaling = false
     @Published var errorMessage: String?
 
-    func loadAndProcess(page: MangaPage, config: ImageUpscalerConfig) async {
+    func loadAndProcess(
+        page: MangaPage,
+        config: ImageUpscalerConfig,
+        isEnabled: Bool,
+        transitionAfterUpscaled: Bool
+    ) async {
         errorMessage = nil
         if originalImage == nil {
             isLoading = true
             do {
-                originalImage = try await OnlineImageLoader.shared.loadImage(
+                let img = try await OnlineImageLoader.shared.loadImage(
                     urlString: page.imageURL,
                     headers: page.headers
                 )
+                self.originalImage = img
+                self.displayImage = img
             } catch {
                 errorMessage = error.localizedDescription
                 isLoading = false
                 return
             }
             isLoading = false
-            // 先让出一次主线程帧，确保原图立刻上屏显示，再进入超分计算
             await Task.yield()
         }
 
         guard let original = originalImage else { return }
 
-        if config.engine == .off {
+        guard isEnabled else {
             let size = CGSize(
                 width: original.cgImage?.width ?? Int(original.size.width),
                 height: original.cgImage?.height ?? Int(original.size.height)
@@ -40,24 +47,36 @@ private final class ReaderPageSlot: ObservableObject {
                 originalSize: size,
                 outputSize: size,
                 elapsedMs: 0,
-                appliedEngine: .off
+                appliedModel: nil
             )
+            displayImage = original
             return
         }
 
         isUpscaling = true
         defer { isUpscaling = false }
-        processed = await PageUpscalerPipeline.shared.process(
+        let result = await PageUpscalerPipeline.shared.process(
             image: original,
             pageKey: page.imageURL,
-            config: config
+            config: config,
+            isEnabled: isEnabled
         )
+        self.processed = result
+
+        if transitionAfterUpscaled {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.displayImage = result.image
+            }
+        } else {
+            self.displayImage = result.image
+        }
     }
 
     /// 释放大图内存，防止 LazyVStack 长列表堆积爆内存
     func releaseMemoryPreservingState() {
         originalImage = nil
         processed = nil
+        displayImage = nil
     }
 }
 
@@ -75,10 +94,12 @@ public struct ReaderView: View {
     @State private var isLoadingChapter = true
     @State private var chapterError: String?
 
-    @State private var showChrome = true
+    @State private var showChrome = false
     @State private var showUpscalerSheet = false
+    @State private var showConfigPreviewSheet = false
     @State private var isCompareMode = false
     @State private var currentHUDText = ""
+    @State private var capturedPreviewImage: UIImage?
 
     public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter) {
         self.manga = manga
@@ -151,12 +172,25 @@ public struct ReaderView: View {
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
                 config: $store.upscalerConfig,
+                enableUpscaler: $store.enableImageUpscaler,
+                transitionAfterUpscaled: $store.transitionAfterImageUpscaled,
                 layoutMode: $store.readerLayoutMode,
                 turningEffect: $store.pageTurningEffect,
                 soundEnabled: $store.pageTurnSoundEnabled,
-                showSpineShadow: $store.showSpineShadowInCurl
+                showSpineShadow: $store.showSpineShadowInCurl,
+                onOpenAdvancedConfig: {
+                    showUpscalerSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showConfigPreviewSheet = true
+                    }
+                }
             )
             .presentationDetents([.medium, .large])
+        }
+        .fullScreenCover(isPresented: $showConfigPreviewSheet) {
+            ReaderImageUpscalerConfigView(
+                imageForPreview: capturedPreviewImage ?? UIImage()
+            )
         }
     }
 
@@ -172,9 +206,16 @@ public struct ReaderView: View {
                                 page: page,
                                 contentWidth: contentWidth,
                                 config: store.upscalerConfig,
+                                isEnabled: store.enableImageUpscaler,
+                                transitionAfterUpscaled: store.transitionAfterImageUpscaled,
                                 onStatusUpdate: { text in
                                     if page.index == currentPageIndex {
                                         currentHUDText = text
+                                    }
+                                },
+                                onImageLoaded: { img in
+                                    if page.index == currentPageIndex {
+                                        capturedPreviewImage = img
                                     }
                                 }
                             )
@@ -196,6 +237,8 @@ public struct ReaderView: View {
             StablePageCurlReaderView(
                 pages: pages,
                 upscalerConfig: store.upscalerConfig,
+                enableUpscaler: store.enableImageUpscaler,
+                transitionAfterUpscaled: store.transitionAfterImageUpscaled,
                 isCompareMode: isCompareMode,
                 isRightToLeft: store.readerLayoutMode == .pagedRTL,
                 soundEnabled: store.pageTurnSoundEnabled,
@@ -215,6 +258,8 @@ public struct ReaderView: View {
             SnapPageReaderView(
                 pages: pages,
                 upscalerConfig: store.upscalerConfig,
+                enableUpscaler: store.enableImageUpscaler,
+                transitionAfterUpscaled: store.transitionAfterImageUpscaled,
                 isCompareMode: isCompareMode,
                 isRightToLeft: store.readerLayoutMode == .pagedRTL,
                 turningEffect: store.pageTurningEffect,
@@ -251,7 +296,7 @@ public struct ReaderView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                    Text(currentHUDText.isEmpty ? store.upscalerConfig.summaryText : currentHUDText)
+                    Text(currentHUDText.isEmpty ? (store.enableImageUpscaler ? store.upscalerConfig.summaryText : "原图显示") : currentHUDText)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.8))
                         .lineLimit(1)
@@ -274,7 +319,7 @@ public struct ReaderView: View {
                         )
                         .foregroundStyle(.white)
                 }
-                .disabled(store.upscalerConfig.engine == .off)
+                .disabled(!store.enableImageUpscaler)
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
@@ -331,12 +376,12 @@ public struct ReaderView: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "sparkles")
-                            Text(store.upscalerConfig.engine.shortName)
+                            Text(store.enableImageUpscaler ? store.upscalerConfig.model.displayName : "画质增强")
                         }
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
                         .foregroundStyle(.white)
                     }
 
@@ -370,119 +415,39 @@ public struct ReaderView: View {
     }
 
     private func switchChapter(delta: Int) {
-        guard let idx = currentChapterArrayIndex else { return }
-        let nextIdx = idx + delta
-        guard chapters.indices.contains(nextIdx) else { return }
+        guard let currentIndex = currentChapterArrayIndex else { return }
+        let targetIndex = currentIndex + delta
+        guard chapters.indices.contains(targetIndex) else { return }
+        let nextChapter = chapters[targetIndex]
         store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: currentPageIndex)
-        currentChapter = chapters[nextIdx]
-        currentPageIndex = 0
+        currentChapter = nextChapter
     }
 
     private func loadChapterPages() async {
+        isLoadingChapter = true
+        chapterError = nil
+        currentPageIndex = 0
+
         guard let adapter = store.adapter(for: manga.sourceID) else {
-            chapterError = "找不到所属在线图源"
+            chapterError = "未找到图源适配器 [\(manga.sourceID)]"
             isLoadingChapter = false
             return
         }
-        isLoadingChapter = true
-        chapterError = nil
-        defer { isLoadingChapter = false }
 
         do {
-            pages = try await adapter.fetchPages(for: currentChapter)
-            if let saved = store.progress(for: manga),
-               saved.chapterID == currentChapter.id,
-               saved.pageIndex < pages.count {
-                currentPageIndex = saved.pageIndex
-            } else {
-                currentPageIndex = 0
+            let loadedPages = try await adapter.fetchChapterPages(
+                mangaID: manga.id,
+                chapterID: currentChapter.id
+            )
+            self.pages = loadedPages
+            if let saved = store.progress(for: manga), saved.chapterID == currentChapter.id {
+                self.currentPageIndex = min(saved.pageIndex, max(0, loadedPages.count - 1))
             }
         } catch {
-            chapterError = error.localizedDescription
-            pages = []
+            self.chapterError = error.localizedDescription
         }
-    }
-}
 
-private struct PagedMangaPageCell: View {
-    let page: MangaPage
-    let config: ImageUpscalerConfig
-    let isCompareMode: Bool
-    let onSingleTap: () -> Void
-    let onStatusUpdate: (String) -> Void
-
-    @StateObject private var slot = ReaderPageSlot()
-
-    var body: some View {
-        ZStack {
-            if let orig = slot.originalImage {
-                let displayImage = slot.processed?.image ?? orig
-                if isCompareMode, config.engine != .off, let processed = slot.processed {
-                    SplitCompareView(
-                        originalImage: orig,
-                        enhancedImage: processed.image,
-                        engineLabel: config.engine.shortName
-                    )
-                } else {
-                    ZoomableImageView(image: displayImage, onSingleTap: onSingleTap)
-                }
-
-                if slot.isUpscaling {
-                    VStack {
-                        HStack(spacing: 8) {
-                            ProgressView().tint(.white)
-                            Text("正在执行 \(config.engine.shortName) 2x 超分...")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.white)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.black.opacity(0.75), in: Capsule())
-                        Spacer()
-                    }
-                    .padding(.top, 78)
-                }
-            } else if let err = slot.errorMessage {
-                VStack(spacing: 8) {
-                    Image(systemName: "photo.badge.exclamationmark")
-                        .font(.title)
-                        .foregroundStyle(.orange)
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                    Button("重试") {
-                        Task { await triggerLoad() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            } else {
-                VStack(spacing: 10) {
-                    ProgressView().tint(.white)
-                    Text("加载第 \(page.index + 1) 页...")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: "\(page.id)::\(config.cacheKey)") {
-            await triggerLoad()
-        }
-    }
-
-    private func triggerLoad() async {
-        await slot.loadAndProcess(page: page, config: config)
-        if let p = slot.processed {
-            let orig = "\(Int(p.originalSize.width))×\(Int(p.originalSize.height))"
-            let out = "\(Int(p.outputSize.width))×\(Int(p.outputSize.height))"
-            if let notice = p.notice {
-                onStatusUpdate("\(orig) → \(out) · \(notice)")
-            } else if p.appliedEngine == .off {
-                onStatusUpdate("原图 \(orig)")
-            } else {
-                onStatusUpdate("\(p.appliedEngine.shortName) · \(orig) → \(out) · \(p.elapsedMs)ms")
-            }
-        }
+        isLoadingChapter = false
     }
 }
 
@@ -490,14 +455,16 @@ private struct VerticalMangaPageCell: View {
     let page: MangaPage
     let contentWidth: CGFloat
     let config: ImageUpscalerConfig
+    let isEnabled: Bool
+    let transitionAfterUpscaled: Bool
     let onStatusUpdate: (String) -> Void
+    var onImageLoaded: ((UIImage) -> Void)? = nil
 
     @StateObject private var slot = ReaderPageSlot()
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if let orig = slot.originalImage {
-                let displayImage = slot.processed?.image ?? orig
+            if let displayImage = slot.displayImage {
                 if contentWidth > 0, displayImage.size.width > 0 {
                     let scale = UIScreen.main.scale
                     let rawHeight = contentWidth * (displayImage.size.height / displayImage.size.width)
@@ -517,24 +484,26 @@ private struct VerticalMangaPageCell: View {
                 if slot.isUpscaling {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.75).tint(.white)
-                        Text("\(config.engine.shortName) 超分中")
-                            .font(.caption2)
+                        Text("\(config.model.displayName) 超分中")
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(.white)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(.black.opacity(0.75), in: Capsule())
-                    .padding(10)
+                    .background(Color.black.opacity(0.75), in: Capsule())
+                    .padding(8)
                 }
             } else if let err = slot.errorMessage {
                 VStack(spacing: 8) {
-                    Text("第 \(page.index + 1) 页加载失败：\(err)")
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(err)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(.white.opacity(0.8))
                     Button("重试") {
                         Task { await triggerLoad() }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 260)
@@ -551,11 +520,10 @@ private struct VerticalMangaPageCell: View {
                 .background(Color.white.opacity(0.05))
             }
         }
-        .task(id: "\(page.id)::\(config.cacheKey)") {
+        .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
             await triggerLoad()
         }
         .onDisappear {
-            // 滑出屏幕后释放大图位图，避免几十页展开占爆内存
             slot.releaseMemoryPreservingState()
         }
         .onAppear {
@@ -566,16 +534,24 @@ private struct VerticalMangaPageCell: View {
     }
 
     private func triggerLoad() async {
-        await slot.loadAndProcess(page: page, config: config)
+        await slot.loadAndProcess(
+            page: page,
+            config: config,
+            isEnabled: isEnabled,
+            transitionAfterUpscaled: transitionAfterUpscaled
+        )
+        if let orig = slot.originalImage {
+            onImageLoaded?(orig)
+        }
         if let p = slot.processed {
             let orig = "\(Int(p.originalSize.width))×\(Int(p.originalSize.height))"
             let out = "\(Int(p.outputSize.width))×\(Int(p.outputSize.height))"
             if let notice = p.notice {
                 onStatusUpdate("\(orig) → \(out) · \(notice)")
-            } else if p.appliedEngine == .off {
-                onStatusUpdate("原图 \(orig)")
+            } else if let model = p.appliedModel {
+                onStatusUpdate("\(model.displayName) · \(orig) → \(out) · \(p.elapsedMs)ms")
             } else {
-                onStatusUpdate("\(p.appliedEngine.shortName) · \(orig) → \(out) · \(p.elapsedMs)ms")
+                onStatusUpdate("原图 \(orig)")
             }
         }
     }
@@ -585,10 +561,13 @@ private struct VerticalMangaPageCell: View {
 private struct ReaderUpscalerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var config: ImageUpscalerConfig
+    @Binding var enableUpscaler: Bool
+    @Binding var transitionAfterUpscaled: Bool
     @Binding var layoutMode: ReaderLayoutMode
     @Binding var turningEffect: PageTurningEffect
     @Binding var soundEnabled: Bool
     @Binding var showSpineShadow: Bool
+    var onOpenAdvancedConfig: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -615,31 +594,27 @@ private struct ReaderUpscalerSheet: View {
                     }
                 }
 
-                Section("超分引擎") {
-                    Picker("引擎选择", selection: $config.engine) {
-                        ForEach(UpscalerEngine.allCases) { engine in
-                            Text(engine.displayName).tag(engine)
+                Section("画质超分选项") {
+                    Toggle("启用 AI 画质增强", isOn: $enableUpscaler)
+                    Toggle("增强后平滑淡入", isOn: $transitionAfterUpscaled)
+
+                    Picker("超分引擎", selection: $config.model) {
+                        ForEach(ImageUpscalerModel.allCases) { model in
+                            Text(model.displayName).tag(model)
                         }
                     }
                     .pickerStyle(.segmented)
-                }
 
-                if config.engine == .anime4k {
-                    Section("Anime4K v4 多 Pass 管线预设") {
-                        Picker("画质预设", selection: $config.anime4k.preset) {
-                            ForEach(Anime4kPreset.allCases) { preset in
-                                Text(preset.displayName).tag(preset)
-                            }
-                        }
-                        Toggle("细化线稿 (Anime4K_Thin_HQ)", isOn: $config.anime4k.thinLines)
-                        Toggle("加深线稿 (Anime4K_Darken_HQ)", isOn: $config.anime4k.darkenLines)
-                    }
-                } else if config.engine == .waifu2x {
-                    Section("Waifu2x CoreML 2x 模型预设") {
-                        Picker("模型档位", selection: $config.waifu2x) {
-                            ForEach(Waifu2xModelPreset.allCases) { preset in
-                                Text(preset.displayName).tag(preset)
-                            }
+                    Button {
+                        onOpenAdvancedConfig()
+                    } label: {
+                        HStack {
+                            Image(systemName: "slider.horizontal.2.square.on.square")
+                            Text("画质增强高级配置与实时对比")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -648,7 +623,7 @@ private struct ReaderUpscalerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("应用") { dismiss() }
+                    Button("完成") { dismiss() }
                 }
             }
         }

@@ -9,9 +9,11 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         pageIndex: Int,
         page: MangaPage,
         config: ImageUpscalerConfig,
-        isCompareMode: Bool,
-        showSpineShadow: Bool,
-        isRightToLeft: Bool,
+        isEnabled: Bool = false,
+        transitionAfterUpscaled: Bool = true,
+        isCompareMode: Bool = false,
+        showSpineShadow: Bool = false,
+        isRightToLeft: Bool = false,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -20,6 +22,8 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         let rootView = ComicPageCellView(
             page: page,
             config: config,
+            isEnabled: isEnabled,
+            transitionAfterUpscaled: transitionAfterUpscaled,
             isCompareMode: isCompareMode,
             showSpineShadow: showSpineShadow,
             isRightToLeft: isRightToLeft,

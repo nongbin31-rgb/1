@@ -47,6 +47,8 @@ public final class SnapPageFlowLayout: UICollectionViewFlowLayout {
 public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let pages: [MangaPage]
     public let upscalerConfig: ImageUpscalerConfig
+    public let enableUpscaler: Bool
+    public let transitionAfterUpscaled: Bool
     public let isCompareMode: Bool
     public let isRightToLeft: Bool
     public let turningEffect: PageTurningEffect
@@ -58,6 +60,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public init(
         pages: [MangaPage],
         upscalerConfig: ImageUpscalerConfig,
+        enableUpscaler: Bool = false,
+        transitionAfterUpscaled: Bool = true,
         isCompareMode: Bool,
         isRightToLeft: Bool,
         turningEffect: PageTurningEffect,
@@ -68,6 +72,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     ) {
         self.pages = pages
         self.upscalerConfig = upscalerConfig
+        self.enableUpscaler = enableUpscaler
+        self.transitionAfterUpscaled = transitionAfterUpscaled
         self.isCompareMode = isCompareMode
         self.isRightToLeft = isRightToLeft
         self.turningEffect = turningEffect
@@ -127,6 +133,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
             cell.configure(
                 page: page,
                 config: parent.upscalerConfig,
+                isEnabled: parent.enableUpscaler,
+                transitionAfterUpscaled: parent.transitionAfterUpscaled,
                 isCompareMode: parent.isCompareMode,
                 isRightToLeft: parent.isRightToLeft,
                 onSingleTap: parent.onSingleTap,
@@ -251,6 +259,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
     func configure(
         page: MangaPage,
         config: ImageUpscalerConfig,
+        isEnabled: Bool,
+        transitionAfterUpscaled: Bool,
         isCompareMode: Bool,
         isRightToLeft: Bool,
         onSingleTap: @escaping () -> Void,
@@ -260,7 +270,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
         let pageView = ComicPageCellView(
             page: page,
             config: config,
-            isCompareMode: isCompareMode,
+            isEnabled: isEnabled,
+            transitionAfterUpscaled: transitionAfterUpscaled,
             showSpineShadow: false,
             isRightToLeft: isRightToLeft,
             onSingleTap: onSingleTap,

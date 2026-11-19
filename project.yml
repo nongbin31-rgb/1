@@ -22,31 +22,6 @@ settings:
     CODE_SIGN_IDENTITY: ""
 
 targets:
-  Waifu2xEngine:
-    type: framework
-    platform: iOS
-    deploymentTarget: "16.0"
-    info:
-      path: Sources/Waifu2xEngine/Info.plist
-    sources:
-      - path: Vendor/Waifu2x
-        excludes:
-          - "**/*.h"
-          - "**/Info.plist"
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.selfsigned.kedaonlinereader.waifu2x
-        PRODUCT_MODULE_NAME: Waifu2xEngine
-        DEFINES_MODULE: YES
-        COREML_CODEGEN_LANGUAGE: None
-        SKIP_INSTALL: YES
-        INSTALL_PATH: "@rpath"
-        LD_RUNPATH_SEARCH_PATHS:
-          - "$(inherited)"
-          - "@executable_path/Frameworks"
-          - "@loader_path/Frameworks"
-        SWIFT_SUPPRESS_WARNINGS: YES
-
   KedaOnlineReader:
     type: application
     platform: iOS
@@ -83,22 +58,26 @@ targets:
       - path: Sources/Models
       - path: Sources/Services
       - path: Sources/Views
-      - path: Vendor/Anime4KMetal
-      - path: Vendor/Anime4K/glsl
+      - path: Resources/Anime4K_Shaders
         type: folder
         buildPhase: resources
     dependencies:
-      - target: Waifu2xEngine
+      - framework: Frameworks/waifu2x.framework
         embed: true
+        codeSign: false
       - package: SwiftSoup
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.selfsigned.kedaonlinereader
         PRODUCT_NAME: KedaOnlineReader
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(PROJECT_DIR)/Frameworks"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/Frameworks"
+          - "@loader_path/Frameworks"
         GENERATE_INFOPLIST_FILE: NO
         SWIFT_OPTIMIZATION_LEVEL: "-Onone"
       configs:

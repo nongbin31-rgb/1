@@ -6,21 +6,29 @@ import UIKit
 public final class ComicPageSlot: ObservableObject {
     @Published public var originalImage: UIImage?
     @Published public var processed: ProcessedPageImage?
+    @Published public var displayImage: UIImage?
     @Published public var isLoading = true
     @Published public var isUpscaling = false
     @Published public var errorMessage: String?
 
     public init() {}
 
-    public func loadAndProcess(page: MangaPage, config: ImageUpscalerConfig) async {
+    public func loadAndProcess(
+        page: MangaPage,
+        config: ImageUpscalerConfig,
+        isEnabled: Bool,
+        transitionAfterUpscaled: Bool
+    ) async {
         errorMessage = nil
         if originalImage == nil {
             isLoading = true
             do {
-                originalImage = try await OnlineImageLoader.shared.loadImage(
+                let img = try await OnlineImageLoader.shared.loadImage(
                     urlString: page.imageURL,
                     headers: page.headers
                 )
+                self.originalImage = img
+                self.displayImage = img
             } catch {
                 errorMessage = error.localizedDescription
                 isLoading = false
@@ -32,7 +40,8 @@ public final class ComicPageSlot: ObservableObject {
 
         guard let original = originalImage else { return }
 
-        if config.engine == .off {
+        // 若超分未启用，直接显示原图
+        guard isEnabled else {
             let size = CGSize(
                 width: original.cgImage?.width ?? Int(original.size.width),
                 height: original.cgImage?.height ?? Int(original.size.height)
@@ -42,24 +51,38 @@ public final class ComicPageSlot: ObservableObject {
                 originalSize: size,
                 outputSize: size,
                 elapsedMs: 0,
-                appliedEngine: .off
+                appliedModel: nil
             )
+            displayImage = original
             return
         }
 
         isUpscaling = true
         defer { isUpscaling = false }
-        processed = await PageUpscalerPipeline.shared.process(
+
+        let result = await PageUpscalerPipeline.shared.process(
             image: original,
             pageKey: page.imageURL,
-            config: config
+            config: config,
+            isEnabled: isEnabled
         )
+        self.processed = result
+
+        // 增强后平滑淡入（可达阅读器 transitionAfterImageUpscaled 逻辑）
+        if transitionAfterUpscaled {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.displayImage = result.image
+            }
+        } else {
+            self.displayImage = result.image
+        }
     }
 
     /// 释放大图内存以应对长列表/长时间翻页，仅保留占位状态
     public func releaseImageMemory() {
         originalImage = nil
         processed = nil
+        displayImage = nil
         isLoading = false
         isUpscaling = false
     }
@@ -69,6 +92,8 @@ public final class ComicPageSlot: ObservableObject {
 public struct ComicPageCellView: View {
     public let page: MangaPage
     public let config: ImageUpscalerConfig
+    public let isEnabled: Bool
+    public let transitionAfterUpscaled: Bool
     public let isCompareMode: Bool
     public let showSpineShadow: Bool
     public let isRightToLeft: Bool
@@ -81,6 +106,8 @@ public struct ComicPageCellView: View {
     public init(
         page: MangaPage,
         config: ImageUpscalerConfig,
+        isEnabled: Bool = false,
+        transitionAfterUpscaled: Bool = true,
         isCompareMode: Bool = false,
         showSpineShadow: Bool = false,
         isRightToLeft: Bool = false,
@@ -90,6 +117,8 @@ public struct ComicPageCellView: View {
     ) {
         self.page = page
         self.config = config
+        self.isEnabled = isEnabled
+        self.transitionAfterUpscaled = transitionAfterUpscaled
         self.isCompareMode = isCompareMode
         self.showSpineShadow = showSpineShadow
         self.isRightToLeft = isRightToLeft
@@ -102,17 +131,16 @@ public struct ComicPageCellView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let orig = slot.originalImage {
-                let displayImage = slot.processed?.image ?? orig
-                if isCompareMode, config.engine != .off, let processed = slot.processed {
+            if let currentImg = slot.displayImage, let orig = slot.originalImage {
+                if isCompareMode, isEnabled, let processed = slot.processed, processed.appliedModel != nil {
                     SplitCompareView(
                         originalImage: orig,
                         enhancedImage: processed.image,
-                        engineLabel: config.engine.shortName
+                        engineLabel: config.model.displayName
                     )
                 } else {
                     ZoomableImageView(
-                        image: displayImage,
+                        image: currentImg,
                         onSingleTap: onSingleTap,
                         onZoomChanged: onZoomChanged
                     )
@@ -127,7 +155,7 @@ public struct ComicPageCellView: View {
                     VStack {
                         HStack(spacing: 8) {
                             ProgressView().tint(.white)
-                            Text("正在执行 \(config.engine.shortName) 2x 超分...")
+                            Text("正在执行 \(config.model.displayName) 2x 超分...")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.white)
                         }
@@ -163,7 +191,7 @@ public struct ComicPageCellView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: "\(page.id)::\(config.cacheKey)") {
+        .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
             await triggerLoad()
         }
     }
@@ -196,16 +224,21 @@ public struct ComicPageCellView: View {
     }
 
     private func triggerLoad() async {
-        await slot.loadAndProcess(page: page, config: config)
+        await slot.loadAndProcess(
+            page: page,
+            config: config,
+            isEnabled: isEnabled,
+            transitionAfterUpscaled: transitionAfterUpscaled
+        )
         if let p = slot.processed {
             let orig = "\(Int(p.originalSize.width))×\(Int(p.originalSize.height))"
             let out = "\(Int(p.outputSize.width))×\(Int(p.outputSize.height))"
             if let notice = p.notice {
                 onStatusUpdate("\(orig) → \(out) · \(notice)")
-            } else if p.appliedEngine == .off {
-                onStatusUpdate("原图 \(orig)")
+            } else if let model = p.appliedModel {
+                onStatusUpdate("\(model.displayName) · \(orig) → \(out) · \(p.elapsedMs)ms")
             } else {
-                onStatusUpdate("\(p.appliedEngine.shortName) · \(orig) → \(out) · \(p.elapsedMs)ms")
+                onStatusUpdate("原图 \(orig)")
             }
         }
     }

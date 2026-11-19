@@ -16,6 +16,12 @@ public final class AppStore: ObservableObject {
     @Published public var upscalerConfig: ImageUpscalerConfig = ImageUpscalerConfig() {
         didSet { save(upscalerConfig, key: Keys.upscaler) }
     }
+    @Published public var enableImageUpscaler: Bool = false {
+        didSet { save(enableImageUpscaler, key: Keys.enableUpscaler) }
+    }
+    @Published public var transitionAfterImageUpscaled: Bool = true {
+        didSet { save(transitionAfterImageUpscaled, key: Keys.transitionAfterUpscaled) }
+    }
     @Published public var readerLayoutMode: ReaderLayoutMode = .verticalWebtoon {
         didSet { save(readerLayoutMode, key: Keys.layoutMode) }
     }
@@ -35,6 +41,8 @@ public final class AppStore: ObservableObject {
         static let bookshelf = "keda_online_bookshelf_v1"
         static let progress = "keda_online_progress_v1"
         static let upscaler = "keda_online_upscaler_v1"
+        static let enableUpscaler = "keda_online_enable_upscaler_v1"
+        static let transitionAfterUpscaled = "keda_online_transition_after_upscaled_v1"
         static let layoutMode = "keda_online_layout_v1"
         static let turningEffect = "keda_online_turning_effect_v1"
         static let soundEnabled = "keda_online_sound_enabled_v1"
@@ -79,10 +87,12 @@ public final class AppStore: ObservableObject {
         self.bookshelf = load(key: Keys.bookshelf) ?? []
         self.progressMap = load(key: Keys.progress) ?? [:]
         self.upscalerConfig = load(key: Keys.upscaler) ?? ImageUpscalerConfig(
-            engine: .anime4k,
-            waifu2x: .anime_noise1_scale2x,
-            anime4k: Anime4kConfig(preset: .AAFast, thinLines: false, darkenLines: false)
+            model: .anime4k,
+            anime4k: Anime4kConfig(preset: .AAFast, thinLines: false, darkenLines: false),
+            waifu2x: .anime_noise1_scale2x
         )
+        self.enableImageUpscaler = load(key: Keys.enableUpscaler) ?? false
+        self.transitionAfterImageUpscaled = load(key: Keys.transitionAfterUpscaled) ?? true
         self.readerLayoutMode = load(key: Keys.layoutMode) ?? .verticalWebtoon
         self.pageTurningEffect = load(key: Keys.turningEffect) ?? .curling
         self.pageTurnSoundEnabled = load(key: Keys.soundEnabled) ?? true

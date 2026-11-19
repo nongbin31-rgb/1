@@ -1,3 +1,4 @@
+import CoreGraphics
 import CoreImage
 import Foundation
 import Metal
@@ -11,7 +12,6 @@ public enum Anime4kServiceError: LocalizedError {
     case textureCreationFailed
     case commandBufferFailed
     case readbackFailed
-    case emptyShaderChain
 
     public var errorDescription: String? {
         switch self {
@@ -27,16 +27,15 @@ public enum Anime4kServiceError: LocalizedError {
             return "Metal 命令缓冲提交失败"
         case .readbackFailed:
             return "Metal 输出纹理读回失败"
-        case .emptyShaderChain:
-            return "Anime4K 着色器管线为空"
         }
     }
 }
 
-/// Anime4K v4 多 Pass Metal 实时超分服务（基于 imxieyi/Anime4KMetal + bloc97/Anime4K）
+/// Anime4K v4 实时超分辨率服务（基于 Metal + 逆向自可达阅读器的 16 组着色器管线）
 public actor Anime4kService {
     public static let shared = Anime4kService()
 
+    /// 最大允许单边分辨率（对齐可达阅读器原版硬上限 2500px）
     public static let maxDimension: Int = 2500
 
     private let device: MTLDevice?
@@ -44,8 +43,8 @@ public actor Anime4kService {
     private let textureLoader: MTKTextureLoader?
     private let ciContext: CIContext
 
-    /// 按配置缓存已转译并编译好的 Anime4K 着色器管线（避免每页重复 GLSL->MSL 编译耗时）
-    private var cachedPipelines: [String: [Anime4K]] = [:]
+    /// Anime4K 引擎调度实例
+    private var anime4kEngine: Anime4K?
 
     private init() {
         let mtlDevice = MTLCreateSystemDefaultDevice()
@@ -60,24 +59,25 @@ public actor Anime4kService {
                     .outputColorSpace: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                 ]
             )
+            self.anime4kEngine = Anime4K(name: "Anime4K_Engine", device: mtlDevice)
         } else {
             self.textureLoader = nil
             self.ciContext = CIContext()
+            self.anime4kEngine = nil
         }
     }
 
-    /// 清理已缓存的 Metal 管线以释放显存
-    public func clearPipelineCache() {
-        cachedPipelines.removeAll()
-    }
-
-    /// 执行 Anime4K v4 多 Pass 2x 超分
-    public func enhance(image: UIImage, config: Anime4kConfig) async throws -> UIImage {
-        guard let device, let commandQueue, let textureLoader else {
+    /// 执行 Anime4K 2x 超分
+    /// - Parameters:
+    ///   - image: 输入原始图片
+    ///   - config: 包含预设（AAFast/BBFast/CAFast/AAHQ/BBHQ/CAHQ）以及 thinLines 与 darkenLines 开关
+    /// - Returns: 2 倍放大后的 UIImage
+    public func enhance(image: UIImage, config: Anime4kConfig = Anime4kConfig()) async throws -> UIImage {
+        guard let device, let commandQueue, let textureLoader, let engine = anime4kEngine else {
             throw Anime4kServiceError.metalUnavailable
         }
 
-        // 1. 通过 CIColorControls 标准化为 8-bit sRGB RGBA（同时处理 EXIF 方向与广色域/灰度兼容）
+        // 1. 标准化为 8-bit sRGB RGBA（修正方向与色彩空间）
         guard let normalizedCG = normalizeToSRGBCGImage(image) else {
             throw Anime4kServiceError.imageNormalizationFailed
         }
@@ -85,18 +85,22 @@ public actor Anime4kService {
         let inWidth = normalizedCG.width
         let inHeight = normalizedCG.height
 
-        // 2. 最大尺寸硬门控（防暴显存）
+        // 2. 尺寸硬上限检查（2500px 防爆显存）
         guard inWidth <= Self.maxDimension && inHeight <= Self.maxDimension else {
             throw Anime4kServiceError.imageTooLarge(width: inWidth, height: inHeight)
         }
 
-        // 3. 加载或复用该配置对应的多 Pass Anime4K 着色器链
-        let pipeline = try loadOrCreatePipeline(config: config, device: device)
-        guard !pipeline.isEmpty else {
-            throw Anime4kServiceError.emptyShaderChain
-        }
+        // 3. 配置引擎尺寸
+        let targetWidth = inWidth * 2
+        let targetHeight = inHeight * 2
+        engine.configure(
+            textureInW: inWidth,
+            textureInH: inHeight,
+            outputW: targetWidth,
+            outputH: targetHeight
+        )
 
-        // 4. 创建输入纹理（SRGB = false 保持线性采样数值与原图一致）
+        // 4. 创建输入纹理
         let inputTexture = try await textureLoader.newTexture(
             cgImage: normalizedCG,
             options: [
@@ -106,56 +110,32 @@ public actor Anime4kService {
             ]
         )
 
-        // 5. 创建 2x 目标输出纹理（rgba8Unorm + shaderRead/shaderWrite + shared 便于 CPU 零拷贝读回）
-        let targetWidth = inWidth * 2
-        let targetHeight = inHeight * 2
-
+        // 5. 创建 2x 目标输出纹理（shared 模式方便 CPU 无拷贝读回）
         let outDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm,
             width: targetWidth,
             height: targetHeight,
             mipmapped: false
         )
-        outDesc.usage = [.shaderRead, .shaderWrite]
+        outDesc.usage = [.shaderRead, .shaderWrite, .renderTarget]
         outDesc.storageMode = .shared
 
         guard let outputTexture = device.makeTexture(descriptor: outDesc) else {
             throw Anime4kServiceError.textureCreationFailed
         }
 
-        // 6. 按当前图片分辨率配置各 Pass 的纹理尺寸与 WHEN 条件
-        var currentInW = inWidth
-        var currentInH = inHeight
-        for pass in pipeline {
-            try pass.compileShaders(
-                device,
-                videoInW: inWidth,
-                videoInH: inHeight,
-                textureInW: currentInW,
-                textureInH: currentInH,
-                displayOutW: targetWidth,
-                displayOutH: targetHeight
-            )
-            currentInW = Int(pass.outputW)
-            currentInH = Int(pass.outputH)
-        }
-
-        // 7. 编码并提交多 Pass GPU 乒乓计算任务
+        // 6. 编码并提交 GPU 计算任务
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             throw Anime4kServiceError.commandBufferFailed
         }
 
-        var currentTex: MTLTexture = inputTexture
-        if pipeline.count > 1 {
-            for idx in 0..<(pipeline.count - 1) {
-                currentTex = try pipeline[idx].encode(device, cmdBuf: commandBuffer, input: currentTex)
-            }
-        }
-        try pipeline[pipeline.count - 1].encode(
-            device,
+        try engine.encode(
             cmdBuf: commandBuffer,
-            input: currentTex,
-            output: outputTexture
+            input: inputTexture,
+            output: outputTexture,
+            preset: config.preset,
+            thinLines: config.thinLines,
+            darkenLines: config.darkenLines
         )
 
         await withCheckedContinuation { continuation in
@@ -169,7 +149,7 @@ public actor Anime4kService {
             throw error
         }
 
-        // 8. 从 shared 纹理读回像素并重建 UIImage
+        // 7. 读回像素并生成高清 UIImage（autoreleasepool 保护抑制内存抖动）
         guard let outImage = Self.makeUIImage(from: outputTexture) else {
             throw Anime4kServiceError.readbackFailed
         }
@@ -177,31 +157,7 @@ public actor Anime4kService {
         return outImage
     }
 
-    private func loadOrCreatePipeline(config: Anime4kConfig, device: MTLDevice) throws -> [Anime4K] {
-        let key = config.cacheKey
-        if let existing = cachedPipelines[key] {
-            return existing
-        }
-
-        // 限制缓存数量，防止长期切换预设占用过多 Metal 资源
-        if cachedPipelines.count >= 3 {
-            cachedPipelines.removeAll()
-        }
-
-        let steps = config.fullShaderSteps
-        var compiled: [Anime4K] = []
-        compiled.reserveCapacity(steps.count)
-
-        for step in steps {
-            let shader = try Anime4K(step.name, subdir: step.subdir, device: device)
-            compiled.append(shader)
-        }
-
-        cachedPipelines[key] = compiled
-        return compiled
-    }
-
-    /// 使用 CoreImage + CIColorControls 强制转换为 8-bit sRGB RGBA（修正方向与色彩空间）
+    /// 使用 CoreImage + CIColorControls 标准化为 8-bit sRGB RGBA
     private func normalizeToSRGBCGImage(_ image: UIImage) -> CGImage? {
         var ciImage: CIImage?
         if let cg = image.cgImage {
@@ -246,7 +202,7 @@ public actor Anime4kService {
         }
     }
 
-    /// 从 rgba8Unorm shared MTLTexture 读取字节并生成 UIImage（autoreleasepool 保护抑制内存抖动）
+    /// 从 shared MTLTexture 读回像素并构造 UIImage
     private static func makeUIImage(from texture: MTLTexture) -> UIImage? {
         autoreleasepool {
             let width = texture.width
