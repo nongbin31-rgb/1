@@ -144,10 +144,14 @@ public struct ReaderView: View {
 
     let manga: Manga
     let chapters: [MangaChapter]
+    private let initialChapterID: String
 
     @State private var currentChapter: MangaChapter
     @State private var pages: [MangaPage] = []
     @State private var currentPageIndex = 0
+    @State private var initialSpecifiedPageIndex: Int?
+    @State private var isRestoringInitialPage = false
+    @State private var requestedScrollIndex: Int? = nil
     @State private var isLoadingChapter = true
     @State private var chapterError: String?
 
@@ -162,10 +166,13 @@ public struct ReaderView: View {
     @State private var activeLayoutMode: ReaderLayoutMode = .verticalWebtoon
     @State private var hasInitializedLayout = false
 
-    public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter) {
+    public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter, initialPageIndex: Int? = nil) {
         self.manga = manga
         self.chapters = chapters
+        self.initialChapterID = initialChapter.id
         _currentChapter = State(initialValue: initialChapter)
+        _currentPageIndex = State(initialValue: initialPageIndex ?? 0)
+        _initialSpecifiedPageIndex = State(initialValue: initialPageIndex)
     }
 
     private var currentChapterArrayIndex: Int? {
@@ -275,6 +282,10 @@ public struct ReaderView: View {
                 store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: currentPageIndex)
             }
         }
+        .onChange(of: currentPageIndex) { newIndex in
+            guard !isRestoringInitialPage, !pages.isEmpty else { return }
+            store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: newIndex)
+        }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
                 manga: manga,
@@ -376,40 +387,56 @@ public struct ReaderView: View {
                         }
                     }
                 ) {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(pages) { page in
-                                VerticalMangaPageCell(
-                                    page: page,
-                                    contentWidth: contentWidth,
-                                    config: store.upscalerConfig,
-                                    isEnabled: store.enableImageUpscaler,
-                                    transitionAfterUpscaled: store.transitionAfterImageUpscaled,
-                                    filterConfig: store.imageFilterConfig,
-                                    background: store.preferredReaderBackground,
-                                    texture: store.readerTextureType,
-                                    textureOpacity: store.readerTextureOpacity,
-                                    textureTarget: store.readerTextureTarget,
-                                    texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
-                                    onStatusUpdate: { text in
-                                        if page.index == currentPageIndex {
-                                            currentHUDText = text
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(pages) { page in
+                                    VerticalMangaPageCell(
+                                        page: page,
+                                        contentWidth: contentWidth,
+                                        config: store.upscalerConfig,
+                                        isEnabled: store.enableImageUpscaler,
+                                        transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                                        filterConfig: store.imageFilterConfig,
+                                        background: store.preferredReaderBackground,
+                                        texture: store.readerTextureType,
+                                        textureOpacity: store.readerTextureOpacity,
+                                        textureTarget: store.readerTextureTarget,
+                                        texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
+                                        onStatusUpdate: { text in
+                                            if page.index == currentPageIndex {
+                                                currentHUDText = text
+                                            }
+                                        },
+                                        onImageLoaded: { img in
+                                            if page.index == currentPageIndex {
+                                                capturedPreviewImage = img
+                                            }
+                                            checkAspectRatioIfUndetermined(with: img.size)
                                         }
-                                    },
-                                    onImageLoaded: { img in
-                                        if page.index == currentPageIndex {
-                                            capturedPreviewImage = img
+                                    )
+                                    .id(page.index)
+                                    .padding(.bottom, -pixelOverlap)
+                                    .onAppear {
+                                        if !isRestoringInitialPage {
+                                            currentPageIndex = page.index
                                         }
-                                        checkAspectRatioIfUndetermined(with: img.size)
                                     }
-                                )
-                                .padding(.bottom, -pixelOverlap)
-                                .onAppear {
-                                    currentPageIndex = page.index
                                 }
                             }
+                            .coordinateSpace(name: "webtoon_scroll_content")
                         }
-                        .coordinateSpace(name: "webtoon_scroll_content")
+                        .onAppear {
+                            if isRestoringInitialPage && currentPageIndex > 0 {
+                                restoreWebtoonInitialPage(proxy: scrollProxy)
+                            }
+                        }
+                        .onChange(of: requestedScrollIndex) { target in
+                            if let target = target {
+                                scrollProxy.scrollTo(target, anchor: .top)
+                                requestedScrollIndex = nil
+                            }
+                        }
                     }
                 }
             }
@@ -586,7 +613,13 @@ public struct ReaderView: View {
                         Slider(
                             value: Binding(
                                 get: { Double(currentPageIndex) },
-                                set: { currentPageIndex = Int($0.rounded()) }
+                                set: { val in
+                                    let newIndex = Int(val.rounded())
+                                    currentPageIndex = newIndex
+                                    if activeLayoutMode == .verticalWebtoon {
+                                        requestedScrollIndex = newIndex
+                                    }
+                                }
                             ),
                             in: 0...Double(max(pages.count - 1, 1)),
                             step: 1
@@ -759,7 +792,16 @@ public struct ReaderView: View {
     private func loadChapterPages() async {
         isLoadingChapter = true
         chapterError = nil
-        currentPageIndex = 0
+
+        let targetIndex: Int
+        if let specified = initialSpecifiedPageIndex, currentChapter.id == initialChapterID {
+            targetIndex = specified
+            self.initialSpecifiedPageIndex = nil
+        } else if let saved = store.progress(for: manga), saved.chapterID == currentChapter.id {
+            targetIndex = saved.pageIndex
+        } else {
+            targetIndex = 0
+        }
 
         guard let adapter = store.adapter(for: manga.sourceID) else {
             chapterError = "未找到图源适配器 [\(manga.sourceID)]"
@@ -770,14 +812,32 @@ public struct ReaderView: View {
         do {
             let loadedPages = try await adapter.fetchPages(for: currentChapter)
             self.pages = loadedPages
-            if let saved = store.progress(for: manga), saved.chapterID == currentChapter.id {
-                self.currentPageIndex = min(saved.pageIndex, max(0, loadedPages.count - 1))
+            let resolvedIndex = min(targetIndex, max(0, loadedPages.count - 1))
+            self.currentPageIndex = resolvedIndex
+            if resolvedIndex > 0 {
+                self.isRestoringInitialPage = true
             }
         } catch {
             self.chapterError = error.localizedDescription
         }
 
         isLoadingChapter = false
+    }
+
+    /// 条漫模式平滑精准恢复初始历史页码（双帧渐进式定位，避让首屏 LazyVStack 重绘）
+    private func restoreWebtoonInitialPage(proxy: ScrollViewProxy) {
+        guard currentPageIndex > 0 else {
+            isRestoringInitialPage = false
+            return
+        }
+        let target = currentPageIndex
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            proxy.scrollTo(target, anchor: .top)
+            try? await Task.sleep(nanoseconds: 160_000_000)
+            proxy.scrollTo(target, anchor: .top)
+            isRestoringInitialPage = false
+        }
     }
 
     /// 解析用于超分高级预览的图片（多层兜底保障，绝不返回无效空图）

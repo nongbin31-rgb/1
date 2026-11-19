@@ -131,7 +131,12 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
 
         // 当外部（例如 Slider 或上一话/下一话按钮）修改了页码时，通过安全队列平滑驱动底层翻页
         let activeIndex = context.coordinator.currentDisplayIndex
-        if activeIndex != currentPageIndex && pages.indices.contains(currentPageIndex) {
+        if (uiViewController.viewControllers?.isEmpty ?? true) && pages.indices.contains(currentPageIndex) {
+            if let initialVC = context.coordinator.createViewController(for: currentPageIndex) {
+                context.coordinator.currentDisplayIndex = currentPageIndex
+                uiViewController.setViewControllers([initialVC], direction: .forward, animated: false)
+            }
+        } else if activeIndex != currentPageIndex && pages.indices.contains(currentPageIndex) {
             context.coordinator.requestNavigation(to: currentPageIndex, animated: true)
         }
     }

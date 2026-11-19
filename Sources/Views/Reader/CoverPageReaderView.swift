@@ -101,11 +101,8 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
             showDividingLine: showDividingLine
         )
 
-        // 3. 当外部修改了页码（例如 Slider 拖拽）时，请求平滑或即时转场
-        let activeIndex = uiViewController.currentDisplayIndex
-        if activeIndex != currentPageIndex && pages.indices.contains(currentPageIndex) {
-            uiViewController.requestNavigation(to: currentPageIndex, animated: true)
-        }
+        // 3. 初始装载或当外部修改了页码（例如 Slider 拖拽）时，请求平滑或即时转场
+        uiViewController.ensureInitialPageOrNavigate(to: currentPageIndex)
     }
 
     // MARK: - Coordinator
@@ -711,6 +708,15 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
     }
 
     // MARK: - 触觉与音效反馈
+
+    public func ensureInitialPageOrNavigate(to targetIndex: Int) {
+        guard parentConfig.pages.indices.contains(targetIndex) else { return }
+        if activeVC == nil {
+            displayPage(at: targetIndex)
+        } else if currentDisplayIndex != targetIndex {
+            requestNavigation(to: targetIndex, animated: true)
+        }
+    }
 
     private func playPageFeedback() {
         feedbackGenerator.impactOccurred()

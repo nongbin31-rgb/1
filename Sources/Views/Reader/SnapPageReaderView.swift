@@ -398,7 +398,11 @@ public final class SnapPageViewController: UIViewController {
         if isFirstDataLoad || !hasInitiallyPositioned {
             hasInitiallyPositioned = true
             currentDisplayIndex = targetIndex
+            collectionView.layoutIfNeeded()
             scrollToPage(at: targetIndex, animated: false)
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollToPage(at: targetIndex, animated: false)
+            }
             return
         }
 

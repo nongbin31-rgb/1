@@ -52,7 +52,8 @@ public struct MangaDetailView: View {
             ReaderView(
                 manga: currentManga,
                 chapters: payload.chapters,
-                initialChapter: payload.initialChapter
+                initialChapter: payload.initialChapter,
+                initialPageIndex: payload.initialPageIndex
             )
             .environmentObject(store)
         }
@@ -134,9 +135,17 @@ public struct MangaDetailView: View {
                     Button {
                         if let progress = store.progress(for: currentManga),
                            let resumeChapter = chapters.first(where: { $0.id == progress.chapterID }) {
-                            launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: resumeChapter)
+                            launchPayload = ReaderLaunchPayload(
+                                chapters: chapters,
+                                initialChapter: resumeChapter,
+                                initialPageIndex: progress.pageIndex
+                            )
                         } else if let first = chapters.first {
-                            launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: first)
+                            launchPayload = ReaderLaunchPayload(
+                                chapters: chapters,
+                                initialChapter: first,
+                                initialPageIndex: 0
+                            )
                         }
                     } label: {
                         Label(
@@ -286,9 +295,14 @@ public struct MangaDetailView: View {
             } else {
                 LazyVStack(spacing: 8) {
                     ForEach(chapters) { chapter in
-                        let isCurrent = store.progress(for: manga)?.chapterID == chapter.id
+                        let saved = store.progress(for: currentManga)
+                        let isCurrent = saved?.chapterID == chapter.id
                         Button {
-                            launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: chapter)
+                            launchPayload = ReaderLaunchPayload(
+                                chapters: chapters,
+                                initialChapter: chapter,
+                                initialPageIndex: isCurrent ? saved?.pageIndex : 0
+                            )
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -394,4 +408,5 @@ private struct ReaderLaunchPayload: Identifiable {
     let id = UUID()
     let chapters: [MangaChapter]
     let initialChapter: MangaChapter
+    let initialPageIndex: Int?
 }
