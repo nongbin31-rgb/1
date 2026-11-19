@@ -31,6 +31,9 @@ public protocol MangaSourceProtocol: Sendable {
 
     /// 获取章节的所有页面图片 URL
     func fetchPages(for chapter: MangaChapter) async throws -> [MangaPage]
+
+    /// 重置分页流缓存（在主动刷新或重新发起检索时调用）
+    func resetPaginationCache(scope: PaginationCacheScope) async
 }
 
 public extension MangaSourceProtocol {
@@ -54,6 +57,8 @@ public extension MangaSourceProtocol {
     func fetchChapterPages(mangaID: String, chapterID: String) async throws -> [MangaPage] {
         try await fetchPages(for: MangaChapter(id: chapterID, mangaID: mangaID, title: "", number: 0))
     }
+
+    func resetPaginationCache(scope: PaginationCacheScope) async {}
 }
 
 public enum MangaSourceError: LocalizedError {

@@ -45,6 +45,7 @@ public struct MangaDetailView: View {
         }
         .navigationTitle("漫画详情")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .task {
             await loadChapters()
         }

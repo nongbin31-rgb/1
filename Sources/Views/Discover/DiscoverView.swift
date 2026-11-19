@@ -76,10 +76,8 @@ public struct DiscoverView: View {
     /// 当前图源每页估算获取条数描述
     private var sourcePageSizeDescription: String {
         switch activeSource?.kind {
-        case .jm:
-            return "80 部/页"
-        case .wnacg:
-            return "12 部/页"
+        case .jm, .wnacg:
+            return "\(UniformPaginator.defaultPageSize) 部/页"
         default:
             return ""
         }
@@ -89,6 +87,8 @@ public struct DiscoverView: View {
         NavigationStack {
             ScrollViewReader { scrollProxy in
                 VStack(spacing: 0) {
+                    discoverHeaderBar(scrollProxy: scrollProxy)
+
                     discoverSearchEntryBar
 
                     if store.enabledSources.count > 1 {
@@ -183,70 +183,8 @@ public struct DiscoverView: View {
                     }
                 }
                 .navigationTitle(activeSource?.name ?? "发现")
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        // 顶部常驻搜索按钮（滚动至页面深处时亦可随时搜索）
-                        NavigationLink(value: currentSearchRoute) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .accessibilityLabel("搜索漫画")
-
-                        // 顶部快速跳页胶囊
-                        Button {
-                            jumpTargetPageInput = "\(currentPage)"
-                            showingJumpSheet = true
-                        } label: {
-                            HStack(spacing: 3) {
-                                Image(systemName: "number.square")
-                                Text("P.\(currentPage)")
-                                    .font(.caption.weight(.bold))
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(.secondarySystemFill), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-
-                        // 浏览与分页模式切换菜单
-                        Menu {
-                            Section("浏览与分页模式") {
-                                ForEach(DiscoverPaginationMode.allCases) { mode in
-                                    Button {
-                                        store.discoverPaginationMode = mode
-                                    } label: {
-                                        HStack {
-                                            Text(mode.displayName)
-                                            if store.discoverPaginationMode == mode {
-                                                Image(systemName: "checkmark")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            Section("快速分页跳转") {
-                                Button {
-                                    scheduleReload(scrollProxy: scrollProxy)
-                                } label: {
-                                    Label("跳转到第 1 页", systemImage: "arrow.up.to.line")
-                                }
-                                .disabled(currentPage == 1)
-
-                                Button {
-                                    jumpTargetPageInput = "\(currentPage)"
-                                    showingJumpSheet = true
-                                } label: {
-                                    Label("跳转到指定页...", systemImage: "arrow.triangle.turn.up.right.diamond")
-                                }
-                            }
-                        } label: {
-                            Image(systemName: store.discoverPaginationMode.iconName)
-                                .font(.subheadline)
-                        }
-                    }
-                }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.hidden, for: .navigationBar)
                 .onChange(of: store.selectedSourceID) { _ in
                     selectedCategoryID = activeCategories.first?.id ?? ""
                     scheduleReload(scrollProxy: scrollProxy)
@@ -284,6 +222,98 @@ public struct DiscoverView: View {
     }
 
     // MARK: - Subviews
+
+    private func discoverHeaderBar(scrollProxy: ScrollViewProxy) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(activeSource?.name ?? "发现")
+                .font(.largeTitle.bold())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 8) {
+                // 顶部常驻搜索按钮（滚动至页面深处时亦可随时搜索）
+                NavigationLink(value: currentSearchRoute) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("搜索漫画")
+
+                // 顶部快速跳页胶囊
+                Button {
+                    jumpTargetPageInput = "\(currentPage)"
+                    showingJumpSheet = true
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "number.square")
+                            .font(.callout)
+                        Text("P.\(currentPage)")
+                            .font(.caption.weight(.bold))
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color(.secondarySystemFill), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("当前第 \(currentPage) 页，点击跳页")
+
+                // 浏览与分页模式切换菜单
+                Menu {
+                    Section("浏览与分页模式") {
+                        ForEach(DiscoverPaginationMode.allCases) { mode in
+                            Button {
+                                store.discoverPaginationMode = mode
+                            } label: {
+                                HStack {
+                                    Text(mode.displayName)
+                                    if store.discoverPaginationMode == mode {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Section("快速分页跳转") {
+                        Button {
+                            scheduleReload(scrollProxy: scrollProxy)
+                        } label: {
+                            Label("跳转到第 1 页", systemImage: "arrow.up.to.line")
+                        }
+                        .disabled(currentPage == 1)
+
+                        Button {
+                            jumpTargetPageInput = "\(currentPage)"
+                            showingJumpSheet = true
+                        } label: {
+                            Label("跳转到指定页...", systemImage: "arrow.triangle.turn.up.right.diamond")
+                        }
+                    }
+                } label: {
+                    Image(systemName: store.discoverPaginationMode.iconName)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.leading, 5)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("浏览与分页模式")
+            }
+            .layoutPriority(1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
 
     private var discoverSearchEntryBar: some View {
         NavigationLink(value: currentSearchRoute) {
@@ -519,7 +549,8 @@ public struct DiscoverView: View {
                 VStack(spacing: 6) {
                     Text("跳转到指定页")
                         .font(.title3.weight(.bold))
-                    Text("当前处于第 \(currentPage) 页 · \(activeSource?.name ?? "在线图源") (\(sourcePageSizeDescription))")
+                    let sizeSuffix = sourcePageSizeDescription.isEmpty ? "" : " (\(sourcePageSizeDescription))"
+                    Text("当前处于第 \(currentPage) 页 · \(activeSource?.name ?? "在线图源")\(sizeSuffix)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -675,10 +706,11 @@ public struct DiscoverView: View {
         }
 
         do {
+            await adapter.resetPaginationCache(scope: .explore)
             let fetched = try await fetchPage(adapter: adapter, page: 1)
             guard !Task.isCancelled, generation == requestGeneration else { return }
             mangas = fetched
-            canLoadMore = !fetched.isEmpty && source.kind != .demo
+            canLoadMore = hasMorePages(fetchedCount: fetched.count, source: source)
             withAnimation(.easeInOut(duration: 0.25)) {
                 scrollProxy?.scrollTo("discover_top_anchor", anchor: .top)
             }
@@ -722,7 +754,7 @@ public struct DiscoverView: View {
 
             mangas = fetched
             currentPage = targetPage
-            canLoadMore = !fetched.isEmpty && source.kind != .demo
+            canLoadMore = hasMorePages(fetchedCount: fetched.count, source: source)
 
             withAnimation(.easeInOut(duration: 0.25)) {
                 scrollProxy?.scrollTo("discover_top_anchor", anchor: .top)
@@ -738,8 +770,8 @@ public struct DiscoverView: View {
 
     private func loadMore() async {
         guard !isLoading, !isLoadingMore, canLoadMore,
-              let sourceID = activeSource?.id,
-              let adapter = store.adapter(for: sourceID) else {
+              let source = activeSource,
+              let adapter = store.adapter(for: source.id) else {
             return
         }
 
@@ -767,6 +799,7 @@ public struct DiscoverView: View {
             } else {
                 mangas.append(contentsOf: uniqueNew)
                 currentPage = nextPage
+                canLoadMore = hasMorePages(fetchedCount: fetched.count, source: source)
                 triggerHaptic()
             }
         } catch is CancellationError {
@@ -775,6 +808,17 @@ public struct DiscoverView: View {
             guard !Task.isCancelled, generation == requestGeneration else { return }
             canLoadMore = false
             showNotice("加载下一页出错: \(error.localizedDescription)")
+        }
+    }
+
+    private func hasMorePages(fetchedCount: Int, source: MangaSourceConfig) -> Bool {
+        switch source.kind {
+        case .demo:
+            return false
+        case .jm, .wnacg:
+            return fetchedCount >= UniformPaginator.defaultPageSize
+        case .genericJSON:
+            return fetchedCount > 0
         }
     }
 

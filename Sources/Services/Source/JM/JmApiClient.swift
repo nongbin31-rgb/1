@@ -21,8 +21,23 @@ public actor JmApiClient {
     private var scrambleIdCache: [String: Int] = [:]
     private var inFlightScrambleTasks: [String: Task<Int, Never>] = [:]
     private var isFetchingSetting = false
+    private let paginator = UniformPaginator(
+        pageSize: UniformPaginator.defaultPageSize,
+        approxRawPageSize: 80
+    )
 
     private init() {}
+
+    public func resetPaginationCache(scope: PaginationCacheScope = .all) async {
+        switch scope {
+        case .all:
+            await paginator.invalidateAll()
+        case .explore:
+            await paginator.invalidate(prefix: "explore:")
+        case .search:
+            await paginator.invalidate(prefix: "search:")
+        }
+    }
 
     public func currentImageDomain() async -> String {
         await ensurePersistedEndpoints()
@@ -361,18 +376,40 @@ public actor JmApiClient {
         order: String = "mr",
         page: Int = 1
     ) async throws -> [Manga] {
+        let normalizedCategory = category.isEmpty ? "0" : category
+        let normalizedOrder = order.isEmpty ? "mr" : order
+        let streamKey = "explore:\(sourceID):\(normalizedCategory):\(normalizedOrder)"
+        return try await paginator.fetchPage(key: streamKey, page: page) { rawPage in
+            try await self.fetchRawExplore(
+                sourceID: sourceID,
+                category: normalizedCategory,
+                order: normalizedOrder,
+                page: rawPage
+            )
+        }
+    }
+
+    private func fetchRawExplore(
+        sourceID: String,
+        category: String,
+        order: String,
+        page: Int
+    ) async throws -> RawPageResult {
         let data = try await requestDecryptedJson(
             path: "/categories/filter",
             queryParameters: [
                 "o": order,
-                "c": category.isEmpty ? "0" : category,
+                "c": category,
                 "page": String(page),
             ]
         )
+        let items: [Manga]
         if let map = data as? [String: Any] {
-            return parseMangaList(map["content"], sourceID: sourceID)
+            items = parseMangaList(map["content"], sourceID: sourceID)
+        } else {
+            items = parseMangaList(data, sourceID: sourceID)
         }
-        return parseMangaList(data, sourceID: sourceID)
+        return RawPageResult(items: items, hasMore: !items.isEmpty)
     }
 
     public func search(
@@ -384,16 +421,34 @@ public actor JmApiClient {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        let directInfo = extractDirectAlbumID(from: trimmed)
+        let normalizedOrder = order.isEmpty ? "mr" : order
+        let streamKey = "search:\(sourceID):\(normalizedOrder):\(trimmed)"
+        return try await paginator.fetchPage(key: streamKey, page: page) { rawPage in
+            try await self.fetchRawSearch(
+                sourceID: sourceID,
+                trimmedQuery: trimmed,
+                order: normalizedOrder,
+                page: rawPage
+            )
+        }
+    }
+
+    private func fetchRawSearch(
+        sourceID: String,
+        trimmedQuery: String,
+        order: String,
+        page: Int
+    ) async throws -> RawPageResult {
+        let directInfo = extractDirectAlbumID(from: trimmedQuery)
         // 若用户显式输入 JM123456 / jm 123456，传纯数字给接口以便触发官方 redirect_aid 精准定位
-        let effectiveQuery = (directInfo?.hasExplicitPrefix == true) ? directInfo!.id : trimmed
+        let effectiveQuery = (directInfo?.hasExplicitPrefix == true) ? directInfo!.id : trimmedQuery
 
         let data = try await requestDecryptedJson(
             path: "/search",
             queryParameters: [
                 "search_query": effectiveQuery,
                 "page": String(page),
-                "o": order.isEmpty ? "mr" : order,
+                "o": order,
             ]
         )
 
@@ -401,23 +456,24 @@ public actor JmApiClient {
             if let redirectAidRaw = map["redirect_aid"] {
                 let redirectAid = String(describing: redirectAidRaw).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !redirectAid.isEmpty, redirectAid != "0", redirectAid != "<null>" {
-                    if page > 1 { return [] }
+                    if page > 1 { return RawPageResult(items: [], hasMore: false) }
                     if let albumData = try await requestDecryptedJson(
                         path: "/album",
                         queryParameters: ["id": redirectAid]
                     ) as? [String: Any] {
-                        return [parseMangaItem(albumData, sourceID: sourceID, fallbackId: redirectAid)]
+                        let item = parseMangaItem(albumData, sourceID: sourceID, fallbackId: redirectAid)
+                        return RawPageResult(items: [item], hasMore: false)
                     }
                 }
             }
             let list = parseMangaList(map["content"], sourceID: sourceID)
             if !list.isEmpty {
-                return list
+                return RawPageResult(items: list, hasMore: true)
             }
         } else {
             let list = parseMangaList(data, sourceID: sourceID)
             if !list.isEmpty {
-                return list
+                return RawPageResult(items: list, hasMore: true)
             }
         }
 
@@ -428,11 +484,12 @@ public actor JmApiClient {
                 queryParameters: ["id": albumID]
             ) as? [String: Any],
                cleanField(albumData["name"]) != nil {
-                return [parseMangaItem(albumData, sourceID: sourceID, fallbackId: albumID)]
+                let item = parseMangaItem(albumData, sourceID: sourceID, fallbackId: albumID)
+                return RawPageResult(items: [item], hasMore: false)
             }
         }
 
-        return []
+        return RawPageResult(items: [], hasMore: false)
     }
 
     private func extractDirectAlbumID(from raw: String) -> (id: String, hasExplicitPrefix: Bool)? {

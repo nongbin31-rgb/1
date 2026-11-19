@@ -56,4 +56,8 @@ public struct JmMangaSource: MangaSourceProtocol {
     public func fetchPages(for chapter: MangaChapter) async throws -> [MangaPage] {
         try await JmApiClient.shared.getChapterPages(photoId: chapter.id)
     }
+
+    public func resetPaginationCache(scope: PaginationCacheScope) async {
+        await JmApiClient.shared.resetPaginationCache(scope: scope)
+    }
 }

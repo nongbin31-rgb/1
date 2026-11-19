@@ -84,10 +84,8 @@ public struct MangaSearchView: View {
 
     private var activeSourcePageSizeDescription: String {
         switch activeSingleSource?.kind {
-        case .jm:
-            return "80 部/页"
-        case .wnacg:
-            return "12 部/页"
+        case .jm, .wnacg:
+            return "\(UniformPaginator.defaultPageSize) 部/页"
         default:
             return ""
         }
@@ -168,6 +166,7 @@ public struct MangaSearchView: View {
             }
             .navigationTitle("搜索漫画")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
             .toolbar {
                 if hasSubmittedSearch && !isAggregateMode && !singleMangas.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -511,7 +510,7 @@ public struct MangaSearchView: View {
                         .padding(.horizontal, 24)
                     HStack(spacing: 10) {
                         Button("重试") {
-                            executeSingleSearch(page: 1, scrollProxy: scrollProxy)
+                            executeSingleSearch(page: 1, forceRefresh: true, scrollProxy: scrollProxy)
                         }
                         .buttonStyle(.borderedProminent)
 
@@ -589,7 +588,7 @@ public struct MangaSearchView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable {
-                    await performSingleSearchAsync(page: 1, isLoadMore: false, scrollProxy: scrollProxy)
+                    await performSingleSearchAsync(page: 1, isLoadMore: false, forceRefresh: true, scrollProxy: scrollProxy)
                 }
             }
         }
@@ -620,7 +619,7 @@ public struct MangaSearchView: View {
                             Button {
                                 guard selectedSort != sortOption else { return }
                                 selectedSort = sortOption
-                                executeSingleSearch(page: 1, scrollProxy: scrollProxy)
+                                executeSingleSearch(page: 1, forceRefresh: true, scrollProxy: scrollProxy)
                             } label: {
                                 HStack {
                                     Text(sortOption.displayName)
@@ -683,7 +682,7 @@ public struct MangaSearchView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable {
-                    await performAggregateSearchAsync(scrollProxy: scrollProxy)
+                    await performAggregateSearchAsync(forceRefresh: true, scrollProxy: scrollProxy)
                 }
             }
         }
@@ -960,7 +959,7 @@ public struct MangaSearchView: View {
 
             HStack(spacing: 10) {
                 Button("重新搜索") {
-                    executeAggregateSearch(scrollProxy: scrollProxy)
+                    executeAggregateSearch(forceRefresh: true, scrollProxy: scrollProxy)
                 }
                 .buttonStyle(.borderedProminent)
 
@@ -1281,22 +1280,31 @@ public struct MangaSearchView: View {
         triggerHaptic()
 
         if isAggregateMode {
-            executeAggregateSearch(scrollProxy: scrollProxy)
+            executeAggregateSearch(forceRefresh: true, scrollProxy: scrollProxy)
         } else {
-            executeSingleSearch(page: 1, scrollProxy: scrollProxy)
+            executeSingleSearch(page: 1, forceRefresh: true, scrollProxy: scrollProxy)
         }
     }
 
-    private func executeSingleSearch(page: Int, scrollProxy: ScrollViewProxy? = nil) {
+    private func executeSingleSearch(
+        page: Int,
+        forceRefresh: Bool = false,
+        scrollProxy: ScrollViewProxy? = nil
+    ) {
         activeTask?.cancel()
         activeTask = Task {
-            await performSingleSearchAsync(page: page, isLoadMore: false, scrollProxy: scrollProxy)
+            await performSingleSearchAsync(
+                page: page,
+                isLoadMore: false,
+                forceRefresh: forceRefresh,
+                scrollProxy: scrollProxy
+            )
         }
     }
 
     private func switchSinglePage(_ targetPage: Int, scrollProxy: ScrollViewProxy? = nil) {
         guard targetPage >= 1 else { return }
-        executeSingleSearch(page: targetPage, scrollProxy: scrollProxy)
+        executeSingleSearch(page: targetPage, forceRefresh: false, scrollProxy: scrollProxy)
     }
 
     private func loadMoreSinglePage() {
@@ -1304,13 +1312,19 @@ public struct MangaSearchView: View {
         let nextPage = currentPage + 1
         activeTask?.cancel()
         activeTask = Task {
-            await performSingleSearchAsync(page: nextPage, isLoadMore: true, scrollProxy: nil)
+            await performSingleSearchAsync(
+                page: nextPage,
+                isLoadMore: true,
+                forceRefresh: false,
+                scrollProxy: nil
+            )
         }
     }
 
     private func performSingleSearchAsync(
         page: Int,
         isLoadMore: Bool,
+        forceRefresh: Bool = false,
         scrollProxy: ScrollViewProxy?
     ) async {
         let query = submittedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1350,6 +1364,9 @@ public struct MangaSearchView: View {
         }
 
         do {
+            if forceRefresh {
+                await adapter.resetPaginationCache(scope: .search)
+            }
             let rawFetched = try await adapter.search(query: query, sort: sort, page: page)
             guard !Task.isCancelled, generation == requestGeneration else { return }
             let fetched = deduplicateMangas(rawFetched)
@@ -1368,6 +1385,7 @@ public struct MangaSearchView: View {
                 } else {
                     singleMangas.append(contentsOf: uniqueNew)
                     currentPage = page
+                    canLoadMore = hasMorePages(fetchedCount: rawFetched.count, source: source)
                     triggerHaptic()
                 }
             } else {
@@ -1380,7 +1398,7 @@ public struct MangaSearchView: View {
                 }
                 singleMangas = fetched
                 currentPage = page
-                canLoadMore = !fetched.isEmpty && source.kind != .demo
+                canLoadMore = hasMorePages(fetchedCount: rawFetched.count, source: source)
                 if let scrollProxy {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         scrollProxy.scrollTo("search_top_anchor", anchor: .top)
@@ -1407,14 +1425,25 @@ public struct MangaSearchView: View {
         }
     }
 
-    private func executeAggregateSearch(scrollProxy: ScrollViewProxy? = nil) {
-        activeTask?.cancel()
-        activeTask = Task {
-            await performAggregateSearchAsync(scrollProxy: scrollProxy)
+    private func hasMorePages(fetchedCount: Int, source: MangaSourceConfig) -> Bool {
+        switch source.kind {
+        case .demo:
+            return false
+        case .jm, .wnacg:
+            return fetchedCount >= UniformPaginator.defaultPageSize
+        case .genericJSON:
+            return fetchedCount > 0
         }
     }
 
-    private func performAggregateSearchAsync(scrollProxy: ScrollViewProxy?) async {
+    private func executeAggregateSearch(forceRefresh: Bool = false, scrollProxy: ScrollViewProxy? = nil) {
+        activeTask?.cancel()
+        activeTask = Task {
+            await performAggregateSearchAsync(forceRefresh: forceRefresh, scrollProxy: scrollProxy)
+        }
+    }
+
+    private func performAggregateSearchAsync(forceRefresh: Bool = false, scrollProxy: ScrollViewProxy?) async {
         let query = submittedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
 
@@ -1464,6 +1493,9 @@ public struct MangaSearchView: View {
                 let adapter = entry.adapter
                 group.addTask {
                     do {
+                        if forceRefresh {
+                            await adapter.resetPaginationCache(scope: .search)
+                        }
                         let items = try await adapter.search(query: query, sort: .latest, page: 1)
                         return SourceSearchOutcome(
                             sourceID: config.id,
@@ -1524,6 +1556,7 @@ public struct MangaSearchView: View {
 
         Task {
             do {
+                await adapter.resetPaginationCache(scope: .search)
                 let items = try await adapter.search(query: query, sort: .latest, page: 1)
                 guard generation == requestGeneration else { return }
                 aggregateResults[sourceID] = AggregateSourceState(

@@ -38,8 +38,23 @@ public actor WnacgClient {
     private var currentApiBaseUrl: String = defaultApiBaseUrls.first!
     private var hasVerifiedBaseUrl = false
     private var hasAppliedPersistedEndpoints = false
+    private let paginator = UniformPaginator(
+        pageSize: UniformPaginator.defaultPageSize,
+        approxRawPageSize: 12
+    )
 
     private init() {}
+
+    public func resetPaginationCache(scope: PaginationCacheScope = .all) async {
+        switch scope {
+        case .all:
+            await paginator.invalidateAll()
+        case .explore:
+            await paginator.invalidate(prefix: "explore:")
+        case .search:
+            await paginator.invalidate(prefix: "search:")
+        }
+    }
 
     private func ensurePersistedEndpoints() async {
         guard !hasAppliedPersistedEndpoints else { return }
@@ -284,27 +299,45 @@ public actor WnacgClient {
         cateId: String = "all",
         page: Int = 1
     ) async throws -> [Manga] {
+        let normalizedCate = cateId.isEmpty ? "all" : cateId
+        let streamKey = "explore:\(sourceID):\(normalizedCate)"
+        return try await paginator.fetchPage(key: streamKey, page: page) { rawPage in
+            try await self.fetchRawExplore(
+                sourceID: sourceID,
+                cateId: normalizedCate,
+                page: rawPage
+            )
+        }
+    }
+
+    private func fetchRawExplore(
+        sourceID: String,
+        cateId: String,
+        page: Int
+    ) async throws -> RawPageResult {
         do {
             let apiItems = try await exploreViaApi(sourceID: sourceID, cateId: cateId, page: page)
             if !apiItems.isEmpty || page > 1 {
-                return apiItems
+                return RawPageResult(items: apiItems, hasMore: !apiItems.isEmpty)
             }
         } catch {}
 
         if cateId == "19" || cateId == "20" || cateId == "21" {
-            return try await executeWebWithFailover { domain in
+            let items = try await executeWebWithFailover { domain in
                 try await self.fetchHanmanExplore(domain: domain, sourceID: sourceID, cateId: cateId, page: page)
             }
+            return RawPageResult(items: items, hasMore: !items.isEmpty)
         }
 
         let path = (cateId == "all" || cateId.isEmpty)
             ? "/albums-index-page-\(page).html"
             : "/albums-index-page-\(page)-cate-\(cateId).html"
 
-        return try await executeWebWithFailover { domain in
+        let items = try await executeWebWithFailover { domain in
             let html = try await self.getSafeHtml(path: path, domain: domain)
             return WnacgParser.parseListHtml(html, baseUrl: domain, sourceID: sourceID)
         }
+        return RawPageResult(items: items, hasMore: !items.isEmpty)
     }
 
     public func search(sourceID: String, query: String, page: Int = 1) async throws -> [Manga] {
@@ -324,44 +357,64 @@ public actor WnacgClient {
             }
         }
 
+        let streamKey = "search:\(sourceID):\(trimmed)"
+        return try await paginator.fetchPage(key: streamKey, page: page) { rawPage in
+            try await self.fetchRawSearch(
+                sourceID: sourceID,
+                trimmedQuery: trimmed,
+                directAid: directInfo?.hasExplicitPrefix == false ? directInfo?.id : nil,
+                page: rawPage
+            )
+        }
+    }
+
+    private func fetchRawSearch(
+        sourceID: String,
+        trimmedQuery: String,
+        directAid: String?,
+        page: Int
+    ) async throws -> RawPageResult {
         do {
-            let apiResult = try await searchViaApi(sourceID: sourceID, query: trimmed, page: page)
+            let apiResult = try await searchViaApi(sourceID: sourceID, query: trimmedQuery, page: page)
             if !apiResult.items.isEmpty {
-                return apiResult.items
+                let reachedTotalEnd = apiResult.total > 0
+                    && apiResult.items.count < 12
+                    && ((page - 1) * 12 + apiResult.items.count) >= apiResult.total
+                return RawPageResult(items: apiResult.items, hasMore: !reachedTotalEnd)
             }
             // 仅当 API 明确存在命中总数时，第 2+ 页返回空表示已翻到底，避免误退 Web
             if apiResult.total > 0 && page > 1 {
-                return []
+                return RawPageResult(items: [], hasMore: false)
             }
         } catch {}
 
         let primary = try await executeWebWithFailover { domain in
-            try await self.fetchWebSearchPage(domain: domain, sourceID: sourceID, query: trimmed, page: page)
+            try await self.fetchWebSearchPage(domain: domain, sourceID: sourceID, query: trimmedQuery, page: page)
         }
         if !primary.isEmpty || page > 1 {
-            return primary
+            return RawPageResult(items: primary, hasMore: !primary.isEmpty)
         }
 
-        for fallback in buildSearchFallbackQueries(trimmed) {
+        for fallback in buildSearchFallbackQueries(trimmedQuery) {
             let items = try await executeWebWithFailover { domain in
                 try await self.fetchWebSearchPage(domain: domain, sourceID: sourceID, query: fallback, page: 1)
             }
             if !items.isEmpty {
-                return items
+                return RawPageResult(items: items, hasMore: false)
             }
         }
 
         // 支持直接输入纯数字作品 aid 精准直达兜底（仅第 1 页）
-        if let aid = directInfo?.id, directInfo?.hasExplicitPrefix == false {
+        if page == 1, let aid = directAid {
             let stub = Manga(id: aid, sourceID: sourceID, title: "")
             if let detail = try? await getDetail(sourceID: sourceID, manga: stub),
                !detail.manga.title.isEmpty,
                detail.manga.title != "WNACG \(aid)" {
-                return [detail.manga]
+                return RawPageResult(items: [detail.manga], hasMore: false)
             }
         }
 
-        return []
+        return RawPageResult(items: [], hasMore: false)
     }
 
     private func extractDirectAid(from raw: String) -> (id: String, hasExplicitPrefix: Bool)? {

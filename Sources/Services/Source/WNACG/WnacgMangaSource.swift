@@ -43,4 +43,8 @@ public struct WnacgMangaSource: MangaSourceProtocol {
     public func fetchPages(for chapter: MangaChapter) async throws -> [MangaPage] {
         try await WnacgClient.shared.getChapterPages(chapterId: chapter.id)
     }
+
+    public func resetPaginationCache(scope: PaginationCacheScope) async {
+        await WnacgClient.shared.resetPaginationCache(scope: scope)
+    }
 }
