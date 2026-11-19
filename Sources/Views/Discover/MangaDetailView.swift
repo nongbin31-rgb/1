@@ -36,8 +36,7 @@ public struct MangaDetailView: View {
                     .padding(.horizontal, 16)
                 }
 
-                upscalerBanner
-                    .padding(.horizontal, 16)
+                configCardsSection
 
                 chaptersSection
             }
@@ -166,21 +165,98 @@ public struct MangaDetailView: View {
         .padding(.horizontal, 16)
     }
 
-    private var upscalerBanner: some View {
+    private var configCardsSection: some View {
         HStack(spacing: 10) {
+            upscalerBanner
+            readingModeBanner
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var upscalerBanner: some View {
+        HStack(spacing: 8) {
             Image(systemName: "sparkles")
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text("当前超分管线")
-                    .font(.caption)
+                Text("画质超分")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text(store.upscalerConfig.summaryText)
+                Text(store.enableImageUpscaler ? store.upscalerConfig.model.displayName : "原图直出")
                     .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var readingModeBanner: some View {
+        let currentMode = store.layoutMode(for: currentManga)
+        let category = store.detectedCategory(for: currentManga)
+        let isCustomized = store.customLayoutMode(for: currentManga) != nil
+
+        return Menu {
+            ForEach(ReaderLayoutMode.allCases) { mode in
+                Button {
+                    store.setLayoutMode(mode, for: currentManga)
+                } label: {
+                    HStack {
+                        Text(mode.displayName)
+                        if currentMode == mode {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+            if isCustomized {
+                Divider()
+                Button("恢复智能识别") {
+                    store.setLayoutMode(nil, for: currentManga)
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: currentMode == .verticalWebtoon ? "rectangle.portrait.and.arrow.forward" : "book.closed")
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text("阅读排版")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if isCustomized {
+                            Text("自定")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 3)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                        } else if store.autoDetectMangaLayout {
+                            Text(category == .koreanWebtoon ? "韩漫" : (category == .japaneseManga ? "日漫" : "默认"))
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 3)
+                                .padding(.vertical, 1)
+                                .background(Color.green.opacity(0.15), in: Capsule())
+                                .foregroundStyle(Color.green)
+                        }
+                    }
+                    HStack(spacing: 2) {
+                        Text(currentMode.displayName)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+            .foregroundStyle(Color.primary)
+        }
     }
 
     private var chaptersSection: some View {

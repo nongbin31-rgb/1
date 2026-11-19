@@ -5,6 +5,8 @@ import UIKit
 final class ComicContainerImageView: UIImageView {
     /// Layer 1: 真实物理纸张基准底色正片叠底覆盖层 (使漫画纯白线稿与四周留白纸浆底色100%无缝吻合)
     let paperTintOverlayView = UIImageView()
+    /// Layer 1.5: 零泛白柔光纸纤维覆盖层 (激活彩漫与中暗调立体质感且绝不泛白)
+    let softLightOverlayView = UIImageView()
     /// Layer 2 裁剪容器：严格限定在漫画画面区域内，不溢出到四周留白
     let textureClipContainer = UIView()
     /// Layer 2: 真实纸张材质纹理覆盖层 (原点对齐整页坐标系，且随缩放平移紧密附着于漫画画面)
@@ -27,12 +29,19 @@ final class ComicContainerImageView: UIImageView {
 
     private func setupOverlays() {
         contentMode = .scaleAspectFit
+        backgroundColor = .clear
 
         paperTintOverlayView.clipsToBounds = true
         paperTintOverlayView.isUserInteractionEnabled = false
         paperTintOverlayView.layer.compositingFilter = "multiplyBlendMode"
         paperTintOverlayView.isHidden = true
         addSubview(paperTintOverlayView)
+
+        softLightOverlayView.clipsToBounds = true
+        softLightOverlayView.isUserInteractionEnabled = false
+        softLightOverlayView.layer.compositingFilter = "softLightBlendMode"
+        softLightOverlayView.isHidden = true
+        addSubview(softLightOverlayView)
 
         textureClipContainer.clipsToBounds = true
         textureClipContainer.isUserInteractionEnabled = false
@@ -59,6 +68,7 @@ final class ComicContainerImageView: UIImageView {
             bounds: bounds
         )
         paperTintOverlayView.frame = targetRect
+        softLightOverlayView.frame = targetRect
         textureClipContainer.frame = targetRect
         // 反向定位使平铺原点对齐整页 (0, 0)，与页面四周留白纸张纹理相位 100% 无缝衔接
         textureOverlayView.frame = CGRect(
@@ -111,6 +121,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         scrollView.contentInsetAdjustmentBehavior = .never
 
         let imageView = ComicContainerImageView(image: image)
+        imageView.backgroundColor = .clear
         imageView.frame = scrollView.bounds
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         scrollView.addSubview(imageView)
@@ -181,27 +192,35 @@ public struct ZoomableImageView: UIViewRepresentable {
                 imageView.paperTintOverlayView.isHidden = false
                 imageView.paperTintOverlayView.image = UIImage.solidColorImage(color: texture.basePaperColor)
 
-                // 2. 真实物理纸张材质微粒/纹理正片叠底
-                if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
+                // 2. 真实物理纸张材质微粒/纹理覆盖
+                if texture == .proceduralStucco {
+                    // DoveShelf 同款双通道微粒流：柔光纸纤维 + 暖墨微吸收
+                    let fiberTiles = ProceduralStuccoTextureManager.shared.getFiberTiles()
+                    let effectiveOpacity = ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
+
+                    imageView.softLightOverlayView.isHidden = false
+                    imageView.softLightOverlayView.image = fiberTiles.softLightTile.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+                    imageView.softLightOverlayView.alpha = CGFloat(effectiveOpacity)
+
                     imageView.textureClipContainer.isHidden = false
-                    if texture == .proceduralStucco {
-                        // 程序化粉刷颗粒保持无缝环形平铺，严格按 @3x 逻辑点尺寸平铺，杜绝放大发粗
-                        imageView.textureOverlayView.contentMode = .scaleToFill
-                        imageView.textureOverlayView.image = texImg.resizableImage(withCapInsets: .zero, resizingMode: .tile)
-                    } else {
-                        imageView.textureOverlayView.contentMode = .scaleAspectFill
-                        imageView.textureOverlayView.image = texImg
-                    }
-                    let effectiveOpacity = (texture == .proceduralStucco)
-                        ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
-                        : opacity
+                    imageView.textureOverlayView.contentMode = .scaleToFill
+                    imageView.textureOverlayView.image = fiberTiles.absorbTile.resizableImage(withCapInsets: .zero, resizingMode: .tile)
                     imageView.textureClipContainer.alpha = CGFloat(effectiveOpacity)
                     imageView.textureOverlayView.alpha = 1.0
+                } else if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
+                    imageView.softLightOverlayView.isHidden = true
+                    imageView.textureClipContainer.isHidden = false
+                    imageView.textureOverlayView.contentMode = .scaleAspectFill
+                    imageView.textureOverlayView.image = texImg
+                    imageView.textureClipContainer.alpha = CGFloat(opacity)
+                    imageView.textureOverlayView.alpha = 1.0
                 } else {
+                    imageView.softLightOverlayView.isHidden = true
                     imageView.textureClipContainer.isHidden = true
                 }
             } else {
                 imageView.paperTintOverlayView.isHidden = true
+                imageView.softLightOverlayView.isHidden = true
                 imageView.textureClipContainer.isHidden = true
             }
         }

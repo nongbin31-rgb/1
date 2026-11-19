@@ -211,9 +211,10 @@ public struct ComicPageCellView: View {
         ZStack {
             currentBackgroundColor
 
-            // 物理纸张材质纹理 - 阅读器留白背景层 (仅在目标包含背景时铺设于四周底纸)
+            // 当处于纹理或沉浸模式时，单页留白区域保持完全透明，
+            // 统一直透最底层铺满全屏的 readerBackgroundView，彻底消除翻页时 Cell 背景遮挡与安全区错位产生的白块
             if background == .texture && (textureTarget == .both || textureTarget == .backgroundOnly) && !isCompareMode {
-                PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+                // 由外层 ReaderView 的 readerBackgroundView 统一承载全屏纸张底色与微粒纹理
             }
 
             if let currentImg = slot.displayImage, let orig = slot.originalImage {
@@ -303,10 +304,8 @@ public struct ComicPageCellView: View {
             Color.white.ignoresSafeArea()
         case .dark:
             Color.black.ignoresSafeArea()
-        case .immersive:
+        case .immersive, .texture:
             Color.clear.ignoresSafeArea()
-        case .texture:
-            texture.basePaperSwiftUIColor.ignoresSafeArea()
         }
     }
 

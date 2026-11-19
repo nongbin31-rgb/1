@@ -139,23 +139,21 @@ public struct ReaderBackgroundPickerSheet: View {
                 ZStack {
                     item.basePaperSwiftUIColor
 
-                    if let img = ReaderTextureCache.shared.textureImage(for: item) {
-                        if item == .proceduralStucco {
-                            Image(uiImage: img)
-                                .resizable(resizingMode: .tile)
-                                .frame(minWidth: 0, maxWidth: .infinity)
-                                .frame(height: 72)
-                                .clipped()
-                                .blendMode(.multiply)
-                        } else {
-                            Image(uiImage: img)
-                                .resizable(resizingMode: .stretch)
-                                .scaledToFill()
-                                .frame(minWidth: 0, maxWidth: .infinity)
-                                .frame(height: 72)
-                                .clipped()
-                                .blendMode(.multiply)
-                        }
+                    if item == .proceduralStucco {
+                        ProceduralStuccoMultiPassOverlayView(
+                            opacity: 0.65,
+                            phaseAnchor: .local
+                        )
+                        .frame(minWidth: 0, maxWidth: .infinity)
+                        .frame(height: 72)
+                    } else if let img = ReaderTextureCache.shared.textureImage(for: item) {
+                        Image(uiImage: img)
+                            .resizable(resizingMode: .stretch)
+                            .scaledToFill()
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .frame(height: 72)
+                            .clipped()
+                            .blendMode(.multiply)
                     } else {
                         Color(uiColor: .secondarySystemBackground)
                             .frame(minWidth: 0, maxWidth: .infinity)

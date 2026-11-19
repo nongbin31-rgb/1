@@ -14,6 +14,26 @@ public struct BuiltinDemoSource: MangaSourceProtocol {
         guard page == 1 else { return [] }
         return [
             Manga(
+                id: "demo-webtoon",
+                sourceID: config.id,
+                title: "【韩漫】Webtoon 全彩长条漫智能排版测试",
+                author: "韩国漫画测试组",
+                coverURL: "synthetic://cover/color",
+                summary: "全彩条漫长图样本，带有明显的「韩漫」与「Webtoon」属性。开启智能排版时阅读器将自动切换至「条漫滚动」模式。",
+                tags: ["韩漫", "Webtoon", "全彩", "条漫测试"],
+                statusText: "连载中"
+            ),
+            Manga(
+                id: "demo-japanese",
+                sourceID: config.id,
+                title: "【日漫】单行本经典黑白线稿智能排版测试 (右→左)",
+                author: "日本漫画工作室",
+                coverURL: "synthetic://cover/lineart",
+                summary: "经典日系单行本黑白分镜开本样本，带有明显的「日漫」与「单行本」属性。开启智能排版时阅读器将自动切换至「日漫翻页 (右→左)」模式。",
+                tags: ["日漫", "单行本", "黑白网点", "翻页测试"],
+                statusText: "已完结"
+            ),
+            Manga(
                 id: "demo-lineart",
                 sourceID: config.id,
                 title: "超分画质基准测试 · 线稿与网点",
@@ -61,6 +81,14 @@ public struct BuiltinDemoSource: MangaSourceProtocol {
 
     public func fetchChapters(for manga: Manga) async throws -> [MangaChapter] {
         switch manga.id {
+        case "demo-webtoon":
+            return [
+                MangaChapter(id: "webtoon-ch1", mangaID: manga.id, title: "第 1 话 · 全彩条漫连读", number: 1, updatedAt: "内置"),
+            ]
+        case "demo-japanese":
+            return [
+                MangaChapter(id: "japanese-ch1", mangaID: manga.id, title: "第 1 话 · 单行本开本 (右→左翻页)", number: 1, updatedAt: "内置"),
+            ]
         case "demo-lineart":
             return [
                 MangaChapter(id: "lineart-ch1", mangaID: manga.id, title: "第 1 话 · 压缩线稿与对白", number: 1, updatedAt: "内置"),
@@ -79,6 +107,17 @@ public struct BuiltinDemoSource: MangaSourceProtocol {
 
     public func fetchPages(for chapter: MangaChapter) async throws -> [MangaPage] {
         switch chapter.id {
+        case "webtoon-ch1":
+            return [
+                MangaPage(index: 0, imageURL: "synthetic://page/color/1"),
+                MangaPage(index: 1, imageURL: "synthetic://page/color/2"),
+            ]
+        case "japanese-ch1":
+            return [
+                MangaPage(index: 0, imageURL: "synthetic://page/lineart/1"),
+                MangaPage(index: 1, imageURL: "synthetic://page/lineart/2"),
+                MangaPage(index: 2, imageURL: "synthetic://page/lineart/3"),
+            ]
         case "lineart-ch1":
             return [
                 MangaPage(index: 0, imageURL: "synthetic://page/lineart/1"),

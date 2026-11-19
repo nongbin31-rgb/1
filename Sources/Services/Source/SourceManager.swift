@@ -25,6 +25,12 @@ public final class AppStore: ObservableObject {
     @Published public var readerLayoutMode: ReaderLayoutMode = .verticalWebtoon {
         didSet { save(readerLayoutMode, key: Keys.layoutMode) }
     }
+    @Published public var autoDetectMangaLayout: Bool = true {
+        didSet { save(autoDetectMangaLayout, key: Keys.autoDetectMangaLayout) }
+    }
+    @Published public var mangaLayoutOverrides: [String: ReaderLayoutMode] = [:] {
+        didSet { save(mangaLayoutOverrides, key: Keys.mangaLayoutOverrides) }
+    }
     @Published public var pageTurningEffect: PageTurningEffect = .curling {
         didSet { save(pageTurningEffect, key: Keys.turningEffect) }
     }
@@ -65,6 +71,8 @@ public final class AppStore: ObservableObject {
         static let enableUpscaler = "keda_online_enable_upscaler_v1"
         static let transitionAfterUpscaled = "keda_online_transition_after_upscaled_v1"
         static let layoutMode = "keda_online_layout_v1"
+        static let autoDetectMangaLayout = "keda_online_auto_detect_manga_layout_v1"
+        static let mangaLayoutOverrides = "keda_online_manga_layout_overrides_v1"
         static let turningEffect = "keda_online_turning_effect_v1"
         static let soundEnabled = "keda_online_sound_enabled_v1"
         static let spineShadow = "keda_online_spine_shadow_v1"
@@ -122,6 +130,8 @@ public final class AppStore: ObservableObject {
         self.enableImageUpscaler = load(key: Keys.enableUpscaler) ?? false
         self.transitionAfterImageUpscaled = load(key: Keys.transitionAfterUpscaled) ?? true
         self.readerLayoutMode = load(key: Keys.layoutMode) ?? .verticalWebtoon
+        self.autoDetectMangaLayout = load(key: Keys.autoDetectMangaLayout) ?? true
+        self.mangaLayoutOverrides = load(key: Keys.mangaLayoutOverrides) ?? [:]
         self.pageTurningEffect = load(key: Keys.turningEffect) ?? .curling
         self.pageTurnSoundEnabled = load(key: Keys.soundEnabled) ?? true
         self.showSpineShadowInCurl = load(key: Keys.spineShadow) ?? true
@@ -209,6 +219,46 @@ public final class AppStore: ObservableObject {
 
     public func clearSearchHistory() {
         searchHistory = []
+    }
+
+    // MARK: - 漫画排版模式与智能匹配 (韩漫自动条漫 / 日漫自动日漫翻页)
+
+    /// 获取特定漫画的排版模式（优先遵循单本漫画自定义，否则按智能规则推导韩漫条漫/日漫翻页，未识别回退全局默认）
+    public func layoutMode(for manga: Manga) -> ReaderLayoutMode {
+        if let custom = mangaLayoutOverrides[manga.compositeKey] {
+            return custom
+        }
+        guard autoDetectMangaLayout else {
+            return readerLayoutMode
+        }
+        let category = MangaLayoutDetector.detectCategory(for: manga)
+        switch category {
+        case .koreanWebtoon:
+            return .verticalWebtoon
+        case .japaneseManga:
+            return .pagedRTL
+        case .normal:
+            return readerLayoutMode
+        }
+    }
+
+    /// 设置特定漫画的排版模式覆盖（传 nil 则恢复跟随智能检测或全局默认）
+    public func setLayoutMode(_ mode: ReaderLayoutMode?, for manga: Manga) {
+        if let mode {
+            mangaLayoutOverrides[manga.compositeKey] = mode
+        } else {
+            mangaLayoutOverrides.removeValue(forKey: manga.compositeKey)
+        }
+    }
+
+    /// 获取特定漫画的用户单独自定义覆盖排版模式（若未单独自定义则返回 nil）
+    public func customLayoutMode(for manga: Manga) -> ReaderLayoutMode? {
+        mangaLayoutOverrides[manga.compositeKey]
+    }
+
+    /// 获取特定漫画的智能分类（韩漫 / 日漫 / 常规）
+    public func detectedCategory(for manga: Manga) -> MangaLayoutCategory {
+        MangaLayoutDetector.detectCategory(for: manga)
     }
 
     private func save<T: Encodable>(_ value: T, key: String) {

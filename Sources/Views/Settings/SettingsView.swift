@@ -79,8 +79,10 @@ public struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section("阅读排版与翻页特效") {
-                    Picker("默认排版方式", selection: $store.readerLayoutMode) {
+                Section {
+                    Toggle("智能排版 (韩漫条漫 / 日漫翻页)", isOn: $store.autoDetectMangaLayout)
+
+                    Picker(store.autoDetectMangaLayout ? "未识别漫画排版" : "默认排版方式", selection: $store.readerLayoutMode) {
                         ForEach(ReaderLayoutMode.allCases) { mode in
                             Text(mode.displayName).tag(mode)
                         }
@@ -94,6 +96,14 @@ public struct SettingsView: View {
 
                     Toggle("翻页音效与轻触震动", isOn: $store.pageTurnSoundEnabled)
                     Toggle("仿真卷页书脊立体中缝阴影", isOn: $store.showSpineShadowInCurl)
+                } header: {
+                    Text("阅读排版与翻页特效")
+                } footer: {
+                    if store.autoDetectMangaLayout {
+                        Text("已开启智能排版：遇到韩漫/Webtoon 自动切换为长图无限滚动（条漫），遇到日漫自动切换为从右向左日漫翻页；亦可在阅读器中为每部漫画单独指定。")
+                    } else {
+                        Text("已关闭智能排版：所有漫画统一采用上方指定的默认排版方式。")
+                    }
                 }
 
                 Section("阅读背景与拟真纸质") {

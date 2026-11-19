@@ -496,6 +496,18 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentOnZoomChanged: ((CGFloat) -> Void)?
     private var currentOnImageLoaded: ((UIImage) -> Void)?
 
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
+    }
+
     func configure(
         page: MangaPage,
         config: ImageUpscalerConfig,
@@ -655,5 +667,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         currentPage = nil
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
     }
 }

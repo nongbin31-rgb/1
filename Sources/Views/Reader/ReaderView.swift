@@ -125,6 +125,8 @@ public struct ReaderView: View {
     @State private var isCompareMode = false
     @State private var currentHUDText = ""
     @State private var capturedPreviewImage: UIImage?
+    @State private var activeLayoutMode: ReaderLayoutMode = .verticalWebtoon
+    @State private var hasInitializedLayout = false
 
     public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter) {
         self.manga = manga
@@ -227,7 +229,11 @@ public struct ReaderView: View {
         }
         .ignoresSafeArea()
         .statusBarHidden(!showChrome)
+        .onAppear {
+            initializeLayoutIfNeeded()
+        }
         .task(id: currentChapter.id) {
+            initializeLayoutIfNeeded()
             await loadChapterPages()
         }
         .onDisappear {
@@ -237,10 +243,11 @@ public struct ReaderView: View {
         }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
+                manga: manga,
                 config: $store.upscalerConfig,
                 enableUpscaler: $store.enableImageUpscaler,
                 transitionAfterUpscaled: $store.transitionAfterImageUpscaled,
-                layoutMode: $store.readerLayoutMode,
+                layoutMode: $activeLayoutMode,
                 turningEffect: $store.pageTurningEffect,
                 soundEnabled: $store.pageTurnSoundEnabled,
                 showSpineShadow: $store.showSpineShadowInCurl,
@@ -252,6 +259,7 @@ public struct ReaderView: View {
                     }
                 }
             )
+            .environmentObject(store)
             .presentationDetents([.medium, .large])
         }
         .fullScreenCover(isPresented: $showConfigPreviewSheet) {
@@ -294,12 +302,23 @@ public struct ReaderView: View {
             .ignoresSafeArea()
         case .texture:
             ZStack {
-                store.readerTextureType.basePaperSwiftUIColor
-                if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
-                    PaperTextureOverlayView(
-                        texture: store.readerTextureType,
-                        opacity: store.readerTextureOpacity
-                    )
+                if store.readerTextureType == .proceduralStucco {
+                    if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
+                        StuccoWallBackgroundView(
+                            baseColor: store.readerTextureType.basePaperSwiftUIColor,
+                            intensity: store.readerTextureOpacity
+                        )
+                    } else {
+                        store.readerTextureType.basePaperSwiftUIColor
+                    }
+                } else {
+                    store.readerTextureType.basePaperSwiftUIColor
+                    if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
+                        PaperTextureOverlayView(
+                            texture: store.readerTextureType,
+                            opacity: store.readerTextureOpacity
+                        )
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -308,7 +327,7 @@ public struct ReaderView: View {
 
     @ViewBuilder
     private var readerContent: some View {
-        if store.readerLayoutMode == .verticalWebtoon && !isCompareMode {
+        if activeLayoutMode == .verticalWebtoon && !isCompareMode {
             GeometryReader { geo in
                 let contentWidth = geo.size.width
                 let scale = UIScreen.main.scale
@@ -338,6 +357,7 @@ public struct ReaderView: View {
                                         if page.index == currentPageIndex {
                                             capturedPreviewImage = img
                                         }
+                                        checkAspectRatioIfUndetermined(with: img.size)
                                     }
                                 )
                                 .padding(.bottom, -pixelOverlap)
@@ -364,7 +384,7 @@ public struct ReaderView: View {
                 enableUpscaler: store.enableImageUpscaler,
                 transitionAfterUpscaled: store.transitionAfterImageUpscaled,
                 isCompareMode: isCompareMode,
-                isRightToLeft: store.readerLayoutMode == .pagedRTL,
+                isRightToLeft: activeLayoutMode == .pagedRTL,
                 soundEnabled: store.pageTurnSoundEnabled,
                 showSpineShadow: store.showSpineShadowInCurl,
                 background: store.preferredReaderBackground,
@@ -383,6 +403,36 @@ public struct ReaderView: View {
                 },
                 onImageLoaded: { img in
                     capturedPreviewImage = img
+                    checkAspectRatioIfUndetermined(with: img.size)
+                }
+            )
+        } else if store.pageTurningEffect == .cover {
+            // 层叠覆盖模式 (Cover 纸页平移抽离与边缘落影)
+            CoverPageReaderView(
+                pages: pages,
+                upscalerConfig: store.upscalerConfig,
+                enableUpscaler: store.enableImageUpscaler,
+                transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                isCompareMode: isCompareMode,
+                isRightToLeft: activeLayoutMode == .pagedRTL,
+                soundEnabled: store.pageTurnSoundEnabled,
+                background: store.preferredReaderBackground,
+                texture: store.readerTextureType,
+                textureOpacity: store.readerTextureOpacity,
+                textureTarget: store.readerTextureTarget,
+                showDividingLine: store.showSpineDividingLine,
+                currentPageIndex: $currentPageIndex,
+                onSingleTap: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showChrome.toggle()
+                    }
+                },
+                onStatusUpdate: { text in
+                    currentHUDText = text
+                },
+                onImageLoaded: { img in
+                    capturedPreviewImage = img
+                    checkAspectRatioIfUndetermined(with: img.size)
                 }
             )
         } else {
@@ -393,7 +443,7 @@ public struct ReaderView: View {
                 enableUpscaler: store.enableImageUpscaler,
                 transitionAfterUpscaled: store.transitionAfterImageUpscaled,
                 isCompareMode: isCompareMode,
-                isRightToLeft: store.readerLayoutMode == .pagedRTL,
+                isRightToLeft: activeLayoutMode == .pagedRTL,
                 turningEffect: store.pageTurningEffect,
                 soundEnabled: store.pageTurnSoundEnabled,
                 background: store.preferredReaderBackground,
@@ -411,7 +461,11 @@ public struct ReaderView: View {
                 },
                 onImageLoaded: { img in
                     capturedPreviewImage = img
+                    checkAspectRatioIfUndetermined(with: img.size)
                 }
+            )
+        }
+    }
             )
         }
     }
@@ -635,6 +689,25 @@ public struct ReaderView: View {
     private var hardwareBaselineSafeAreaBottom: CGFloat {
         let maxDimension = max(UIScreen.main.bounds.height, UIScreen.main.bounds.width)
         return maxDimension >= 812 ? 34 : 12
+    }
+
+    private func initializeLayoutIfNeeded() {
+        guard !hasInitializedLayout else { return }
+        activeLayoutMode = store.layoutMode(for: manga)
+        hasInitializedLayout = true
+    }
+
+    private func checkAspectRatioIfUndetermined(with size: CGSize) {
+        guard store.autoDetectMangaLayout, store.customLayoutMode(for: manga) == nil else { return }
+        guard size.width > 0, size.height > 0 else { return }
+
+        let ratio = size.height / size.width
+        // 若为高瘦条漫长图（>= 1.85）且当前未处于条漫模式，智能自适应切换为条漫
+        if ratio >= 1.85 && activeLayoutMode != .verticalWebtoon {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                activeLayoutMode = .verticalWebtoon
+            }
+        }
     }
 
     private func switchChapter(delta: Int) {
@@ -912,6 +985,9 @@ private struct VerticalMangaPageCell: View {
 /// 阅读器底部弹出的实时超分 & 排版配置面板
 private struct ReaderUpscalerSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: AppStore
+
+    let manga: Manga
     @Binding var config: ImageUpscalerConfig
     @Binding var enableUpscaler: Bool
     @Binding var transitionAfterUpscaled: Bool
@@ -924,10 +1000,46 @@ private struct ReaderUpscalerSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("阅读排版与翻页动画") {
-                    Picker("排版方式", selection: $layoutMode) {
+                Section {
+                    Picker("排版方式", selection: Binding(
+                        get: { layoutMode },
+                        set: { newMode in
+                            layoutMode = newMode
+                            store.setLayoutMode(newMode, for: manga)
+                        }
+                    )) {
                         ForEach(ReaderLayoutMode.allCases) { mode in
                             Text(mode.displayName).tag(mode)
+                        }
+                    }
+
+                    if store.customLayoutMode(for: manga) != nil {
+                        HStack {
+                            Label("已单独为此漫画指定排版", systemImage: "pin.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("恢复智能匹配") {
+                                store.setLayoutMode(nil, for: manga)
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    layoutMode = store.layoutMode(for: manga)
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                        }
+                    } else if store.autoDetectMangaLayout {
+                        let category = store.detectedCategory(for: manga)
+                        HStack {
+                            Label(
+                                category == .koreanWebtoon
+                                    ? "智能匹配：韩漫 (已自动切换条漫滚动)"
+                                    : (category == .japaneseManga
+                                        ? "智能匹配：日漫 (已自动切换日漫翻页)"
+                                        : "常规模式 (使用默认排版)"),
+                                systemImage: category == .normal ? "info.circle" : "sparkles"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(category == .normal ? .secondary : .tint)
                         }
                     }
 
@@ -943,6 +1055,12 @@ private struct ReaderUpscalerSheet: View {
                         if turningEffect == .curling {
                             Toggle("书脊中缝立体渐变阴影", isOn: $showSpineShadow)
                         }
+                    }
+                } header: {
+                    Text("阅读排版与翻页动画")
+                } footer: {
+                    if store.autoDetectMangaLayout {
+                        Text("系统已开启智能排版：韩漫自动采用条漫滚动，日漫自动采用从右向左翻页；手动切换后将仅为当前漫画记住选择。")
                     }
                 }
 
