@@ -1,11 +1,30 @@
 import SwiftUI
 import UIKit
 
-/// 基于 UIScrollView 桥接的高性能漫画缩放视图（支持 1x~5x 双指缩放、双击放大、单击切换工具栏）
+/// 基于 UIScrollView 桥接的高性能漫画缩放视图（支持 1x~5x 双指缩放、双击放大、单击切换工具栏，支持物理纸张纹理正片叠底）
 public struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
+    var texture: ReaderTextureType? = nil
+    var textureOpacity: Double = 0.4
+    var applyTextureToImage: Bool = false
     let onSingleTap: () -> Void
     var onZoomChanged: ((CGFloat) -> Void)? = nil
+
+    public init(
+        image: UIImage,
+        texture: ReaderTextureType? = nil,
+        textureOpacity: Double = 0.4,
+        applyTextureToImage: Bool = false,
+        onSingleTap: @escaping () -> Void,
+        onZoomChanged: ((CGFloat) -> Void)? = nil
+    ) {
+        self.image = image
+        self.texture = texture
+        self.textureOpacity = textureOpacity
+        self.applyTextureToImage = applyTextureToImage
+        self.onSingleTap = onSingleTap
+        self.onZoomChanged = onZoomChanged
+    }
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(onSingleTap: onSingleTap, onZoomChanged: onZoomChanged)
@@ -28,7 +47,16 @@ public struct ZoomableImageView: UIViewRepresentable {
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         scrollView.addSubview(imageView)
 
+        // 真实纸张材质纹理覆盖层 (置于 imageView 内部，精准作用于漫画图片本身，随缩放平移天然跟随)
+        let textureOverlayView = UIImageView()
+        textureOverlayView.contentMode = .scaleAspectFill
+        textureOverlayView.clipsToBounds = true
+        textureOverlayView.isUserInteractionEnabled = false
+        textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
+        imageView.addSubview(textureOverlayView)
+
         context.coordinator.imageView = imageView
+        context.coordinator.textureOverlayView = textureOverlayView
         context.coordinator.scrollView = scrollView
 
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
@@ -39,6 +67,12 @@ public struct ZoomableImageView: UIViewRepresentable {
         singleTap.numberOfTapsRequired = 1
         singleTap.require(toFail: doubleTap)
         scrollView.addGestureRecognizer(singleTap)
+
+        context.coordinator.updateTexture(
+            texture: texture,
+            opacity: textureOpacity,
+            applyToImage: applyTextureToImage
+        )
 
         return scrollView
     }
@@ -55,17 +89,56 @@ public struct ZoomableImageView: UIViewRepresentable {
                 uiView.contentSize = uiView.bounds.size
             }
         }
+        context.coordinator.updateTexture(
+            texture: texture,
+            opacity: textureOpacity,
+            applyToImage: applyTextureToImage
+        )
     }
 
     public final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var scrollView: UIScrollView?
         weak var imageView: UIImageView?
+        weak var textureOverlayView: UIImageView?
         var onSingleTap: () -> Void
         var onZoomChanged: ((CGFloat) -> Void)?
 
         init(onSingleTap: @escaping () -> Void, onZoomChanged: ((CGFloat) -> Void)?) {
             self.onSingleTap = onSingleTap
             self.onZoomChanged = onZoomChanged
+        }
+
+        public func updateTexture(
+            texture: ReaderTextureType?,
+            opacity: Double,
+            applyToImage: Bool
+        ) {
+            guard let imageView, let image = imageView.image, let textureOverlayView else { return }
+            let targetRect = Self.calculateImageAspectFitRect(imageSize: image.size, bounds: imageView.bounds)
+            textureOverlayView.frame = targetRect
+
+            if applyToImage, let texture, let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
+                textureOverlayView.isHidden = false
+                textureOverlayView.image = texImg
+                textureOverlayView.alpha = CGFloat(opacity)
+            } else {
+                textureOverlayView.isHidden = true
+            }
+        }
+
+        public static func calculateImageAspectFitRect(imageSize: CGSize, bounds: CGRect) -> CGRect {
+            guard imageSize.width > 0, imageSize.height > 0, bounds.width > 0, bounds.height > 0 else {
+                return bounds
+            }
+            let imageRatio = imageSize.width / imageSize.height
+            let viewRatio = bounds.width / bounds.height
+            if imageRatio > viewRatio {
+                let h = bounds.width / imageRatio
+                return CGRect(x: 0, y: (bounds.height - h) * 0.5, width: bounds.width, height: h)
+            } else {
+                let w = bounds.height * imageRatio
+                return CGRect(x: (bounds.width - w) * 0.5, y: 0, width: w, height: bounds.height)
+            }
         }
 
         public func viewForZooming(in scrollView: UIScrollView) -> UIView? {

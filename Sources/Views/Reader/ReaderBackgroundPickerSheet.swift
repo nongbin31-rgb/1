@@ -24,6 +24,7 @@ public struct ReaderBackgroundPickerSheet: View {
                     // 2. 纸张纹理专属配置卡片 (仅在纹理模式下呈现)
                     if store.preferredReaderBackground == .texture {
                         texturePickerSection
+                        textureScopeSection
                         textureOpacitySection
                     }
 
@@ -95,13 +96,7 @@ public struct ReaderBackgroundPickerSheet: View {
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private let textureGridColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
-
-    // MARK: - 2. 真实物理纸张材质选择网格
+    // MARK: - 2. 真实物理纸张材质选择网格 (严格等宽对齐网格)
     private var texturePickerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -114,71 +109,16 @@ public struct ReaderBackgroundPickerSheet: View {
                     .foregroundStyle(.secondary)
             }
 
-            LazyVGrid(columns: textureGridColumns, spacing: 12) {
-                ForEach(ReaderTextureType.allCases) { item in
-                    let isSelected = store.readerTextureType == item
-                    Button {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                            store.readerTextureType = item
-                        }
-                    } label: {
-                        VStack(spacing: 6) {
-                            // 材质缩略图区域（严格固定高度与宽度，杜绝子视图撑乱网格）
-                            ZStack {
-                                if let img = ReaderTextureCache.shared.textureImage(for: item) {
-                                    Image(uiImage: img)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(height: 72)
-                                        .frame(maxWidth: .infinity)
-                                        .clipped()
-                                } else {
-                                    Color.secondary.opacity(0.2)
-                                        .frame(height: 72)
-                                        .frame(maxWidth: .infinity)
-                                }
-                            }
-                            .frame(height: 72)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            // 选中高亮半透明蒙层（通过 overlay 附加，不影响底层尺寸）
-                            .overlay {
-                                if isSelected {
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(Color.accentColor.opacity(0.12))
-                                }
-                            }
-                            // 选中右下角角标（独立 overlay 锚定布局，不参与容器尺寸计算）
-                            .overlay(alignment: .bottomTrailing) {
-                                if isSelected {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 16, weight: .bold))
-                                        .foregroundStyle(Color.accentColor)
-                                        .background(
-                                            Circle()
-                                                .fill(Color.white)
-                                                .padding(2)
-                                        )
-                                        .padding(6)
-                                }
-                            }
-                            // 描边（未选中细浅灰框，选中加粗主题色边框）
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(
-                                        isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
-                                        lineWidth: isSelected ? 2.5 : 1
-                                    )
-                            )
-
-                            Text(item.displayName)
-                                .font(.caption.weight(isSelected ? .bold : .regular))
-                                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity)
+            Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                GridRow {
+                    ForEach(Array(ReaderTextureType.allCases.prefix(3))) { item in
+                        textureCardView(for: item)
                     }
-                    .buttonStyle(.plain)
+                }
+                GridRow {
+                    ForEach(Array(ReaderTextureType.allCases.suffix(from: 3))) { item in
+                        textureCardView(for: item)
+                    }
                 }
             }
         }
@@ -186,7 +126,117 @@ public struct ReaderBackgroundPickerSheet: View {
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // MARK: - 3. 纹理浓度与透明度滑块
+    @ViewBuilder
+    private func textureCardView(for item: ReaderTextureType) -> some View {
+        let isSelected = store.readerTextureType == item
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                store.readerTextureType = item
+            }
+        } label: {
+            VStack(spacing: 6) {
+                // 材质缩略图展示区域：严格定高，图片通过 background 载入并 clipShape 裁切，杜绝尺寸溢出
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.clear)
+                    .frame(height: 72)
+                    .background {
+                        if let img = ReaderTextureCache.shared.textureImage(for: item) {
+                            Image(uiImage: img)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Color.secondary.opacity(0.15)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    // 选中状态浅蓝高亮蒙层
+                    .overlay {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.accentColor.opacity(0.12))
+                        }
+                    }
+                    // 选中右下角角标
+                    .overlay(alignment: .bottomTrailing) {
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(Color.accentColor)
+                                .background(Circle().fill(Color.white).padding(2))
+                                .padding(6)
+                        }
+                    }
+                    // 描边（使用 strokeBorder 向内描边，杜绝向外溢出干扰相邻单元）
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(
+                                isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                                lineWidth: isSelected ? 2.5 : 1
+                            )
+                    }
+
+                Text(item.displayName)
+                    .font(.caption.weight(isSelected ? .bold : .regular))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 3. 纹理作用目标范围 (全屏覆盖 / 仅图片本身 / 仅阅读器背景)
+    private var textureScopeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("纹理作用目标")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("控制材质渗透范围")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(ReaderTextureTarget.allCases) { target in
+                    let isSelected = store.readerTextureTarget == target
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            store.readerTextureTarget = target
+                        }
+                    } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: target.systemIcon)
+                                .font(.system(size: 16, weight: isSelected ? .bold : .regular))
+                            Text(target.displayName)
+                                .font(.caption.weight(isSelected ? .bold : .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color(uiColor: .secondarySystemBackground))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.8)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text(store.readerTextureTarget.subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+        }
+        .padding(14)
+        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    // MARK: - 4. 纹理浓度与透明度滑块
     private var textureOpacitySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {

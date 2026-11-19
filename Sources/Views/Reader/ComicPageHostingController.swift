@@ -14,6 +14,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     private var background: ReaderBackground
     private var texture: ReaderTextureType
     private var textureOpacity: Double
+    private var textureTarget: ReaderTextureTarget
     private var showDividingLine: Bool
     private var onSingleTap: () -> Void
     private var onStatusUpdate: (String) -> Void
@@ -32,6 +33,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTarget: ReaderTextureTarget = .both,
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
@@ -49,6 +51,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTarget = textureTarget
         self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -66,6 +69,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             background: background,
             texture: texture,
             textureOpacity: textureOpacity,
+            textureTarget: textureTarget,
             showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
@@ -88,12 +92,15 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         background: ReaderBackground,
         texture: ReaderTextureType,
         textureOpacity: Double,
+        textureTarget: ReaderTextureTarget? = nil,
         showSpineShadow: Bool? = nil,
         showDividingLine: Bool? = nil
     ) {
+        let newTarget = textureTarget ?? self.textureTarget
         guard self.background != background
             || self.texture != texture
             || self.textureOpacity != textureOpacity
+            || self.textureTarget != newTarget
             || (showSpineShadow != nil && self.showSpineShadow != showSpineShadow)
             || (showDividingLine != nil && self.showDividingLine != showDividingLine) else {
             return
@@ -101,6 +108,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTarget = newTarget
         if let showSpineShadow { self.showSpineShadow = showSpineShadow }
         if let showDividingLine { self.showDividingLine = showDividingLine }
         self.rootView = ComicPageCellView(
@@ -114,6 +122,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             background: self.background,
             texture: self.texture,
             textureOpacity: self.textureOpacity,
+            textureTarget: self.textureTarget,
             showDividingLine: self.showDividingLine,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,

@@ -100,6 +100,7 @@ public struct ComicPageCellView: View {
     public let background: ReaderBackground
     public let texture: ReaderTextureType
     public let textureOpacity: Double
+    public let textureTarget: ReaderTextureTarget
     public let showDividingLine: Bool
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
@@ -119,6 +120,7 @@ public struct ComicPageCellView: View {
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTarget: ReaderTextureTarget = .both,
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
@@ -135,6 +137,7 @@ public struct ComicPageCellView: View {
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTarget = textureTarget
         self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -146,6 +149,11 @@ public struct ComicPageCellView: View {
         ZStack {
             currentBackgroundColor
 
+            // 物理纸张材质纹理 - 阅读器留白背景层 (仅在目标包含背景时铺设于四周底纸)
+            if background == .texture && (textureTarget == .both || textureTarget == .backgroundOnly) && !isCompareMode {
+                PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+            }
+
             if let currentImg = slot.displayImage, let orig = slot.originalImage {
                 if isCompareMode, isEnabled, let processed = slot.processed, processed.appliedModel != nil {
                     SplitCompareView(
@@ -156,6 +164,9 @@ public struct ComicPageCellView: View {
                 } else {
                     ZoomableImageView(
                         image: currentImg,
+                        texture: texture,
+                        textureOpacity: textureOpacity,
+                        applyTextureToImage: background == .texture && (textureTarget == .both || textureTarget == .imageOnly),
                         onSingleTap: onSingleTap,
                         onZoomChanged: onZoomChanged
                     )
@@ -206,11 +217,6 @@ public struct ComicPageCellView: View {
                         .font(.caption)
                         .foregroundStyle(textColorForBackground.opacity(0.8))
                 }
-            }
-
-            // 物理纸张材质纹理覆盖（使用正片叠底 multiply 混合滤镜，覆盖图片与背景）
-            if background == .texture && !isCompareMode {
-                PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

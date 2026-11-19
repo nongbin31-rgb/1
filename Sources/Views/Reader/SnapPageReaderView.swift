@@ -35,6 +35,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let background: ReaderBackground
     public let texture: ReaderTextureType
     public let textureOpacity: Double
+    public let textureTarget: ReaderTextureTarget
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
@@ -52,6 +53,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTarget: ReaderTextureTarget = .both,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
@@ -68,6 +70,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTarget = textureTarget
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -94,7 +97,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         uiViewController.updateVisibleCellsBackground(
             background: background,
             texture: texture,
-            textureOpacity: textureOpacity
+            textureOpacity: textureOpacity,
+            textureTarget: textureTarget
         )
 
         uiViewController.applyConfiguration(
@@ -142,6 +146,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 background: parent.background,
                 texture: parent.texture,
                 textureOpacity: parent.textureOpacity,
+                textureTarget: parent.textureTarget,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate,
                 onZoomChanged: { [weak collectionView] scale in
@@ -243,7 +248,8 @@ public final class SnapPageViewController: UIViewController {
     func updateVisibleCellsBackground(
         background: ReaderBackground,
         texture: ReaderTextureType,
-        textureOpacity: Double
+        textureOpacity: Double,
+        textureTarget: ReaderTextureTarget
     ) {
         guard isViewLoaded, let cv = collectionView else { return }
         for cell in cv.visibleCells {
@@ -251,7 +257,8 @@ public final class SnapPageViewController: UIViewController {
                 hostingCell.updateBackground(
                     background: background,
                     texture: texture,
-                    textureOpacity: textureOpacity
+                    textureOpacity: textureOpacity,
+                    textureTarget: textureTarget
                 )
             }
         }
@@ -411,6 +418,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentBackground: ReaderBackground = .followSystem
     private var currentTexture: ReaderTextureType = .classic
     private var currentTextureOpacity: Double = 0.4
+    private var currentTextureTarget: ReaderTextureTarget = .both
     private var currentOnSingleTap: (() -> Void)?
     private var currentOnStatusUpdate: ((String) -> Void)?
     private var currentOnZoomChanged: ((CGFloat) -> Void)?
@@ -426,6 +434,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTarget: ReaderTextureTarget = .both,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: @escaping (CGFloat) -> Void,
@@ -440,6 +449,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentBackground = background
         self.currentTexture = texture
         self.currentTextureOpacity = textureOpacity
+        self.currentTextureTarget = textureTarget
         self.currentOnSingleTap = onSingleTap
         self.currentOnStatusUpdate = onStatusUpdate
         self.currentOnZoomChanged = onZoomChanged
@@ -462,14 +472,19 @@ final class SnapPageHostingCell: UICollectionViewCell {
     func updateBackground(
         background: ReaderBackground,
         texture: ReaderTextureType,
-        textureOpacity: Double
+        textureOpacity: Double,
+        textureTarget: ReaderTextureTarget
     ) {
-        guard currentBackground != background || currentTexture != texture || currentTextureOpacity != textureOpacity else {
+        guard currentBackground != background
+            || currentTexture != texture
+            || currentTextureOpacity != textureOpacity
+            || currentTextureTarget != textureTarget else {
             return
         }
         self.currentBackground = background
         self.currentTexture = texture
         self.currentTextureOpacity = textureOpacity
+        self.currentTextureTarget = textureTarget
         if let existing = hostingController {
             existing.rootView = buildPageView()
         }
@@ -483,6 +498,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
                 background: currentBackground,
                 texture: currentTexture,
                 textureOpacity: currentTextureOpacity,
+                textureTarget: currentTextureTarget,
                 onSingleTap: {},
                 onStatusUpdate: { _ in }
             )
@@ -498,6 +514,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             background: currentBackground,
             texture: currentTexture,
             textureOpacity: currentTextureOpacity,
+            textureTarget: currentTextureTarget,
             onSingleTap: currentOnSingleTap ?? {},
             onStatusUpdate: currentOnStatusUpdate ?? { _ in },
             onZoomChanged: currentOnZoomChanged,

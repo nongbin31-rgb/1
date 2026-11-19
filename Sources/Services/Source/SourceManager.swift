@@ -43,6 +43,9 @@ public final class AppStore: ObservableObject {
     @Published public var readerTextureOpacity: Double = 0.4 {
         didSet { save(readerTextureOpacity, key: Keys.readerTextureOpacity) }
     }
+    @Published public var readerTextureTarget: ReaderTextureTarget = .both {
+        didSet { save(readerTextureTarget, key: Keys.readerTextureTarget) }
+    }
     @Published public var showSpineDividingLine: Bool = true {
         didSet { save(showSpineDividingLine, key: Keys.spineDividingLine) }
     }
@@ -62,6 +65,7 @@ public final class AppStore: ObservableObject {
         static let readerBackground = "keda_online_reader_background_v1"
         static let readerTextureType = "keda_online_reader_texture_type_v1"
         static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
+        static let readerTextureTarget = "keda_online_reader_texture_target_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
     }
 
@@ -116,6 +120,7 @@ public final class AppStore: ObservableObject {
         self.preferredReaderBackground = load(key: Keys.readerBackground) ?? .followSystem
         self.readerTextureType = load(key: Keys.readerTextureType) ?? .classic
         self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4
+        self.readerTextureTarget = load(key: Keys.readerTextureTarget) ?? .both
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
     }
 

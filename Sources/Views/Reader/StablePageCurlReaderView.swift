@@ -20,6 +20,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let background: ReaderBackground
     public let texture: ReaderTextureType
     public let textureOpacity: Double
+    public let textureTarget: ReaderTextureTarget
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
@@ -38,6 +39,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTarget: ReaderTextureTarget = .both,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
@@ -55,6 +57,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTarget = textureTarget
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
@@ -110,6 +113,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                     background: background,
                     texture: texture,
                     textureOpacity: textureOpacity,
+                    textureTarget: textureTarget,
                     showSpineShadow: showSpineShadow,
                     showDividingLine: showDividingLine
                 )
@@ -239,6 +243,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 background: parent.background,
                 texture: parent.texture,
                 textureOpacity: parent.textureOpacity,
+                textureTarget: parent.textureTarget,
                 showDividingLine: parent.showDividingLine,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate,

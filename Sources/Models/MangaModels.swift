@@ -510,3 +510,36 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         }
     }
 }
+
+/// 真实物理纸张材质纹理的作用范围与目标
+public enum ReaderTextureTarget: String, Codable, CaseIterable, Identifiable, Sendable {
+    case both           = "both"           // 全屏覆盖 (图片与背景同时生效)
+    case imageOnly      = "image_only"     // 仅漫画画面 (图片本身)
+    case backgroundOnly = "background_only" // 仅阅读器背景 (四周留白底色)
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .both:           return "全屏覆盖"
+        case .imageOnly:      return "仅图片本身"
+        case .backgroundOnly: return "仅阅读器背景"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .both:           return "漫画画面与周围背景同时融合材质，营造整本实体纸书沉浸感"
+        case .imageOnly:      return "纹理仅渗透漫画线稿墨水与画面，四周留白保持清爽纸色"
+        case .backgroundOnly: return "纹理仅铺设于四周阅读底色，漫画原图保持数字无损原貌"
+        }
+    }
+
+    public var systemIcon: String {
+        switch self {
+        case .both:           return "rectangle.fill.on.rectangle.fill"
+        case .imageOnly:      return "photo"
+        case .backgroundOnly: return "square.dashed"
+        }
+    }
+}

@@ -96,6 +96,12 @@ public struct SettingsView: View {
                             }
                         }
 
+                        Picker("纹理作用目标", selection: $store.readerTextureTarget) {
+                            ForEach(ReaderTextureTarget.allCases) { target in
+                                Label(target.displayName, systemImage: target.systemIcon).tag(target)
+                            }
+                        }
+
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 Text("纸质透光与纤维浓度")

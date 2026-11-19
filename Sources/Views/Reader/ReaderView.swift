@@ -242,10 +242,12 @@ public struct ReaderView: View {
         case .texture:
             ZStack {
                 Color(red: 0.965, green: 0.957, blue: 0.941)
-                PaperTextureOverlayView(
-                    texture: store.readerTextureType,
-                    opacity: store.readerTextureOpacity
-                )
+                if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
+                    PaperTextureOverlayView(
+                        texture: store.readerTextureType,
+                        opacity: store.readerTextureOpacity
+                    )
+                }
             }
             .ignoresSafeArea()
         }
@@ -268,6 +270,7 @@ public struct ReaderView: View {
                                 background: store.preferredReaderBackground,
                                 texture: store.readerTextureType,
                                 textureOpacity: store.readerTextureOpacity,
+                                textureTarget: store.readerTextureTarget,
                                 onStatusUpdate: { text in
                                     if page.index == currentPageIndex {
                                         currentHUDText = text
@@ -306,6 +309,7 @@ public struct ReaderView: View {
                 background: store.preferredReaderBackground,
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
+                textureTarget: store.readerTextureTarget,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
@@ -334,6 +338,7 @@ public struct ReaderView: View {
                 background: store.preferredReaderBackground,
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
+                textureTarget: store.readerTextureTarget,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -395,11 +400,11 @@ public struct ReaderView: View {
                 .disabled(!store.enableImageUpscaler)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
+            .padding(.top, max(windowSafeAreaInsets.top, 20) + 6)
+            .padding(.bottom, 14)
             .background(
                 LinearGradient(
-                    colors: [.black.opacity(0.82), .black.opacity(0.0)],
+                    colors: [.black.opacity(0.88), .black.opacity(0.65), .black.opacity(0.0)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -491,16 +496,27 @@ public struct ReaderView: View {
             }
             .padding(.horizontal, 18)
             .padding(.top, 14)
-            .padding(.bottom, 22)
+            .padding(.bottom, max(windowSafeAreaInsets.bottom, 12) + 10)
             .background(
                 LinearGradient(
-                    colors: [.black.opacity(0.0), .black.opacity(0.88)],
+                    colors: [.black.opacity(0.0), .black.opacity(0.65), .black.opacity(0.88)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
         }
         .transition(.opacity)
+    }
+
+    private var windowSafeAreaInsets: UIEdgeInsets {
+        if let windowScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) ??
+           UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+           let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first {
+            return window.safeAreaInsets
+        }
+        return UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0)
     }
 
     private func switchChapter(delta: Int) {
@@ -573,6 +589,7 @@ private struct VerticalMangaPageCell: View {
     var background: ReaderBackground = .followSystem
     var texture: ReaderTextureType = .classic
     var textureOpacity: Double = 0.4
+    var textureTarget: ReaderTextureTarget = .both
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
 
@@ -597,8 +614,8 @@ private struct VerticalMangaPageCell: View {
                         .frame(maxWidth: .infinity)
                 }
 
-                // 拟真纸质材质纹理正片叠底
-                if background == .texture {
+                // 拟真纸质材质纹理正片叠底 (仅在目标包含画面本身时覆盖于图片上)
+                if background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
                     PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
                 }
 
