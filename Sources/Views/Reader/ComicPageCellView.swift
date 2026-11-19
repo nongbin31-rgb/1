@@ -97,6 +97,10 @@ public struct ComicPageCellView: View {
     public let isCompareMode: Bool
     public let showSpineShadow: Bool
     public let isRightToLeft: Bool
+    public let background: ReaderBackground
+    public let texture: ReaderTextureType
+    public let textureOpacity: Double
+    public let showDividingLine: Bool
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -111,6 +115,10 @@ public struct ComicPageCellView: View {
         isCompareMode: Bool = false,
         showSpineShadow: Bool = false,
         isRightToLeft: Bool = false,
+        background: ReaderBackground = .followSystem,
+        texture: ReaderTextureType = .classic,
+        textureOpacity: Double = 0.4,
+        showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -122,6 +130,10 @@ public struct ComicPageCellView: View {
         self.isCompareMode = isCompareMode
         self.showSpineShadow = showSpineShadow
         self.isRightToLeft = isRightToLeft
+        self.background = background
+        self.texture = texture
+        self.textureOpacity = textureOpacity
+        self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onZoomChanged = onZoomChanged
@@ -129,7 +141,7 @@ public struct ComicPageCellView: View {
 
     public var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            currentBackgroundColor
 
             if let currentImg = slot.displayImage, let orig = slot.originalImage {
                 if isCompareMode, isEnabled, let processed = slot.processed, processed.appliedModel != nil {
@@ -146,9 +158,17 @@ public struct ComicPageCellView: View {
                     )
                 }
 
+                // 物理纸张材质纹理覆盖（使用正片叠底 multiply 混合滤镜）
+                if background == .texture && !isCompareMode {
+                    PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+                }
+
                 // 书脊中缝立体渐变阴影（还原实体书装订处凹陷光影）
                 if showSpineShadow && !isCompareMode {
-                    spineShadowOverlay
+                    SpineShadowOverlayView(
+                        edge: isRightToLeft ? .trailing : .leading,
+                        showDividingLine: showDividingLine
+                    )
                 }
 
                 if slot.isUpscaling {
@@ -173,7 +193,7 @@ public struct ComicPageCellView: View {
                         .foregroundStyle(.orange)
                     Text(err)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(textColorForBackground.opacity(0.8))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                     Button("重试") {
@@ -183,10 +203,10 @@ public struct ComicPageCellView: View {
                 }
             } else {
                 VStack(spacing: 10) {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(textColorForBackground)
                     Text("加载第 \(page.index + 1) 页...")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(textColorForBackground.opacity(0.8))
                 }
             }
         }
@@ -196,31 +216,31 @@ public struct ComicPageCellView: View {
         }
     }
 
-    /// 纸张书脊中缝立体渐变阴影
     @ViewBuilder
-    private var spineShadowOverlay: some View {
-        HStack {
-            if isRightToLeft {
-                Spacer()
-                LinearGradient(
-                    colors: [.black.opacity(0.0), .black.opacity(0.36)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 22)
-                .allowsHitTesting(false)
-            } else {
-                LinearGradient(
-                    colors: [.black.opacity(0.36), .black.opacity(0.0)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 22)
-                .allowsHitTesting(false)
-                Spacer()
-            }
+    private var currentBackgroundColor: some View {
+        switch background {
+        case .followSystem:
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+        case .light:
+            Color.white.ignoresSafeArea()
+        case .dark:
+            Color.black.ignoresSafeArea()
+        case .immersive:
+            Color.clear.ignoresSafeArea()
+        case .texture:
+            Color(red: 0.965, green: 0.957, blue: 0.941).ignoresSafeArea()
         }
-        .ignoresSafeArea()
+    }
+
+    private var textColorForBackground: Color {
+        switch background {
+        case .light:
+            return .black
+        case .texture:
+            return Color(red: 0.2, green: 0.18, blue: 0.15)
+        default:
+            return .white
+        }
     }
 
     private func triggerLoad() async {

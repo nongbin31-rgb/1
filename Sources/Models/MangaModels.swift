@@ -294,3 +294,68 @@ public enum PageTurningEffect: String, Codable, CaseIterable, Identifiable, Send
         }
     }
 }
+
+/// 阅读背景模式（100% 对齐原版可达阅读器 ReaderBackground）
+public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable {
+    case followSystem = 0   // 跟随系统主题
+    case light = 1          // 白色模式
+    case dark = 2           // 黑色模式
+    case immersive = 3      // 沉浸式 (动态高斯模糊/弥散光晕)
+    case texture = 4        // 纸张纹理 (正片叠底)
+
+    public var id: Int { rawValue }
+
+    public var title: String {
+        switch self {
+        case .followSystem: return "跟随系统"
+        case .light:        return "白色"
+        case .dark:         return "黑色"
+        case .immersive:    return "沉浸式"
+        case .texture:      return "纹理"
+        }
+    }
+
+    public var systemIcon: String {
+        switch self {
+        case .followSystem: return "circle.lefthalf.filled"
+        case .light:        return "sun.max.fill"
+        case .dark:         return "moon.stars.fill"
+        case .immersive:    return "sparkles"
+        case .texture:      return "newspaper.fill"
+        }
+    }
+}
+
+/// 真实纸张与材质纹理类型（100% 对齐原版可达阅读器 ReaderTextureType）
+public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
+    case classic        = "Texture_0_classic_paper"       // 经典纸张
+    case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸
+    case whiteWall      = "Texture_2_white_wall"          // 白墙灰泥
+    case grungePaper    = "Texture_3_grunge_paper"        // 草稿纸
+    case tissueMarble   = "Texture_4_tissue_marble"       // 厕纸/大理石纹
+    case wood           = "Texture_5_wood"                // 木板
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .classic:      return "经典纸张"
+        case .brownPaper:   return "牛皮包装"
+        case .whiteWall:    return "微雕白墙"
+        case .grungePaper:  return "做旧草稿"
+        case .tissueMarble: return "大理石纹"
+        case .wood:         return "实木木板"
+        }
+    }
+
+    public var shortName: String {
+        switch self {
+        case .classic:      return "经典"
+        case .brownPaper:   return "牛皮"
+        case .whiteWall:    return "白墙"
+        case .grungePaper:  return "草稿"
+        case .tissueMarble: return "云纹"
+        case .wood:         return "木板"
+        }
+    }
+}

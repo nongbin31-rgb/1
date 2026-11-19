@@ -62,6 +62,39 @@ public struct SettingsView: View {
                     Toggle("仿真卷页书脊立体中缝阴影", isOn: $store.showSpineShadowInCurl)
                 }
 
+                Section("阅读背景与拟真纸质") {
+                    Picker("默认背景模式", selection: $store.preferredReaderBackground) {
+                        ForEach(ReaderBackground.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemIcon).tag(mode)
+                        }
+                    }
+
+                    if store.preferredReaderBackground == .texture {
+                        Picker("默认纸张材质", selection: $store.readerTextureType) {
+                            ForEach(ReaderTextureType.allCases) { item in
+                                Text(item.displayName).tag(item)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("纸质透光与纤维浓度")
+                                Spacer()
+                                Text("\(Int(store.readerTextureOpacity * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(
+                                value: $store.readerTextureOpacity,
+                                in: 0.1...1.0,
+                                step: 0.05
+                            )
+                        }
+                    }
+
+                    Toggle("书脊中缝立体阴影", isOn: $store.showSpineShadowInCurl)
+                    Toggle("书脊中缝细分割线", isOn: $store.showSpineDividingLine)
+                }
+
                 Section("存储与显存缓存") {
                     HStack {
                         Text("在线图片磁盘缓存")
@@ -83,6 +116,7 @@ public struct SettingsView: View {
                     LabeledContent("超分资产包", value: "可达阅读器_1.7.2 原包提取 (18 模型 + 48 GLSL)")
                     LabeledContent("Waifu2x 核心", value: "Apple Neural Engine (ANE) Float16 编译模型")
                     LabeledContent("Anime4K 引擎", value: "Metal 多 Pass 实时计算着色器")
+                    LabeledContent("拟真背景引擎", value: "6 套实体纸张扫描材质 + 正片叠底复合管线")
                 }
             }
             .navigationTitle("设置")

@@ -17,6 +17,10 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let isRightToLeft: Bool
     public let soundEnabled: Bool
     public let showSpineShadow: Bool
+    public let background: ReaderBackground
+    public let texture: ReaderTextureType
+    public let textureOpacity: Double
+    public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
@@ -30,6 +34,10 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         isRightToLeft: Bool,
         soundEnabled: Bool,
         showSpineShadow: Bool,
+        background: ReaderBackground = .followSystem,
+        texture: ReaderTextureType = .classic,
+        textureOpacity: Double = 0.4,
+        showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void
@@ -42,6 +50,10 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.isRightToLeft = isRightToLeft
         self.soundEnabled = soundEnabled
         self.showSpineShadow = showSpineShadow
+        self.background = background
+        self.texture = texture
+        self.textureOpacity = textureOpacity
+        self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -75,6 +87,18 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
 
     public func updateUIViewController(_ uiViewController: UIPageViewController, context: Context) {
         context.coordinator.parent = self
+
+        // 更新背景底色
+        switch background {
+        case .followSystem:
+            uiViewController.view.backgroundColor = .systemBackground
+        case .light:
+            uiViewController.view.backgroundColor = .white
+        case .dark, .immersive:
+            uiViewController.view.backgroundColor = .black
+        case .texture:
+            uiViewController.view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+        }
 
         // 当外部（例如 Slider 或上一话/下一话按钮）修改了页码时，通过安全队列平滑驱动底层翻页
         let activeIndex = context.coordinator.currentDisplayIndex
@@ -196,6 +220,10 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 isCompareMode: parent.isCompareMode,
                 showSpineShadow: parent.showSpineShadow,
                 isRightToLeft: parent.isRightToLeft,
+                background: parent.background,
+                texture: parent.texture,
+                textureOpacity: parent.textureOpacity,
+                showDividingLine: parent.showDividingLine,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate
             )

@@ -34,6 +34,18 @@ public final class AppStore: ObservableObject {
     @Published public var showSpineShadowInCurl: Bool = true {
         didSet { save(showSpineShadowInCurl, key: Keys.spineShadow) }
     }
+    @Published public var preferredReaderBackground: ReaderBackground = .followSystem {
+        didSet { save(preferredReaderBackground, key: Keys.readerBackground) }
+    }
+    @Published public var readerTextureType: ReaderTextureType = .classic {
+        didSet { save(readerTextureType, key: Keys.readerTextureType) }
+    }
+    @Published public var readerTextureOpacity: Double = 0.4 {
+        didSet { save(readerTextureOpacity, key: Keys.readerTextureOpacity) }
+    }
+    @Published public var showSpineDividingLine: Bool = true {
+        didSet { save(showSpineDividingLine, key: Keys.spineDividingLine) }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -47,6 +59,10 @@ public final class AppStore: ObservableObject {
         static let turningEffect = "keda_online_turning_effect_v1"
         static let soundEnabled = "keda_online_sound_enabled_v1"
         static let spineShadow = "keda_online_spine_shadow_v1"
+        static let readerBackground = "keda_online_reader_background_v1"
+        static let readerTextureType = "keda_online_reader_texture_type_v1"
+        static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
+        static let spineDividingLine = "keda_online_spine_dividing_line_v1"
     }
 
     public init() {
@@ -97,6 +113,10 @@ public final class AppStore: ObservableObject {
         self.pageTurningEffect = load(key: Keys.turningEffect) ?? .curling
         self.pageTurnSoundEnabled = load(key: Keys.soundEnabled) ?? true
         self.showSpineShadowInCurl = load(key: Keys.spineShadow) ?? true
+        self.preferredReaderBackground = load(key: Keys.readerBackground) ?? .followSystem
+        self.readerTextureType = load(key: Keys.readerTextureType) ?? .classic
+        self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4
+        self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
     }
 
     public var enabledSources: [MangaSourceConfig] {

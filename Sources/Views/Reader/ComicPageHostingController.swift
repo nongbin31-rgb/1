@@ -14,6 +14,10 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         isCompareMode: Bool = false,
         showSpineShadow: Bool = false,
         isRightToLeft: Bool = false,
+        background: ReaderBackground = .followSystem,
+        texture: ReaderTextureType = .classic,
+        textureOpacity: Double = 0.4,
+        showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -27,6 +31,10 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             isCompareMode: isCompareMode,
             showSpineShadow: showSpineShadow,
             isRightToLeft: isRightToLeft,
+            background: background,
+            texture: texture,
+            textureOpacity: textureOpacity,
+            showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
             onZoomChanged: onZoomChanged
@@ -40,6 +48,6 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
     }
 }

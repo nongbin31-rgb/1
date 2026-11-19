@@ -61,6 +61,12 @@ targets:
       - path: Resources/Anime4K_Shaders
         type: folder
         buildPhase: resources
+      - path: Resources/Reader_Textures
+        type: folder
+        buildPhase: resources
+      - path: Resources/Audio
+        type: folder
+        buildPhase: resources
     dependencies:
       - framework: Frameworks/waifu2x.framework
         embed: true

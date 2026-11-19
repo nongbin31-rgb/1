@@ -97,6 +97,7 @@ public struct ReaderView: View {
     @State private var showChrome = false
     @State private var showUpscalerSheet = false
     @State private var showConfigPreviewSheet = false
+    @State private var showBackgroundPickerSheet = false
     @State private var isCompareMode = false
     @State private var currentHUDText = ""
     @State private var capturedPreviewImage: UIImage?
@@ -113,7 +114,7 @@ public struct ReaderView: View {
 
     public var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            readerBackgroundView
 
             if isLoadingChapter {
                 VStack(spacing: 12) {
@@ -192,6 +193,36 @@ public struct ReaderView: View {
                 imageForPreview: capturedPreviewImage ?? UIImage()
             )
         }
+        .sheet(isPresented: $showBackgroundPickerSheet) {
+            ReaderBackgroundPickerSheet()
+                .environmentObject(store)
+        }
+    }
+
+    @ViewBuilder
+    private var readerBackgroundView: some View {
+        switch store.preferredReaderBackground {
+        case .followSystem:
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+        case .light:
+            Color.white.ignoresSafeArea()
+        case .dark:
+            Color.black.ignoresSafeArea()
+        case .immersive:
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let bgImg = capturedPreviewImage {
+                    Image(uiImage: bgImg)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .blur(radius: 45)
+                        .opacity(0.8)
+                        .ignoresSafeArea()
+                }
+            }
+        case .texture:
+            Color(red: 0.965, green: 0.957, blue: 0.941).ignoresSafeArea()
+        }
     }
 
     @ViewBuilder
@@ -208,6 +239,9 @@ public struct ReaderView: View {
                                 config: store.upscalerConfig,
                                 isEnabled: store.enableImageUpscaler,
                                 transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                                background: store.preferredReaderBackground,
+                                texture: store.readerTextureType,
+                                textureOpacity: store.readerTextureOpacity,
                                 onStatusUpdate: { text in
                                     if page.index == currentPageIndex {
                                         currentHUDText = text
@@ -243,6 +277,10 @@ public struct ReaderView: View {
                 isRightToLeft: store.readerLayoutMode == .pagedRTL,
                 soundEnabled: store.pageTurnSoundEnabled,
                 showSpineShadow: store.showSpineShadowInCurl,
+                background: store.preferredReaderBackground,
+                texture: store.readerTextureType,
+                textureOpacity: store.readerTextureOpacity,
+                showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -264,6 +302,9 @@ public struct ReaderView: View {
                 isRightToLeft: store.readerLayoutMode == .pagedRTL,
                 turningEffect: store.pageTurningEffect,
                 soundEnabled: store.pageTurnSoundEnabled,
+                background: store.preferredReaderBackground,
+                texture: store.readerTextureType,
+                textureOpacity: store.readerTextureOpacity,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -372,6 +413,22 @@ public struct ReaderView: View {
                     Spacer()
 
                     Button {
+                        showBackgroundPickerSheet = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: store.preferredReaderBackground.systemIcon)
+                            Text(store.preferredReaderBackground == .texture ? store.readerTextureType.shortName : store.preferredReaderBackground.title)
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Color.white.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.white)
+                    }
+
+                    Spacer()
+
+                    Button {
                         showUpscalerSheet = true
                     } label: {
                         HStack(spacing: 5) {
@@ -454,6 +511,9 @@ private struct VerticalMangaPageCell: View {
     let config: ImageUpscalerConfig
     let isEnabled: Bool
     let transitionAfterUpscaled: Bool
+    var background: ReaderBackground = .followSystem
+    var texture: ReaderTextureType = .classic
+    var textureOpacity: Double = 0.4
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
 
@@ -476,6 +536,11 @@ private struct VerticalMangaPageCell: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity)
+                }
+
+                // 拟真纸质材质纹理正片叠底
+                if background == .texture {
+                    PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
                 }
 
                 if slot.isUpscaling {

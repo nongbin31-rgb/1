@@ -53,6 +53,9 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let isRightToLeft: Bool
     public let turningEffect: PageTurningEffect
     public let soundEnabled: Bool
+    public let background: ReaderBackground
+    public let texture: ReaderTextureType
+    public let textureOpacity: Double
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
@@ -66,6 +69,9 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         isRightToLeft: Bool,
         turningEffect: PageTurningEffect,
         soundEnabled: Bool,
+        background: ReaderBackground = .followSystem,
+        texture: ReaderTextureType = .classic,
+        textureOpacity: Double = 0.4,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void
@@ -78,6 +84,9 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.isRightToLeft = isRightToLeft
         self.turningEffect = turningEffect
         self.soundEnabled = soundEnabled
+        self.background = background
+        self.texture = texture
+        self.textureOpacity = textureOpacity
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -95,6 +104,24 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
 
     public func updateUIViewController(_ uiViewController: SnapPageViewController, context: Context) {
         context.coordinator.parent = self
+
+        // 更新背景颜色
+        switch background {
+        case .followSystem:
+            uiViewController.view.backgroundColor = .systemBackground
+            uiViewController.collectionView?.backgroundColor = .systemBackground
+        case .light:
+            uiViewController.view.backgroundColor = .white
+            uiViewController.collectionView?.backgroundColor = .white
+        case .dark, .immersive:
+            uiViewController.view.backgroundColor = .black
+            uiViewController.collectionView?.backgroundColor = .black
+        case .texture:
+            let米白 = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+            uiViewController.view.backgroundColor = 米白
+            uiViewController.collectionView?.backgroundColor = 米白
+        }
+
         uiViewController.applyConfiguration(
             pages: pages,
             isRightToLeft: isRightToLeft,
@@ -137,6 +164,9 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 transitionAfterUpscaled: parent.transitionAfterUpscaled,
                 isCompareMode: parent.isCompareMode,
                 isRightToLeft: parent.isRightToLeft,
+                background: parent.background,
+                texture: parent.texture,
+                textureOpacity: parent.textureOpacity,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate,
                 onZoomChanged: { [weak self, weak collectionView] scale in
@@ -263,6 +293,9 @@ final class SnapPageHostingCell: UICollectionViewCell {
         transitionAfterUpscaled: Bool,
         isCompareMode: Bool,
         isRightToLeft: Bool,
+        background: ReaderBackground = .followSystem,
+        texture: ReaderTextureType = .classic,
+        textureOpacity: Double = 0.4,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: @escaping (CGFloat) -> Void
@@ -272,8 +305,12 @@ final class SnapPageHostingCell: UICollectionViewCell {
             config: config,
             isEnabled: isEnabled,
             transitionAfterUpscaled: transitionAfterUpscaled,
+            isCompareMode: isCompareMode,
             showSpineShadow: false,
             isRightToLeft: isRightToLeft,
+            background: background,
+            texture: texture,
+            textureOpacity: textureOpacity,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
             onZoomChanged: onZoomChanged
@@ -283,7 +320,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             existing.rootView = pageView
         } else {
             let hc = UIHostingController(rootView: pageView)
-            hc.view.backgroundColor = .black
+            hc.view.backgroundColor = .clear
             hc.view.frame = contentView.bounds
             hc.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             contentView.addSubview(hc.view)
