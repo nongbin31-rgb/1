@@ -53,6 +53,12 @@ private final class ReaderPageSlot: ObservableObject {
             config: config
         )
     }
+
+    /// 释放大图内存，防止 LazyVStack 长列表堆积爆内存
+    func releaseMemoryPreservingState() {
+        originalImage = nil
+        processed = nil
+    }
 }
 
 /// 沉浸式在线漫画阅读器（支持条漫/翻页、实时切换 Waifu2x & Anime4K、左右分屏对比）
@@ -145,7 +151,10 @@ public struct ReaderView: View {
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
                 config: $store.upscalerConfig,
-                layoutMode: $store.readerLayoutMode
+                layoutMode: $store.readerLayoutMode,
+                turningEffect: $store.pageTurningEffect,
+                soundEnabled: $store.pageTurnSoundEnabled,
+                showSpineShadow: $store.showSpineShadowInCurl
             )
             .presentationDetents([.medium, .large])
         }
@@ -182,31 +191,43 @@ public struct ReaderView: View {
                     }
                 }
             }
-        } else {
-            TabView(selection: $currentPageIndex) {
-                ForEach(pages) { page in
-                    PagedMangaPageCell(
-                        page: page,
-                        config: store.upscalerConfig,
-                        isCompareMode: isCompareMode,
-                        onSingleTap: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showChrome.toggle()
-                            }
-                        },
-                        onStatusUpdate: { text in
-                            if page.index == currentPageIndex {
-                                currentHUDText = text
-                            }
-                        }
-                    )
-                    .tag(page.index)
+        } else if store.pageTurningEffect == .curling {
+            // 仿真书本卷页模式 (PageCurl 3D立体网格折叠)
+            StablePageCurlReaderView(
+                pages: pages,
+                upscalerConfig: store.upscalerConfig,
+                isCompareMode: isCompareMode,
+                isRightToLeft: store.readerLayoutMode == .pagedRTL,
+                soundEnabled: store.pageTurnSoundEnabled,
+                showSpineShadow: store.showSpineShadowInCurl,
+                currentPageIndex: $currentPageIndex,
+                onSingleTap: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showChrome.toggle()
+                    }
+                },
+                onStatusUpdate: { text in
+                    currentHUDText = text
                 }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .environment(
-                \.layoutDirection,
-                store.readerLayoutMode == .pagedRTL ? .rightToLeft : .leftToRight
+            )
+        } else {
+            // 阻尼磁吸滑动 (SnapPage) 与 零延迟模式 (Instant)
+            SnapPageReaderView(
+                pages: pages,
+                upscalerConfig: store.upscalerConfig,
+                isCompareMode: isCompareMode,
+                isRightToLeft: store.readerLayoutMode == .pagedRTL,
+                turningEffect: store.pageTurningEffect,
+                soundEnabled: store.pageTurnSoundEnabled,
+                currentPageIndex: $currentPageIndex,
+                onSingleTap: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showChrome.toggle()
+                    }
+                },
+                onStatusUpdate: { text in
+                    currentHUDText = text
+                }
             )
         }
     }
@@ -533,6 +554,15 @@ private struct VerticalMangaPageCell: View {
         .task(id: "\(page.id)::\(config.cacheKey)") {
             await triggerLoad()
         }
+        .onDisappear {
+            // 滑出屏幕后释放大图位图，避免几十页展开占爆内存
+            slot.releaseMemoryPreservingState()
+        }
+        .onAppear {
+            if slot.originalImage == nil {
+                Task { await triggerLoad() }
+            }
+        }
     }
 
     private func triggerLoad() async {
@@ -556,14 +586,31 @@ private struct ReaderUpscalerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var config: ImageUpscalerConfig
     @Binding var layoutMode: ReaderLayoutMode
+    @Binding var turningEffect: PageTurningEffect
+    @Binding var soundEnabled: Bool
+    @Binding var showSpineShadow: Bool
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("阅读模式") {
+                Section("阅读排版与翻页动画") {
                     Picker("排版方式", selection: $layoutMode) {
                         ForEach(ReaderLayoutMode.allCases) { mode in
                             Text(mode.displayName).tag(mode)
+                        }
+                    }
+
+                    if layoutMode != .verticalWebtoon {
+                        Picker("左右翻页特效", selection: $turningEffect) {
+                            ForEach(PageTurningEffect.allCases) { effect in
+                                Text(effect.displayName).tag(effect)
+                            }
+                        }
+
+                        Toggle("翻页音效与轻触震动", isOn: $soundEnabled)
+
+                        if turningEffect == .curling {
+                            Toggle("书脊中缝立体渐变阴影", isOn: $showSpineShadow)
                         }
                     }
                 }

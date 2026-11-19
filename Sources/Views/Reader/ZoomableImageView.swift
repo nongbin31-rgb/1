@@ -5,9 +5,10 @@ import UIKit
 public struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
     let onSingleTap: () -> Void
+    var onZoomChanged: ((CGFloat) -> Void)? = nil
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(onSingleTap: onSingleTap)
+        Coordinator(onSingleTap: onSingleTap, onZoomChanged: onZoomChanged)
     }
 
     public func makeUIView(context: Context) -> UIScrollView {
@@ -44,6 +45,7 @@ public struct ZoomableImageView: UIViewRepresentable {
 
     public func updateUIView(_ uiView: UIScrollView, context: Context) {
         context.coordinator.onSingleTap = onSingleTap
+        context.coordinator.onZoomChanged = onZoomChanged
         if let imageView = context.coordinator.imageView {
             if imageView.image !== image {
                 imageView.image = image
@@ -59,9 +61,11 @@ public struct ZoomableImageView: UIViewRepresentable {
         weak var scrollView: UIScrollView?
         weak var imageView: UIImageView?
         var onSingleTap: () -> Void
+        var onZoomChanged: ((CGFloat) -> Void)?
 
-        init(onSingleTap: @escaping () -> Void) {
+        init(onSingleTap: @escaping () -> Void, onZoomChanged: ((CGFloat) -> Void)?) {
             self.onSingleTap = onSingleTap
+            self.onZoomChanged = onZoomChanged
         }
 
         public func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -76,6 +80,7 @@ public struct ZoomableImageView: UIViewRepresentable {
                 x: scrollView.contentSize.width * 0.5 + offsetX,
                 y: scrollView.contentSize.height * 0.5 + offsetY
             )
+            onZoomChanged?(scrollView.zoomScale)
         }
 
         @objc func handleSingleTap() {
@@ -86,6 +91,7 @@ public struct ZoomableImageView: UIViewRepresentable {
             guard let scrollView else { return }
             if scrollView.zoomScale > 1.05 {
                 scrollView.setZoomScale(1.0, animated: true)
+                onZoomChanged?(1.0)
             } else {
                 let point = gesture.location(in: imageView)
                 let zoomScale: CGFloat = 2.6
@@ -93,6 +99,7 @@ public struct ZoomableImageView: UIViewRepresentable {
                 let h = scrollView.bounds.height / zoomScale
                 let rect = CGRect(x: point.x - w / 2, y: point.y - h / 2, width: w, height: h)
                 scrollView.zoom(to: rect, animated: true)
+                onZoomChanged?(zoomScale)
             }
         }
     }

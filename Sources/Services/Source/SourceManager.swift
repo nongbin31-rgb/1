@@ -19,6 +19,15 @@ public final class AppStore: ObservableObject {
     @Published public var readerLayoutMode: ReaderLayoutMode = .verticalWebtoon {
         didSet { save(readerLayoutMode, key: Keys.layoutMode) }
     }
+    @Published public var pageTurningEffect: PageTurningEffect = .curling {
+        didSet { save(pageTurningEffect, key: Keys.turningEffect) }
+    }
+    @Published public var pageTurnSoundEnabled: Bool = true {
+        didSet { save(pageTurnSoundEnabled, key: Keys.soundEnabled) }
+    }
+    @Published public var showSpineShadowInCurl: Bool = true {
+        didSet { save(showSpineShadowInCurl, key: Keys.spineShadow) }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -27,6 +36,9 @@ public final class AppStore: ObservableObject {
         static let progress = "keda_online_progress_v1"
         static let upscaler = "keda_online_upscaler_v1"
         static let layoutMode = "keda_online_layout_v1"
+        static let turningEffect = "keda_online_turning_effect_v1"
+        static let soundEnabled = "keda_online_sound_enabled_v1"
+        static let spineShadow = "keda_online_spine_shadow_v1"
     }
 
     public init() {
@@ -72,6 +84,9 @@ public final class AppStore: ObservableObject {
             anime4k: Anime4kConfig(preset: .AAFast, thinLines: false, darkenLines: false)
         )
         self.readerLayoutMode = load(key: Keys.layoutMode) ?? .verticalWebtoon
+        self.pageTurningEffect = load(key: Keys.turningEffect) ?? .curling
+        self.pageTurnSoundEnabled = load(key: Keys.soundEnabled) ?? true
+        self.showSpineShadowInCurl = load(key: Keys.spineShadow) ?? true
     }
 
     public var enabledSources: [MangaSourceConfig] {

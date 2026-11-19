@@ -38,12 +38,21 @@ public struct SettingsView: View {
                     Text("安全边界：Waifu2x 自动限制输入尺寸 200px~2500px；Anime4K 自动限制最大边 ≤ 2500px，超出范围自动回退原图以防 OOM。")
                 }
 
-                Section("阅读体验") {
+                Section("阅读排版与翻页特效") {
                     Picker("默认排版方式", selection: $store.readerLayoutMode) {
                         ForEach(ReaderLayoutMode.allCases) { mode in
                             Text(mode.displayName).tag(mode)
                         }
                     }
+
+                    Picker("默认左右翻页特效", selection: $store.pageTurningEffect) {
+                        ForEach(PageTurningEffect.allCases) { effect in
+                            Text(effect.displayName).tag(effect)
+                        }
+                    }
+
+                    Toggle("翻页音效与轻触震动", isOn: $store.pageTurnSoundEnabled)
+                    Toggle("仿真卷页书脊立体中缝阴影", isOn: $store.showSpineShadowInCurl)
                 }
 
                 Section("存储与显存缓存") {

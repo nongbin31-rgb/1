@@ -246,41 +246,43 @@ public actor Anime4kService {
         }
     }
 
-    /// 从 rgba8Unorm shared MTLTexture 读取字节并生成 UIImage
+    /// 从 rgba8Unorm shared MTLTexture 读取字节并生成 UIImage（autoreleasepool 保护抑制内存抖动）
     private static func makeUIImage(from texture: MTLTexture) -> UIImage? {
-        let width = texture.width
-        let height = texture.height
-        let bytesPerRow = width * 4
-        let totalBytes = bytesPerRow * height
+        autoreleasepool {
+            let width = texture.width
+            let height = texture.height
+            let bytesPerRow = width * 4
+            let totalBytes = bytesPerRow * height
 
-        var rawBytes = [UInt8](repeating: 0, count: totalBytes)
-        let region = MTLRegionMake2D(0, 0, width, height)
-        texture.getBytes(&rawBytes, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
+            var rawBytes = [UInt8](repeating: 0, count: totalBytes)
+            let region = MTLRegionMake2D(0, 0, width, height)
+            texture.getBytes(&rawBytes, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
 
-        let cfData = Data(rawBytes) as CFData
-        guard let provider = CGDataProvider(data: cfData) else { return nil }
+            let cfData = Data(rawBytes) as CFData
+            guard let provider = CGDataProvider(data: cfData) else { return nil }
 
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGBitmapInfo(
-            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-        )
+            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+            let bitmapInfo = CGBitmapInfo(
+                rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            )
 
-        guard let cgImage = CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo,
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: true,
-            intent: .defaultIntent
-        ) else {
-            return nil
+            guard let cgImage = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo,
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: true,
+                intent: .defaultIntent
+            ) else {
+                return nil
+            }
+
+            return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
         }
-
-        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
     }
 }

@@ -269,3 +269,28 @@ public enum ReaderLayoutMode: String, Codable, CaseIterable, Identifiable, Senda
         }
     }
 }
+
+/// 左右翻页过渡与动画特效
+public enum PageTurningEffect: String, Codable, CaseIterable, Identifiable, Sendable {
+    case curling = "curling"     // 仿真书本卷页 (PageCurl 3D立体网格折叠与中缝阴影)
+    case snapPage = "snap_page" // 吸附滑动 (阻尼弹簧磁吸整页对齐)
+    case instant = "instant"   // 零延迟模式 (无动画即时刷新)
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .curling:  return "仿真卷页 (PageCurl)"
+        case .snapPage: return "吸附滑动 (SnapPage)"
+        case .instant:  return "零延迟模式 (无动画)"
+        }
+    }
+
+    public var shortName: String {
+        switch self {
+        case .curling:  return "仿真卷页"
+        case .snapPage: return "吸附滑动"
+        case .instant:  return "零延迟"
+        }
+    }
+}
