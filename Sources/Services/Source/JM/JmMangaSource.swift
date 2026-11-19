@@ -39,6 +39,6 @@ public struct JmMangaSource: MangaSourceProtocol {
     }
 
     public func fetchPages(for chapter: MangaChapter) async throws -> [MangaPage] {
-        try await JmApiClient.shared.getChapterImages(photoId: chapter.id)
+        try await JmApiClient.shared.getChapterPages(photoId: chapter.id)
     }
 }
