@@ -1,0 +1,16 @@
+# Xcode / Build
+*.xcodeproj/
+*.xcworkspace/
+build/
+DerivedData/
+Payload/
+*.ipa
+*.dSYM.zip
+
+# 自动拉取的第三方开源超分仓库（由 scripts/fetch_vendor.sh 在构建时拉取）
+Vendor/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/

@@ -1,0 +1,54 @@
+name: Build Unsigned iOS IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Fetch open-source upscaler engines (Waifu2x & Anime4K)
+        run: bash scripts/fetch_vendor.sh
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build iOS Release (.app)
+        run: |
+          xcodebuild \
+            -project KedaOnlineReader.xcodeproj \
+            -scheme KedaOnlineReader \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Package Unsigned IPA
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/KedaOnlineReader.app"
+          test -d "${APP_PATH}"
+          rm -rf Payload KedaOnlineReader-unsigned.ipa
+          mkdir -p Payload
+          cp -R "${APP_PATH}" Payload/
+          zip -qry KedaOnlineReader-unsigned.ipa Payload
+          ls -lh KedaOnlineReader-unsigned.ipa
+
+      - name: Upload Unsigned IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KedaOnlineReader-unsigned-ipa
+          path: KedaOnlineReader-unsigned.ipa
+          retention-days: 30
