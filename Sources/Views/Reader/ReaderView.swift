@@ -356,7 +356,8 @@ public struct ReaderView: View {
     }
 
     private var chromeOverlay: some View {
-        VStack(spacing: 0) {
+        let insets = safeAreaInsetsResolved
+        return VStack(spacing: 0) {
             // 顶部导航栏
             HStack(spacing: 12) {
                 Button {
@@ -399,12 +400,17 @@ public struct ReaderView: View {
                 }
                 .disabled(!store.enableImageUpscaler)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, max(windowSafeAreaInsets.top, 20) + 6)
+            .padding(.leading, max(insets.left, 16))
+            .padding(.trailing, max(insets.right, 16))
+            .padding(.top, insets.top + 8)
             .padding(.bottom, 14)
             .background(
                 LinearGradient(
-                    colors: [.black.opacity(0.88), .black.opacity(0.65), .black.opacity(0.0)],
+                    colors: [
+                        Color.black.opacity(0.88),
+                        Color.black.opacity(0.70),
+                        Color.black.opacity(0.0)
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -494,12 +500,17 @@ public struct ReaderView: View {
                 }
                 .foregroundStyle(.white)
             }
-            .padding(.horizontal, 18)
+            .padding(.leading, max(insets.left, 18))
+            .padding(.trailing, max(insets.right, 18))
             .padding(.top, 14)
-            .padding(.bottom, max(windowSafeAreaInsets.bottom, 12) + 10)
+            .padding(.bottom, insets.bottom + 10)
             .background(
                 LinearGradient(
-                    colors: [.black.opacity(0.0), .black.opacity(0.65), .black.opacity(0.88)],
+                    colors: [
+                        Color.black.opacity(0.0),
+                        Color.black.opacity(0.70),
+                        Color.black.opacity(0.88)
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -508,15 +519,57 @@ public struct ReaderView: View {
         .transition(.opacity)
     }
 
-    private var windowSafeAreaInsets: UIEdgeInsets {
-        if let windowScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }) ??
-           UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
-           let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first {
-            return window.safeAreaInsets
+    /// 获取当前设备绝对可靠的安全区域边距（防止全屏沉浸/隐藏状态栏时系统 UIWindow 错误返回 0）
+    private var safeAreaInsetsResolved: UIEdgeInsets {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+
+        if let scene = activeScene {
+            let validWindows = scene.windows.filter {
+                $0.bounds.width > 0 && ($0.safeAreaInsets.top > 0 || $0.safeAreaInsets.bottom > 0)
+            }
+            if let window = validWindows.first(where: { $0.isKeyWindow }) ?? validWindows.first {
+                var insets = window.safeAreaInsets
+                let isPortrait = (scene.interfaceOrientation.isPortrait || window.bounds.height >= window.bounds.width)
+                if isPortrait && insets.top < hardwareBaselineSafeAreaTop {
+                    insets.top = hardwareBaselineSafeAreaTop
+                }
+                if isPortrait && insets.bottom < 34 && hardwareBaselineSafeAreaTop > 24 {
+                    insets.bottom = 34
+                }
+                return insets
+            }
         }
-        return UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0)
+
+        // 终极硬件基线兜底（按屏幕物理特征）
+        let screenBounds = UIScreen.main.bounds
+        let isPortrait = screenBounds.height >= screenBounds.width
+        if isPortrait {
+            return UIEdgeInsets(top: hardwareBaselineSafeAreaTop, left: 0, bottom: hardwareBaselineSafeAreaBottom, right: 0)
+        } else {
+            return UIEdgeInsets(top: 0, left: hardwareBaselineSafeAreaTop, bottom: 21, right: hardwareBaselineSafeAreaTop)
+        }
+    }
+
+    /// 基于物理屏幕尺寸的硬件基线顶部安全区（即使系统窗口返回 0 也能精准规避灵动岛与刘海）
+    private var hardwareBaselineSafeAreaTop: CGFloat {
+        let maxDimension = max(UIScreen.main.bounds.height, UIScreen.main.bounds.width)
+        if maxDimension >= 852 {
+            // 灵动岛机型 (iPhone 14 Pro/Pro Max, 15/15 Pro 全系, 16 全系)
+            return 59
+        } else if maxDimension >= 812 {
+            // 刘海屏机型 (iPhone X/XS/XR/11/12/13/14 标准版)
+            return 47
+        } else {
+            // 经典无刘海机型或 iPad
+            return 24
+        }
+    }
+
+    /// 基于物理屏幕尺寸的硬件基线底部安全区
+    private var hardwareBaselineSafeAreaBottom: CGFloat {
+        let maxDimension = max(UIScreen.main.bounds.height, UIScreen.main.bounds.width)
+        return maxDimension >= 812 ? 34 : 12
     }
 
     private func switchChapter(delta: Int) {
