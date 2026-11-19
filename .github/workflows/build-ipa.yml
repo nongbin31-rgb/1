@@ -40,7 +40,9 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             clean build 2>&1 | tee xcodebuild.log || {
               echo "========== XCODEBUILD ERRORS =========="
-              grep -E "(error:|fatal error:|BUILD FAILED)" xcodebuild.log | tail -n 50 || true
+              grep -E "(error:|fatal error:|BUILD FAILED)" xcodebuild.log | tail -n 30 | while IFS= read -r line; do
+                echo "::error::$line"
+              done
               exit 1
             }
 
