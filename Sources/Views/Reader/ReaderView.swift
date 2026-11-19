@@ -466,9 +466,6 @@ public struct ReaderView: View {
             )
         }
     }
-            )
-        }
-    }
 
     private var chromeOverlay: some View {
         let insets = safeAreaInsetsResolved
@@ -1039,7 +1036,7 @@ private struct ReaderUpscalerSheet: View {
                                 systemImage: category == .normal ? "info.circle" : "sparkles"
                             )
                             .font(.caption)
-                            .foregroundStyle(category == .normal ? .secondary : .tint)
+                            .foregroundStyle(category == .normal ? Color.secondary : Color.accentColor)
                         }
                     }
 
