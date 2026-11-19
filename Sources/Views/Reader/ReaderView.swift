@@ -5,7 +5,7 @@ import SwiftUI
 private final class ReaderPageSlot: ObservableObject {
     @Published var originalImage: UIImage?
     @Published var processed: ProcessedPageImage?
-    @Published var isLoading = false
+    @Published var isLoading = true
     @Published var isUpscaling = false
     @Published var errorMessage: String?
 
@@ -24,6 +24,8 @@ private final class ReaderPageSlot: ObservableObject {
                 return
             }
             isLoading = false
+            // 先让出一次主线程帧，确保原图立刻上屏显示，再进入超分计算
+            await Task.yield()
         }
 
         guard let original = originalImage else { return }
@@ -64,7 +66,7 @@ public struct ReaderView: View {
     @State private var currentChapter: MangaChapter
     @State private var pages: [MangaPage] = []
     @State private var currentPageIndex = 0
-    @State private var isLoadingChapter = false
+    @State private var isLoadingChapter = true
     @State private var chapterError: String?
 
     @State private var showChrome = true
@@ -87,9 +89,13 @@ public struct ReaderView: View {
             Color.black.ignoresSafeArea()
 
             if isLoadingChapter {
-                ProgressView("正在加载章节页面...")
-                    .tint(.white)
-                    .foregroundStyle(.white)
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("正在加载章节页面...")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
             } else if let chapterError {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle")
@@ -109,7 +115,17 @@ public struct ReaderView: View {
                         .buttonStyle(.borderedProminent)
                     }
                 }
-            } else if !pages.isEmpty {
+            } else if pages.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.questionmark")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                    Text("该章节暂无图片页")
+                        .foregroundStyle(.white.opacity(0.8))
+                    Button("返回") { dismiss() }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else {
                 readerContent
             }
 
@@ -121,8 +137,10 @@ public struct ReaderView: View {
         .task(id: currentChapter.id) {
             await loadChapterPages()
         }
-        .onChange(of: currentPageIndex) { newIdx in
-            store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: newIdx)
+        .onDisappear {
+            if !pages.isEmpty {
+                store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: currentPageIndex)
+            }
         }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
@@ -137,7 +155,7 @@ public struct ReaderView: View {
     private var readerContent: some View {
         if store.readerLayoutMode == .verticalWebtoon && !isCompareMode {
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 4) {
                     ForEach(pages) { page in
                         VerticalMangaPageCell(
                             page: page,
@@ -153,7 +171,9 @@ public struct ReaderView: View {
                         }
                     }
                 }
+                .padding(.vertical, 8)
             }
+            .contentShape(Rectangle())
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showChrome.toggle()
@@ -329,6 +349,7 @@ public struct ReaderView: View {
         guard let idx = currentChapterArrayIndex else { return }
         let nextIdx = idx + delta
         guard chapters.indices.contains(nextIdx) else { return }
+        store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: currentPageIndex)
         currentChapter = chapters[nextIdx]
         currentPageIndex = 0
     }
@@ -336,6 +357,7 @@ public struct ReaderView: View {
     private func loadChapterPages() async {
         guard let adapter = store.adapter(for: manga.sourceID) else {
             chapterError = "找不到所属在线图源"
+            isLoadingChapter = false
             return
         }
         isLoadingChapter = true
@@ -396,13 +418,6 @@ private struct PagedMangaPageCell: View {
                     }
                     .padding(.top, 78)
                 }
-            } else if slot.isLoading {
-                VStack(spacing: 10) {
-                    ProgressView().tint(.white)
-                    Text("下载第 \(page.index + 1) 页...")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
             } else if let err = slot.errorMessage {
                 VStack(spacing: 8) {
                     Image(systemName: "photo.badge.exclamationmark")
@@ -415,6 +430,13 @@ private struct PagedMangaPageCell: View {
                         Task { await triggerLoad() }
                     }
                     .buttonStyle(.borderedProminent)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text("加载第 \(page.index + 1) 页...")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.8))
                 }
             }
         }
@@ -459,32 +481,38 @@ private struct VerticalMangaPageCell: View {
                 if slot.isUpscaling {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.75).tint(.white)
-                        Text("超分中")
+                        Text("\(config.engine.shortName) 超分中")
                             .font(.caption2)
                             .foregroundStyle(.white)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(.black.opacity(0.72), in: Capsule())
+                    .background(.black.opacity(0.75), in: Capsule())
                     .padding(10)
                 }
-            } else if slot.isLoading {
-                ProgressView()
-                    .tint(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 360)
             } else if let err = slot.errorMessage {
                 VStack(spacing: 8) {
                     Text("第 \(page.index + 1) 页加载失败：\(err)")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(.white.opacity(0.85))
                     Button("重试") {
                         Task { await triggerLoad() }
                     }
                     .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 240)
+                .frame(height: 260)
+                .background(Color.white.opacity(0.06))
+            } else {
+                VStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text("加载第 \(page.index + 1) 页...")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 380)
+                .background(Color.white.opacity(0.05))
             }
         }
         .task(id: "\(page.id)::\(config.cacheKey)") {

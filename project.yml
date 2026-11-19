@@ -48,6 +48,29 @@ targets:
     deploymentTarget: "16.0"
     info:
       path: Sources/App/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleDisplayName: 清阅在线漫画
+        CFBundleLocalizations:
+          - zh-Hans
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     sources:
       - path: Sources/App
         excludes:

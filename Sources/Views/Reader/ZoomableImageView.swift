@@ -19,18 +19,13 @@ public struct ZoomableImageView: UIViewRepresentable {
         scrollView.showsVerticalScrollIndicator = false
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.backgroundColor = .clear
+        scrollView.contentInsetAdjustmentBehavior = .never
 
         let imageView = UIImageView(image: image)
         imageView.contentMode = .scaleAspectFit
-        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.frame = scrollView.bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         scrollView.addSubview(imageView)
-
-        NSLayoutConstraint.activate([
-            imageView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
-            imageView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
-            imageView.centerXAnchor.constraint(equalTo: scrollView.contentLayoutGuide.centerXAnchor),
-            imageView.centerYAnchor.constraint(equalTo: scrollView.contentLayoutGuide.centerYAnchor),
-        ])
 
         context.coordinator.imageView = imageView
         context.coordinator.scrollView = scrollView
@@ -49,8 +44,14 @@ public struct ZoomableImageView: UIViewRepresentable {
 
     public func updateUIView(_ uiView: UIScrollView, context: Context) {
         context.coordinator.onSingleTap = onSingleTap
-        if context.coordinator.imageView?.image !== image {
-            context.coordinator.imageView?.image = image
+        if let imageView = context.coordinator.imageView {
+            if imageView.image !== image {
+                imageView.image = image
+            }
+            if uiView.zoomScale == 1.0 && imageView.frame.size != uiView.bounds.size && uiView.bounds.size != .zero {
+                imageView.frame = uiView.bounds
+                uiView.contentSize = uiView.bounds.size
+            }
         }
     }
 
@@ -65,6 +66,16 @@ public struct ZoomableImageView: UIViewRepresentable {
 
         public func viewForZooming(in scrollView: UIScrollView) -> UIView? {
             imageView
+        }
+
+        public func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            guard let imageView else { return }
+            let offsetX = max((scrollView.bounds.width - imageView.frame.width) * 0.5, 0)
+            let offsetY = max((scrollView.bounds.height - imageView.frame.height) * 0.5, 0)
+            imageView.center = CGPoint(
+                x: scrollView.contentSize.width * 0.5 + offsetX,
+                y: scrollView.contentSize.height * 0.5 + offsetY
+            )
         }
 
         @objc func handleSingleTap() {
@@ -99,8 +110,8 @@ public struct SplitCompareView: View {
 
     public var body: some View {
         GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
+            let width = max(geo.size.width, 1)
+            let height = max(geo.size.height, 1)
             let dividerX = max(24, min(width - 24, width * splitRatio))
 
             ZStack {
@@ -168,7 +179,7 @@ public struct SplitCompareView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        splitRatio = max(0.05, min(0.95, value.location.x / max(width, 1)))
+                        splitRatio = max(0.05, min(0.95, value.location.x / width))
                     }
             )
             .simultaneousGesture(

@@ -9,7 +9,7 @@ public struct MangaDetailView: View {
     @State private var chapters: [MangaChapter] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var activeChapter: MangaChapter?
+    @State private var launchPayload: ReaderLaunchPayload?
 
     private var isSaved: Bool {
         store.isInBookshelf(manga)
@@ -43,11 +43,11 @@ public struct MangaDetailView: View {
         .task {
             await loadChapters()
         }
-        .fullScreenCover(item: $activeChapter) { chapter in
+        .fullScreenCover(item: $launchPayload) { payload in
             ReaderView(
                 manga: manga,
-                chapters: chapters,
-                initialChapter: chapter
+                chapters: payload.chapters,
+                initialChapter: payload.initialChapter
             )
             .environmentObject(store)
         }
@@ -90,9 +90,9 @@ public struct MangaDetailView: View {
                     Button {
                         if let progress = store.progress(for: manga),
                            let resumeChapter = chapters.first(where: { $0.id == progress.chapterID }) {
-                            activeChapter = resumeChapter
+                            launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: resumeChapter)
                         } else if let first = chapters.first {
-                            activeChapter = first
+                            launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: first)
                         }
                     } label: {
                         Label(
@@ -167,7 +167,7 @@ public struct MangaDetailView: View {
                     ForEach(chapters) { chapter in
                         let isCurrent = store.progress(for: manga)?.chapterID == chapter.id
                         Button {
-                            activeChapter = chapter
+                            launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: chapter)
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -220,4 +220,10 @@ public struct MangaDetailView: View {
             errorMessage = error.localizedDescription
         }
     }
+}
+
+private struct ReaderLaunchPayload: Identifiable {
+    let id = UUID()
+    let chapters: [MangaChapter]
+    let initialChapter: MangaChapter
 }

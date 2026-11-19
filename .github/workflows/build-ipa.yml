@@ -48,6 +48,10 @@ jobs:
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/KedaOnlineReader.app"
           test -d "${APP_PATH}"
+          echo "=== Verifying Info.plist & LaunchScreen ==="
+          plutil -p "${APP_PATH}/Info.plist"
+          plutil -p "${APP_PATH}/Info.plist" | grep -q "UILaunchStoryboardName"
+          test -d "${APP_PATH}/LaunchScreen.storyboardc"
           rm -rf Payload KedaOnlineReader-unsigned.ipa
           mkdir -p Payload
           cp -R "${APP_PATH}" Payload/

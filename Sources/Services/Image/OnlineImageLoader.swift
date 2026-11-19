@@ -51,7 +51,7 @@ public actor OnlineImageLoader {
                 throw MangaSourceError.invalidURL(urlString)
             }
             var request = URLRequest(url: url)
-            request.timeoutInterval = 25
+            request.timeoutInterval = 12
             for (k, v) in headers {
                 request.setValue(v, forHTTPHeaderField: k)
             }
