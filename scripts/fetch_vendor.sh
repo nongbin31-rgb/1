@@ -33,7 +33,188 @@ open(p, "w", encoding="utf-8").write(txt)
   fi
 done
 
-# 仅保留 2x 超分所需 10 组模型（若需要 1x 仅降噪也可保留全部；此处保留全部以兼容 ModelFactory.swift 全部枚举）
+# 加固 Queue.swift 与 Waifu2x.swift 在 iOS 16~18 / Swift 5 下的线程安全与防崩溃边界：
+# 1) Queue.swift 增加 NSLock 防止多核 ARM64 生产者/消费者竞态
+# 2) Waifu2x.swift 修复 normalize 对 NaN/Inf 的 UInt8 转换崩溃、兼容不同 MLMultiArrayDataType、消除 alpha_task 与 out_pipeline 对 imgData 的并发写冲突
+python3 - <<PYEOF
+import pathlib
+
+queue_path = pathlib.Path("${VENDOR_DIR}/Waifu2x/Queue.swift")
+queue_path.write_text("""import Foundation
+
+class _QueueItem<T> {
+    let value: T!
+    var next: _QueueItem?
+
+    init(_ newvalue: T?) {
+        self.value = newvalue
+    }
+}
+
+public class Queue<T> {
+    private let lock = NSLock()
+    var _front: _QueueItem<T>
+    var _back: _QueueItem<T>
+
+    public init() {
+        _back = _QueueItem(nil)
+        _front = _back
+    }
+
+    public func enqueue(_ value: T) {
+        lock.lock()
+        defer { lock.unlock() }
+        _back.next = _QueueItem(value)
+        _back = _back.next!
+    }
+
+    public func dequeue() -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let newhead = _front.next {
+            _front = newhead
+            return newhead.value
+        } else {
+            return nil
+        }
+    }
+
+    public func isEmpty() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _front === _back
+    }
+}
+""", encoding="utf-8")
+
+waifu_path = pathlib.Path("${VENDOR_DIR}/Waifu2x/Waifu2x.swift")
+wtxt = waifu_path.read_text(encoding="utf-8")
+
+old_norm = """        let normalize = { (input: Double) -> Double in
+            let output = input * 255
+            if output > 255 {
+                return 255
+            }
+            if output < 0 {
+                return 0
+            }
+            return output
+        }"""
+
+new_norm = """        let normalize = { (input: Double) -> Double in
+            let output = input * 255
+            if !output.isFinite {
+                return 0
+            }
+            if output > 255 {
+                return 255
+            }
+            if output < 0 {
+                return 0
+            }
+            return output
+        }"""
+
+assert old_norm in wtxt, "normalize block not found"
+wtxt = wtxt.replace(old_norm, new_norm, 1)
+
+# 将 alpha_task 写入 imgData 移至 out_pipeline.wait() 之后，避免 Swift Exclusivity 并发写冲突
+old_alpha = """                for y in 0 ..< out_height {
+                    for x in 0 ..< out_width {
+                        imgData[(y * out_width + x) * channels + 3] = alpha[y * out_width + x]
+                    }
+                }
+            }
+        }
+        // Output
+        Waifu2x.out_pipeline = BackgroundPipeline<MLMultiArray>("out_pipeline", count: rects.count) { (index, array) in
+            let rect = rects[index]
+            let origin_x = Int(rect.origin.x) * out_scale
+            let origin_y = Int(rect.origin.y) * out_scale
+            let dataPointer = UnsafeMutableBufferPointer(start: array.dataPointer.assumingMemoryBound(to: Double.self),
+                                                         count: bufferSize)
+            var dest_x: Int
+            var dest_y: Int
+            var src_index: Int
+            var dest_index: Int
+            for channel in 0..<3 {
+                for src_y in 0..<out_block_size {
+                    for src_x in 0..<out_block_size {
+                        dest_x = origin_x + src_x
+                        dest_y = origin_y + src_y
+                        src_index = src_y * out_block_size + src_x + out_block_size * out_block_size * channel
+                        dest_index = (dest_y * out_width + dest_x) * channels + channel
+                        imgData[dest_index] = UInt8(normalize(dataPointer[src_index]))
+                    }
+                }
+            }
+        }"""
+
+new_alpha = """            }
+        }
+        // Output
+        Waifu2x.out_pipeline = BackgroundPipeline<MLMultiArray>("out_pipeline", count: rects.count) { (index, array) in
+            let rect = rects[index]
+            let origin_x = Int(rect.origin.x) * out_scale
+            let origin_y = Int(rect.origin.y) * out_scale
+            let safeRead: (Int) -> Double = {
+                switch array.dataType {
+                case .double:
+                    let ptr = array.dataPointer.assumingMemoryBound(to: Double.self)
+                    return { idx in ptr[idx] }
+                case .float32:
+                    let ptr = array.dataPointer.assumingMemoryBound(to: Float.self)
+                    return { idx in Double(ptr[idx]) }
+                case .float16:
+                    let ptr = array.dataPointer.assumingMemoryBound(to: UInt16.self)
+                    return { idx in Double(Float(Float16(bitPattern: ptr[idx]))) }
+                default:
+                    let ptr = array.dataPointer.assumingMemoryBound(to: Double.self)
+                    return { idx in ptr[idx] }
+                }
+            }()
+            var dest_x: Int
+            var dest_y: Int
+            var src_index: Int
+            var dest_index: Int
+            for channel in 0..<3 {
+                for src_y in 0..<out_block_size {
+                    for src_x in 0..<out_block_size {
+                        dest_x = origin_x + src_x
+                        dest_y = origin_y + src_y
+                        src_index = src_y * out_block_size + src_x + out_block_size * out_block_size * channel
+                        dest_index = (dest_y * out_width + dest_x) * channels + channel
+                        imgData[dest_index] = UInt8(normalize(safeRead(src_index)))
+                    }
+                }
+            }
+        }"""
+
+assert old_alpha in wtxt, "out_pipeline block not found"
+wtxt = wtxt.replace(old_alpha, new_alpha, 1)
+
+old_wait = """        callback("wait_alpha")
+        alpha_task?.wait()
+        Waifu2x.out_pipeline.wait()"""
+
+new_wait = """        Waifu2x.out_pipeline.wait()
+        callback("wait_alpha")
+        alpha_task?.wait()
+        if hasalpha {
+            for y in 0 ..< out_height {
+                for x in 0 ..< out_width {
+                    imgData[(y * out_width + x) * channels + 3] = alpha[y * out_width + x]
+                }
+            }
+        }"""
+
+assert old_wait in wtxt, "wait_alpha block not found"
+wtxt = wtxt.replace(old_wait, new_wait, 1)
+
+waifu_path.write_text(wtxt, encoding="utf-8")
+print("Patched Queue.swift and Waifu2x.swift successfully")
+PYEOF
+
 echo "    Waifu2x 模型数量: $(ls "${VENDOR_DIR}/Waifu2x/models"/*.mlmodel | wc -l)"
 
 echo "==> [2/3] 拉取 imxieyi/Anime4KMetal (Apache-2.0)..."

@@ -23,12 +23,16 @@ public enum Waifu2xServiceError: LocalizedError {
 }
 
 /// Waifu2x 端侧 CoreML 超分服务（基于 imxieyi/waifu2x-ios）
-/// 使用 actor 串行调度，防止上游 Waifu2x 静态管线并发竞态及多页同时推理导致 OOM
-public actor Waifu2xService {
+/// 注意：上游 Waifu2x 内部使用全局静态管道变量，不能并发重入！
+/// 这里使用独立串行队列 + 异步排他锁保证全 App 任何时刻最多只有 1 个 Waifu2x 任务执行。
+public final class Waifu2xService: @unchecked Sendable {
     public static let shared = Waifu2xService()
 
     public static let minDimension: Int = 200
     public static let maxDimension: Int = 2500
+
+    /// 严格串行调度队列（非可重入），彻底避免多页同时进入 Waifu2x.run 导致静态管道踩踏闪退
+    private let serialQueue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.waifu2x.serial", qos: .userInitiated)
 
     private init() {}
 
@@ -38,7 +42,7 @@ public actor Waifu2xService {
         preset: Waifu2xModelPreset,
         progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> UIImage {
-        // 1. 统一像素化并规避 iOS 15+ 延迟位图解码空数据问题（同时归一化 scale = 1.0 与方向 .up）
+        // 1. 强制位图预解码并统一为 scale = 1.0、orientation = .up，规避 iOS 15+ 延迟解码崩溃
         guard let preparedImage = Self.forceDecodeToPixelImage(image) else {
             throw Waifu2xServiceError.decodeFailed
         }
@@ -46,7 +50,7 @@ public actor Waifu2xService {
         let width = Int(preparedImage.size.width)
         let height = Int(preparedImage.size.height)
 
-        // 2. 双向尺寸安全边界拦截（下限 200px 防止 156x156 分块越界，上限 2500px 防爆内存）
+        // 2. 双向尺寸安全阈值拦截（下限 200px 防分块越界，上限 2500px 防爆内存）
         guard width >= Self.minDimension && height >= Self.minDimension else {
             throw Waifu2xServiceError.imageTooSmall(width: width, height: height)
         }
@@ -54,14 +58,16 @@ public actor Waifu2xService {
             throw Waifu2xServiceError.imageTooLarge(width: width, height: height)
         }
 
-        // 3. 显式映射到 Waifu2xEngine.Model 枚举
+        // 3. 映射模型枚举
         let engineModel = Self.mapModel(preset)
 
-        // 4. 在后台队列执行分块 CoreML + Metal 双三次插值推理
+        // 4. 在专用串行队列中严格排队执行 Waifu2x.run
         let output: UIImage? = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = Waifu2x.run(preparedImage, model: engineModel) { state in
-                    progress?(state)
+            serialQueue.async {
+                let result = autoreleasepool {
+                    Waifu2x.run(preparedImage, model: engineModel) { state in
+                        progress?(state)
+                    }
                 }
                 continuation.resume(returning: result)
             }
@@ -94,7 +100,8 @@ public actor Waifu2xService {
         }
     }
 
-    /// 强制将图像绘制为 8-bit sRGB RGBA 完整内存位图，scale = 1.0，orientation = .up
+    /// 强制将图像绘制为 8-bit sRGB 完整内存位图，scale = 1.0，orientation = .up
+    /// 对不含透明通道的图片直接使用 .noneSkipLast，跳过 Waifu2x 内部的 Alpha 提取与 MetalBicubic 链路
     private static func forceDecodeToPixelImage(_ image: UIImage) -> UIImage? {
         let pixelWidth: Int
         let pixelHeight: Int
@@ -114,9 +121,19 @@ public actor Waifu2xService {
 
         guard pixelWidth > 0 && pixelHeight > 0 else { return nil }
 
+        let hasSourceAlpha: Bool = {
+            guard let info = image.cgImage?.alphaInfo else { return false }
+            switch info {
+            case .none, .noneSkipFirst, .noneSkipLast:
+                return false
+            default:
+                return true
+            }
+        }()
+
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
-        format.opaque = false
+        format.opaque = !hasSourceAlpha
         format.preferredRange = .standard
 
         let renderer = UIGraphicsImageRenderer(
@@ -129,7 +146,8 @@ public actor Waifu2xService {
 
         guard let cgImage = rendered.cgImage else { return nil }
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        let alphaInfo: CGImageAlphaInfo = hasSourceAlpha ? .premultipliedLast : .noneSkipLast
+        let bitmapInfo = alphaInfo.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
         guard let context = CGContext(
             data: nil,
             width: cgImage.width,
