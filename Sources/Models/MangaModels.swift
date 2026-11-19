@@ -1,7 +1,7 @@
 import Foundation
 
 /// 在线漫画图源类型
-public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable {
+public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case demo = "demo"
     case genericJSON = "generic_json"
 
@@ -18,7 +18,7 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable {
 }
 
 /// 在线图源配置
-public struct MangaSourceConfig: Identifiable, Codable, Equatable, Hashable {
+public struct MangaSourceConfig: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var kind: MangaSourceKind
@@ -44,7 +44,7 @@ public struct MangaSourceConfig: Identifiable, Codable, Equatable, Hashable {
 }
 
 /// 漫画基础信息
-public struct Manga: Identifiable, Codable, Equatable, Hashable {
+public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var id: String
     public var sourceID: String
     public var title: String
@@ -80,7 +80,7 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable {
 }
 
 /// 漫画章节
-public struct MangaChapter: Identifiable, Codable, Equatable, Hashable {
+public struct MangaChapter: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var id: String
     public var mangaID: String
     public var title: String
@@ -103,7 +103,7 @@ public struct MangaChapter: Identifiable, Codable, Equatable, Hashable {
 }
 
 /// 漫画单页信息
-public struct MangaPage: Identifiable, Codable, Equatable, Hashable {
+public struct MangaPage: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var id: String { "\(index)_\(imageURL)" }
     public var index: Int
     public var imageURL: String
@@ -117,7 +117,7 @@ public struct MangaPage: Identifiable, Codable, Equatable, Hashable {
 }
 
 /// 阅读进度记录
-public struct ReadingProgress: Codable, Equatable {
+public struct ReadingProgress: Codable, Equatable, Sendable {
     public var mangaKey: String
     public var chapterID: String
     public var chapterTitle: String
@@ -140,7 +140,7 @@ public struct ReadingProgress: Codable, Equatable {
 }
 
 /// 阅读方向与排版模式
-public enum ReaderLayoutMode: String, Codable, CaseIterable, Identifiable {
+public enum ReaderLayoutMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case verticalWebtoon = "vertical"
     case pagedRTL = "paged_rtl"
     case pagedLTR = "paged_ltr"

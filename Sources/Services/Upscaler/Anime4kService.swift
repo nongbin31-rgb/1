@@ -97,7 +97,7 @@ public actor Anime4kService {
         }
 
         // 4. 创建输入纹理（SRGB = false 保持线性采样数值与原图一致）
-        let inputTexture = try textureLoader.newTexture(
+        let inputTexture = try await textureLoader.newTexture(
             cgImage: normalizedCG,
             options: [
                 .SRGB: false,

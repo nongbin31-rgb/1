@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import Waifu2xEngine
+@preconcurrency import Waifu2xEngine
 
 public enum Waifu2xServiceError: LocalizedError {
     case imageTooSmall(width: Int, height: Int)
