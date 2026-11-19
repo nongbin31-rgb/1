@@ -6,13 +6,18 @@ public struct MangaDetailView: View {
 
     let manga: Manga
 
+    @State private var resolvedManga: Manga?
     @State private var chapters: [MangaChapter] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var launchPayload: ReaderLaunchPayload?
 
+    private var currentManga: Manga {
+        resolvedManga ?? manga
+    }
+
     private var isSaved: Bool {
-        store.isInBookshelf(manga)
+        store.isInBookshelf(currentManga)
     }
 
     public var body: some View {
@@ -20,11 +25,11 @@ public struct MangaDetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 headerSection
 
-                if !manga.summary.isEmpty {
+                if !currentManga.summary.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("简介")
                             .font(.headline)
-                        Text(manga.summary)
+                        Text(currentManga.summary)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -45,7 +50,7 @@ public struct MangaDetailView: View {
         }
         .fullScreenCover(item: $launchPayload) { payload in
             ReaderView(
-                manga: manga,
+                manga: currentManga,
                 chapters: payload.chapters,
                 initialChapter: payload.initialChapter
             )
@@ -55,25 +60,29 @@ public struct MangaDetailView: View {
 
     private var headerSection: some View {
         HStack(alignment: .top, spacing: 16) {
-            AsyncMangaCoverView(urlString: manga.coverURL, cornerRadius: 12)
+            AsyncMangaCoverView(
+                urlString: currentManga.coverURL,
+                headers: currentManga.coverHeaders,
+                cornerRadius: 12
+            )
                 .frame(width: 118, height: 168)
                 .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(manga.title)
+                Text(currentManga.title)
                     .font(.title3.weight(.bold))
                     .lineLimit(3)
 
-                if !manga.author.isEmpty {
-                    Label(manga.author, systemImage: "person")
+                if !currentManga.author.isEmpty {
+                    Label(currentManga.author, systemImage: "person")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                if !manga.tags.isEmpty {
+                if !currentManga.tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(manga.tags, id: \.self) { tag in
+                            ForEach(currentManga.tags, id: \.self) { tag in
                                 Text(tag)
                                     .font(.caption2)
                                     .padding(.horizontal, 8)
@@ -88,7 +97,7 @@ public struct MangaDetailView: View {
 
                 HStack(spacing: 10) {
                     Button {
-                        if let progress = store.progress(for: manga),
+                        if let progress = store.progress(for: currentManga),
                            let resumeChapter = chapters.first(where: { $0.id == progress.chapterID }) {
                             launchPayload = ReaderLaunchPayload(chapters: chapters, initialChapter: resumeChapter)
                         } else if let first = chapters.first {
@@ -96,7 +105,7 @@ public struct MangaDetailView: View {
                         }
                     } label: {
                         Label(
-                            store.progress(for: manga) == nil ? "开始阅读" : "继续阅读",
+                            store.progress(for: currentManga) == nil ? "开始阅读" : "继续阅读",
                             systemImage: "play.fill"
                         )
                         .font(.subheadline.weight(.semibold))
@@ -108,7 +117,7 @@ public struct MangaDetailView: View {
                     .disabled(chapters.isEmpty)
 
                     Button {
-                        store.toggleBookshelf(manga)
+                        store.toggleBookshelf(currentManga)
                     } label: {
                         Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                             .frame(width: 24, height: 22)
@@ -215,7 +224,9 @@ public struct MangaDetailView: View {
         defer { isLoading = false }
 
         do {
-            chapters = try await adapter.fetchChapters(for: manga)
+            let detail = try await adapter.fetchDetail(for: manga)
+            resolvedManga = detail.manga
+            chapters = detail.chapters
         } catch {
             errorMessage = error.localizedDescription
         }

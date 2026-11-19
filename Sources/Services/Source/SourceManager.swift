@@ -30,21 +30,40 @@ public final class AppStore: ObservableObject {
     }
 
     public init() {
+        let builtinSources: [MangaSourceConfig] = [
+            MangaSourceConfig(
+                id: "builtin-jm-source",
+                name: "禁漫天堂",
+                kind: .jm,
+                baseURL: "https://www.cdnbtd.cc",
+                isEnabled: true
+            ),
+            MangaSourceConfig(
+                id: "builtin-wnacg-source",
+                name: "绅士漫画",
+                kind: .wnacg,
+                baseURL: "https://www.cloudwn.shop",
+                isEnabled: true
+            ),
+            MangaSourceConfig(
+                id: "builtin-demo-source",
+                name: "超分演示源",
+                kind: .demo,
+                baseURL: "https://demo.local",
+                isEnabled: true
+            ),
+        ]
+
         let savedSources: [MangaSourceConfig]? = load(key: Keys.sources)
-        if let savedSources, !savedSources.isEmpty {
-            self.sources = savedSources
+        if var existing = savedSources, !existing.isEmpty {
+            for builtin in builtinSources.reversed() where !existing.contains(where: { $0.id == builtin.id }) {
+                existing.insert(builtin, at: 0)
+            }
+            self.sources = existing
         } else {
-            self.sources = [
-                MangaSourceConfig(
-                    id: "builtin-demo-source",
-                    name: "内置超分与在线测试源",
-                    kind: .demo,
-                    baseURL: "https://demo.local",
-                    isEnabled: true
-                )
-            ]
+            self.sources = builtinSources
         }
-        self.selectedSourceID = self.sources.first?.id ?? ""
+        self.selectedSourceID = self.sources.first(where: { $0.isEnabled })?.id ?? self.sources.first?.id ?? ""
         self.bookshelf = load(key: Keys.bookshelf) ?? []
         self.progressMap = load(key: Keys.progress) ?? [:]
         self.upscalerConfig = load(key: Keys.upscaler) ?? ImageUpscalerConfig(
@@ -66,6 +85,10 @@ public final class AppStore: ObservableObject {
             return BuiltinDemoSource(config: config)
         case .genericJSON:
             return GenericJSONSource(config: config)
+        case .jm:
+            return JmMangaSource(config: config)
+        case .wnacg:
+            return WnacgMangaSource(config: config)
         }
     }
 

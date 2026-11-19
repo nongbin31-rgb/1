@@ -132,7 +132,11 @@ struct MangaGridCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .bottomLeading) {
-                AsyncMangaCoverView(urlString: manga.coverURL, cornerRadius: 10)
+                AsyncMangaCoverView(
+                    urlString: manga.coverURL,
+                    headers: manga.coverHeaders,
+                    cornerRadius: 10
+                )
                     .aspectRatio(0.7, contentMode: .fit)
                     .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
 

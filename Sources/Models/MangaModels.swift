@@ -4,6 +4,8 @@ import Foundation
 public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case demo = "demo"
     case genericJSON = "generic_json"
+    case jm = "jm"
+    case wnacg = "wnacg"
 
     public var id: String { rawValue }
 
@@ -13,7 +15,26 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendab
             return "内置在线演示源"
         case .genericJSON:
             return "自定义 JSON 接口源"
+        case .jm:
+            return "禁漫天堂 (JMComic)"
+        case .wnacg:
+            return "绅士漫画 (WNACG)"
         }
+    }
+
+    public var isBuiltin: Bool {
+        self == .demo || self == .jm || self == .wnacg
+    }
+}
+
+/// 在线图源分类筛选选项
+public struct MangaCategoryOption: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+
+    public init(id: String, title: String) {
+        self.id = id
+        self.title = title
     }
 }
 
@@ -50,6 +71,7 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var title: String
     public var author: String
     public var coverURL: String
+    public var coverHeaders: [String: String]
     public var summary: String
     public var tags: [String]
     public var statusText: String
@@ -60,6 +82,7 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
         title: String,
         author: String = "",
         coverURL: String = "",
+        coverHeaders: [String: String] = [:],
         summary: String = "",
         tags: [String] = [],
         statusText: String = "连载中"
@@ -69,13 +92,104 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
         self.title = title
         self.author = author
         self.coverURL = coverURL
+        self.coverHeaders = coverHeaders
         self.summary = summary
         self.tags = tags
         self.statusText = statusText
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, sourceID, title, author, coverURL, coverHeaders, summary, tags, statusText
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.sourceID = try container.decode(String.self, forKey: .sourceID)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        self.coverURL = try container.decodeIfPresent(String.self, forKey: .coverURL) ?? ""
+        self.coverHeaders = try container.decodeIfPresent([String: String].self, forKey: .coverHeaders) ?? [:]
+        self.summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        self.tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        self.statusText = try container.decodeIfPresent(String.self, forKey: .statusText) ?? ""
+    }
+
     public var compositeKey: String {
         "\(sourceID)::\(id)"
+    }
+}
+
+/// 结合标题、标签与接口字段推导漫画连载状态
+public enum MangaSerialStatusHelper {
+    private static let incompleteRegex = try! NSRegularExpression(
+        pattern: "未完结|未完結|未完|连载中|連載中|连载|連載|更新中|持续更新|持續更新|更新至|ongoing|serializ",
+        options: [.caseInsensitive]
+    )
+    private static let completedRegex = try! NSRegularExpression(
+        pattern: "已完结|已完結|完结|完結|全一话|全一話|全一卷|全本|终章|終章|最终话|最終話|\\bcomplete(d)?\\b|\\bfinished\\b",
+        options: [.caseInsensitive]
+    )
+    private static let stripIncompleteRegex = try! NSRegularExpression(
+        pattern: "未完结|未完結|未完",
+        options: []
+    )
+
+    public static func inferStatusText(
+        title: String? = nil,
+        latestChapter: String? = nil,
+        tags: [String] = [],
+        rawStatus: Any? = nil,
+        rawIsEnd: Any? = nil,
+        isSeries: Bool = false,
+        chapterCount: Int = 0
+    ) -> String {
+        if let rawIsEnd {
+            let v = String(describing: rawIsEnd).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if v == "1" || v == "true" || v == "yes" {
+                return "已完结"
+            }
+            if v == "0" || v == "false" || v == "no" {
+                if isSeries || chapterCount > 1 {
+                    return "连载中"
+                }
+            }
+        }
+
+        var samples: [String] = []
+        if let rawStatus {
+            let s = String(describing: rawStatus).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !s.isEmpty, s != "<null>" { samples.append(s) }
+        }
+        for tag in tags {
+            let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { samples.append(trimmed) }
+        }
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            samples.append(title)
+        }
+        if let latest = latestChapter?.trimmingCharacters(in: .whitespacesAndNewlines), !latest.isEmpty {
+            samples.append(latest)
+        }
+
+        var hasCompleted = false
+        var hasOngoing = false
+        for sample in samples {
+            let fullRange = NSRange(sample.startIndex..<sample.endIndex, in: sample)
+            if incompleteRegex.firstMatch(in: sample, range: fullRange) != nil {
+                hasOngoing = true
+            }
+            let stripped = stripIncompleteRegex.stringByReplacingMatches(in: sample, range: fullRange, withTemplate: "")
+            let strippedRange = NSRange(stripped.startIndex..<stripped.endIndex, in: stripped)
+            if completedRegex.firstMatch(in: stripped, range: strippedRange) != nil {
+                hasCompleted = true
+            }
+        }
+
+        if hasCompleted { return "已完结" }
+        if hasOngoing { return "连载中" }
+        if isSeries || chapterCount > 1 { return "连载中" }
+        return ""
     }
 }
 

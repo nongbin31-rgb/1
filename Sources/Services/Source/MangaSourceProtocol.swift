@@ -5,17 +5,39 @@ import Foundation
 public protocol MangaSourceProtocol: Sendable {
     var config: MangaSourceConfig { get }
 
+    /// 可选分类筛选列表
+    var exploreCategories: [MangaCategoryOption] { get }
+
     /// 获取热门 / 推荐列表
     func fetchPopular(page: Int) async throws -> [Manga]
 
+    /// 按分类获取发现列表
+    func fetchPopular(category: String, page: Int) async throws -> [Manga]
+
     /// 关键词搜索
     func search(query: String, page: Int) async throws -> [Manga]
+
+    /// 获取漫画完整详情与章节列表
+    func fetchDetail(for manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter])
 
     /// 获取漫画章节列表
     func fetchChapters(for manga: Manga) async throws -> [MangaChapter]
 
     /// 获取章节的所有页面图片 URL
     func fetchPages(for chapter: MangaChapter) async throws -> [MangaPage]
+}
+
+public extension MangaSourceProtocol {
+    var exploreCategories: [MangaCategoryOption] { [] }
+
+    func fetchPopular(category: String, page: Int) async throws -> [Manga] {
+        try await fetchPopular(page: page)
+    }
+
+    func fetchDetail(for manga: Manga) async throws -> (manga: Manga, chapters: [MangaChapter]) {
+        let chapters = try await fetchChapters(for: manga)
+        return (manga, chapters)
+    }
 }
 
 public enum MangaSourceError: LocalizedError {

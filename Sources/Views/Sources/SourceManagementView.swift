@@ -6,6 +6,7 @@ public struct SourceManagementView: View {
 
     @State private var showingAddSheet = false
     @State private var showingSpecSheet = false
+    @State private var showingResetAlert = false
 
     public var body: some View {
         NavigationStack {
@@ -33,7 +34,7 @@ public struct SourceManagementView: View {
                     .onDelete { offsets in
                         for idx in offsets {
                             let target = store.sources[idx]
-                            if target.kind != .demo {
+                            if !target.kind.isBuiltin {
                                 store.removeSource(id: target.id)
                             }
                         }
@@ -42,12 +43,21 @@ public struct SourceManagementView: View {
 
                 Section {
                     Button {
+                        Task {
+                            await OnlineEndpointStore.shared.clearAll()
+                            showingResetAlert = true
+                        }
+                    } label: {
+                        Label("重置在线源优选节点缓存", systemImage: "arrow.triangle.2.circlepath")
+                    }
+
+                    Button {
                         showingSpecSheet = true
                     } label: {
                         Label("查看自定义 JSON 在线源接口规范", systemImage: "doc.text")
                     }
                 } footer: {
-                    Text("所有在线源均通过标准 MangaSourceProtocol 接入，后续可继续扩展 Komga、Kavita、OPDS 或任意自建接口。")
+                    Text("内置已集成 禁漫天堂 (JMComic) 与 绅士漫画 (WNACG) 双源并发竞速与自动节点自愈，所有在线源均通过标准 MangaSourceProtocol 接入。")
                 }
             }
             .navigationTitle("在线源")
@@ -68,6 +78,11 @@ public struct SourceManagementView: View {
             }
             .sheet(isPresented: $showingSpecSheet) {
                 JSONSpecSheet()
+            }
+            .alert("节点缓存已重置", isPresented: $showingResetAlert) {
+                Button("好的", role: .cancel) {}
+            } message: {
+                Text("下次请求将重新竞速测通最优的 JM 与 WNACG 镜像节点。")
             }
         }
     }

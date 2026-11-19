@@ -2,14 +2,22 @@ import CryptoKit
 import Foundation
 import UIKit
 
-/// 在线漫画图片异步加载与双层缓存（内存 + 磁盘），同时支持 synthetic:// 超分基准测试页生成
+/// 在线漫画图片异步加载与双层缓存（内存 + 磁盘），集成多图床容灾竞速与 JM 分块反混淆，同时支持 synthetic:// 测试图生成
 public actor OnlineImageLoader {
     public static let shared = OnlineImageLoader()
 
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 18
+        config.httpMaximumConnectionsPerHost = 8
+        return URLSession(configuration: config)
+    }()
+
     private let memoryCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 40
-        cache.totalCostLimit = 120 * 1024 * 1024
+        cache.countLimit = 60
+        cache.totalCostLimit = 160 * 1024 * 1024
         return cache
     }()
 
@@ -25,7 +33,8 @@ public actor OnlineImageLoader {
     }
 
     public func loadImage(urlString: String, headers: [String: String] = [:]) async throws -> UIImage {
-        let cacheKey = urlString as NSString
+        let identityKey = normalizedCacheKey(for: urlString)
+        let cacheKey = identityKey as NSString
         if let memImage = memoryCache.object(forKey: cacheKey) {
             return memImage
         }
@@ -36,46 +45,45 @@ public actor OnlineImageLoader {
             return synthetic
         }
 
-        let diskPath = diskFileURL(for: urlString)
+        let diskPath = diskFileURL(for: identityKey)
         if let data = try? Data(contentsOf: diskPath), let diskImage = UIImage(data: data) {
             memoryCache.setObject(diskImage, forKey: cacheKey, cost: data.count)
             return diskImage
         }
 
-        if let existingTask = inFlightTasks[urlString] {
+        if let existingTask = inFlightTasks[identityKey] {
             return try await existingTask.value
         }
 
         let task = Task<UIImage, Error> {
-            guard let url = URL(string: urlString) else {
+            let jmMeta = JmImageMeta.tryParse(urlString)
+            let candidates = await self.buildCandidateUrls(rawUrl: urlString)
+            guard !candidates.isEmpty else {
                 throw MangaSourceError.invalidURL(urlString)
             }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 12
-            for (k, v) in headers {
-                request.setValue(v, forHTTPHeaderField: k)
+
+            let fetched = try await self.fetchFirstValidImage(candidates: candidates, extraHeaders: headers)
+            if let group = self.imageDomainGroup(for: urlString),
+               let winningHost = URL(string: fetched.winningURL)?.host {
+                await OnlineEndpointStore.shared.setHealthyImageDomain(winningHost, for: group)
             }
 
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw MangaSourceError.httpError(http.statusCode)
-            }
-            guard let image = UIImage(data: data) else {
+            guard let processed = JmImageDescrambler.descrambleIfNeeded(data: fetched.data, meta: jmMeta) else {
                 throw MangaSourceError.decodingFailed("响应内容不是有效的图片数据")
             }
 
-            try? data.write(to: diskPath, options: .atomic)
-            return image
+            try? processed.cacheData.write(to: diskPath, options: .atomic)
+            return processed.image
         }
 
-        inFlightTasks[urlString] = task
+        inFlightTasks[identityKey] = task
         do {
             let image = try await task.value
-            inFlightTasks.removeValue(forKey: urlString)
+            inFlightTasks.removeValue(forKey: identityKey)
             memoryCache.setObject(image, forKey: cacheKey)
             return image
         } catch {
-            inFlightTasks.removeValue(forKey: urlString)
+            inFlightTasks.removeValue(forKey: identityKey)
             throw error
         }
     }
@@ -102,6 +110,240 @@ public actor OnlineImageLoader {
     private func diskFileURL(for key: String) -> URL {
         let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return diskDirectory.appendingPathComponent(hash)
+    }
+
+    // MARK: - Multi-CDN Failover & URL Normalization
+
+    private nonisolated func normalizeImageURL(_ rawUrl: String) -> String {
+        var cleanUrl = rawUrl.components(separatedBy: "#").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !cleanUrl.isEmpty else { return "" }
+        if cleanUrl.hasPrefix("//") {
+            let dropped = cleanUrl.drop(while: { $0 == "/" })
+            cleanUrl = "https://\(dropped)"
+        } else if cleanUrl.lowercased().hasPrefix("http://") || cleanUrl.lowercased().hasPrefix("https://") {
+            if let range = cleanUrl.range(of: #"^https?:/+"#, options: [.regularExpression, .caseInsensitive]) {
+                cleanUrl.replaceSubrange(range, with: "https://")
+            }
+        }
+        return cleanUrl
+    }
+
+    private nonisolated func isJmImageURL(_ url: URL, rawUrl: String) -> Bool {
+        let host = (url.host ?? "").lowercased()
+        return host.contains("jmapiproxy")
+            || host.contains("jmapinode")
+            || host.contains("cdnbtd")
+            || host.contains("cdnutc")
+            || host.contains("cdngwc")
+            || host.contains("cdnhjk")
+            || rawUrl.contains("#jm=")
+            || url.path.contains("/media/photos/")
+            || url.path.contains("/media/albums/")
+    }
+
+    private nonisolated func isWnacgHost(_ host: String) -> Bool {
+        let lower = host.lowercased()
+        return lower.contains("wnacg")
+            || lower.contains("cloudwn")
+            || lower.contains("wnmanga")
+            || lower.contains("wnimg")
+            || lower.contains("qy0.ru")
+            || lower.contains("byteimg")
+    }
+
+    private nonisolated func isWnacgImageMirrorHost(_ host: String) -> Bool {
+        let lower = host.lowercased()
+        return lower.contains("byteimg")
+            || lower.contains("wnimg")
+            || lower.contains("qy0.ru")
+            || lower.contains("wnacg.download")
+    }
+
+    private nonisolated func imageDomainGroup(for rawUrl: String) -> String? {
+        let clean = normalizeImageURL(rawUrl)
+        if let url = URL(string: clean) {
+            if isJmImageURL(url, rawUrl: rawUrl) { return "jm" }
+            if let host = url.host, isWnacgHost(host) { return "wnacg" }
+        } else if rawUrl.contains("#jm=") {
+            return "jm"
+        }
+        return nil
+    }
+
+    private nonisolated func normalizedCacheKey(for rawUrl: String) -> String {
+        let clean = normalizeImageURL(rawUrl)
+        guard let url = URL(string: clean), !url.path.isEmpty else {
+            return rawUrl
+        }
+        let querySuffix = url.query.map { "?\($0)" } ?? ""
+        if isJmImageURL(url, rawUrl: rawUrl) {
+            let frag = rawUrl.components(separatedBy: "#").dropFirst().first.map { "#\($0)" } ?? ""
+            return "jm:\(url.path)\(querySuffix)\(frag)"
+        }
+        if let host = url.host, isWnacgImageMirrorHost(host) {
+            return "wnacg:\(url.path)\(querySuffix)"
+        }
+        return clean
+    }
+
+    private func buildCandidateUrls(rawUrl: String) async -> [String] {
+        let cleanUrl = normalizeImageURL(rawUrl)
+        guard var components = URLComponents(string: cleanUrl),
+              let url = components.url else {
+            return cleanUrl.isEmpty ? [] : [cleanUrl]
+        }
+
+        if components.scheme?.lowercased() == "http" {
+            components.scheme = "https"
+        }
+
+        let origHost = url.host ?? ""
+        let isJmCover = url.path.contains("/media/albums/")
+        let isJm = isJmImageURL(url, rawUrl: rawUrl)
+        let group = imageDomainGroup(for: rawUrl)
+        let healthyHost: String? = group != nil ? await OnlineEndpointStore.shared.healthyImageDomain(for: group!) : nil
+
+        var hosts: [String] = []
+        func addHost(_ host: String?) {
+            guard let h = host?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !h.isEmpty,
+                  !hosts.contains(h) else { return }
+            hosts.append(h)
+        }
+
+        if isJm {
+            addHost(healthyHost)
+            let resolvedJmImg = await JmApiClient.shared.currentImageDomain()
+            addHost(resolvedJmImg)
+            if origHost.contains("jmapiproxy") || origHost.contains("cdn-") {
+                addHost(origHost)
+            }
+            for d in JmCrypto.defaultImageDomains { addHost(d) }
+            addHost(origHost)
+        } else {
+            addHost(healthyHost)
+            addHost(origHost)
+        }
+
+        if isWnacgImageMirrorHost(origHost) {
+            for mirror in ["img2.qy0.ru", "img3.qy0.ru", "img2.wnimg2.cfd", "t4.wnimg2.cfd", "t3.wnimg2.cfd", "wnimg2.cfd"] {
+                addHost(mirror)
+            }
+        }
+        if origHost.contains("wnacg.download") {
+            if origHost.hasPrefix("img") {
+                for i in 1...6 { addHost("img\(i).wnacg.download") }
+            } else if origHost.hasPrefix("t") {
+                for i in 1...4 { addHost("t\(i).wnacg.download") }
+            }
+        }
+
+        var pathVariants = [components.path]
+        if isJmCover {
+            if components.path.hasSuffix("_3x4.jpg") {
+                pathVariants.append(components.path.replacingOccurrences(of: "_3x4.jpg", with: ".jpg"))
+            } else if components.path.hasSuffix(".jpg") {
+                pathVariants.append(components.path.replacingOccurrences(of: ".jpg", with: "_3x4.jpg"))
+            }
+        }
+
+        var candidates: [String] = []
+        for path in pathVariants {
+            for host in hosts {
+                var c = components
+                c.host = host
+                c.path = path
+                if let candidate = c.string, !candidates.contains(candidate) {
+                    candidates.append(candidate)
+                }
+            }
+        }
+        return candidates.isEmpty ? [cleanUrl] : candidates
+    }
+
+    private nonisolated func buildHeaders(for url: URL, extraHeaders: [String: String]) -> [String: String] {
+        var merged: [String: String] = ["User-Agent": JmCrypto.defaultUserAgent]
+        if let host = url.host, isWnacgHost(host) {
+            merged["Referer"] = "https://www.wnacg.com/"
+        }
+        for (k, v) in extraHeaders where !v.isEmpty {
+            merged[k] = v
+        }
+        return merged
+    }
+
+    private nonisolated func fetchSingleCandidate(urlString: String, extraHeaders: [String: String]) async throws -> Data {
+        guard let url = URL(string: urlString) else {
+            throw MangaSourceError.invalidURL(urlString)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        for (k, v) in buildHeaders(for: url, extraHeaders: extraHeaders) {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw MangaSourceError.httpError(http.statusCode)
+        }
+        guard !data.isEmpty, UIImage(data: data) != nil else {
+            throw MangaSourceError.decodingFailed("响应内容不是有效的图片数据")
+        }
+        return data
+    }
+
+    private func fetchFirstValidImage(
+        candidates: [String],
+        extraHeaders: [String: String]
+    ) async throws -> (data: Data, winningURL: String) {
+        if candidates.count == 1, let first = candidates.first {
+            let data = try await fetchSingleCandidate(urlString: first, extraHeaders: extraHeaders)
+            return (data, first)
+        }
+
+        var lastError: Error?
+        var idx = 0
+        let batchSize = 2
+        while idx < candidates.count {
+            let end = min(idx + batchSize, candidates.count)
+            let batch = Array(candidates[idx..<end])
+
+            let outcome: (data: Data?, winningURL: String?, error: Error?) = await withTaskGroup(
+                of: (data: Data?, url: String, error: Error?).self
+            ) { group in
+                for candidate in batch {
+                    group.addTask {
+                        do {
+                            let bytes = try await self.fetchSingleCandidate(urlString: candidate, extraHeaders: extraHeaders)
+                            return (bytes, candidate, nil)
+                        } catch {
+                            return (nil, candidate, error)
+                        }
+                    }
+                }
+
+                var batchError: Error?
+                for await res in group {
+                    if let data = res.data {
+                        group.cancelAll()
+                        return (data, res.url, nil)
+                    } else if let err = res.error, !(err is CancellationError) {
+                        batchError = err
+                    }
+                }
+                return (nil, nil, batchError)
+            }
+
+            if let data = outcome.data, let url = outcome.winningURL {
+                return (data, url)
+            }
+            if let err = outcome.error {
+                lastError = err
+            }
+            idx = end
+        }
+
+        throw lastError ?? MangaSourceError.decodingFailed("所有图片 CDN 节点均加载失败")
     }
 
     /// 生成带低分辨率 JPEG 压缩特征的漫画基准测试图（640x960），便于肉眼直观验证 2x 超分锐化与去噪效果
