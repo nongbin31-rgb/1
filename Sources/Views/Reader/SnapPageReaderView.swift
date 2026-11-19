@@ -109,21 +109,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         context.coordinator.parent = self
 
         // 更新背景颜色
-        switch background {
-        case .followSystem:
-            uiViewController.view.backgroundColor = .systemBackground
-            uiViewController.collectionView?.backgroundColor = .systemBackground
-        case .light:
-            uiViewController.view.backgroundColor = .white
-            uiViewController.collectionView?.backgroundColor = .white
-        case .dark, .immersive:
-            uiViewController.view.backgroundColor = .black
-            uiViewController.collectionView?.backgroundColor = .black
-        case .texture:
-            let米白 = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
-            uiViewController.view.backgroundColor = 米白
-            uiViewController.collectionView?.backgroundColor = 米白
-        }
+        uiViewController.updateBackgroundStyle(background)
 
         uiViewController.applyConfiguration(
             pages: pages,
@@ -225,7 +211,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
 
 public final class SnapPageViewController: UIViewController {
     private let coordinator: SnapPageReaderView.Coordinator
-    private var collectionView: UICollectionView!
+    var collectionView: UICollectionView!
     private var layout: SnapPageFlowLayout!
     private var lastRecordedIndex: Int = -1
 
@@ -236,6 +222,24 @@ public final class SnapPageViewController: UIViewController {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateBackgroundStyle(_ background: ReaderBackground) {
+        let color: UIColor
+        switch background {
+        case .followSystem:
+            color = .systemBackground
+        case .light:
+            color = .white
+        case .dark, .immersive:
+            color = .black
+        case .texture:
+            color = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+        }
+        view.backgroundColor = color
+        if isViewLoaded {
+            collectionView?.backgroundColor = color
+        }
     }
 
     public override func viewDidLoad() {
