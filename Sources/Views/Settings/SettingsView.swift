@@ -105,7 +105,7 @@ public struct SettingsView: View {
     }
 
     private func refreshCacheSize() async {
-        let bytes = await OnlineImageLoader.shared.diskCacheByteCount()
+        let bytes = await OnlineImageLoader.shared.diskCacheSizeBytes()
         let mb = Double(bytes) / 1024.0 / 1024.0
         cacheSizeText = String(format: "%.1f MB", mb)
     }

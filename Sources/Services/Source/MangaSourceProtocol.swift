@@ -38,6 +38,10 @@ public extension MangaSourceProtocol {
         let chapters = try await fetchChapters(for: manga)
         return (manga, chapters)
     }
+
+    func fetchChapterPages(mangaID: String, chapterID: String) async throws -> [MangaPage] {
+        try await fetchPages(for: MangaChapter(id: chapterID, mangaID: mangaID, title: "", index: 0))
+    }
 }
 
 public enum MangaSourceError: LocalizedError {

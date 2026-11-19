@@ -2,6 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [ -d "${ROOT_DIR}/Frameworks/waifu2x.framework" ]; then
+  echo "==> 检测到项目已内置原版提取的 waifu2x.framework 与 Anime4K 着色器资产，跳过外部 clone"
+  exit 0
+fi
+
 VENDOR_DIR="${ROOT_DIR}/Vendor"
 TMP_DIR="$(mktemp -d)"
 

@@ -435,10 +435,7 @@ public struct ReaderView: View {
         }
 
         do {
-            let loadedPages = try await adapter.fetchChapterPages(
-                mangaID: manga.id,
-                chapterID: currentChapter.id
-            )
+            let loadedPages = try await adapter.fetchPages(for: currentChapter)
             self.pages = loadedPages
             if let saved = store.progress(for: manga), saved.chapterID == currentChapter.id {
                 self.currentPageIndex = min(saved.pageIndex, max(0, loadedPages.count - 1))

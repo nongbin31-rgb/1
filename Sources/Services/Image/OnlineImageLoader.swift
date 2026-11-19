@@ -107,6 +107,10 @@ public actor OnlineImageLoader {
         }
     }
 
+    public func diskCacheByteCount() -> Int64 {
+        diskCacheSizeBytes()
+    }
+
     private func diskFileURL(for key: String) -> URL {
         let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return diskDirectory.appendingPathComponent(hash)
