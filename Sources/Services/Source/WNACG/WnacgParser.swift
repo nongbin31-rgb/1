@@ -236,6 +236,8 @@ public enum WnacgParser {
             chapterCount: chapters.count
         )
 
+        let finalTags = MangaSerialStatusHelper.sanitizeTags(tags)
+
         let updatedManga = Manga(
             id: aid,
             sourceID: sourceID,
@@ -244,7 +246,7 @@ public enum WnacgParser {
             coverURL: coverURL,
             coverHeaders: ["Referer": "\(baseUrl)/"],
             summary: desc.isEmpty ? "暂无简介" : desc,
-            tags: tags,
+            tags: finalTags,
             statusText: statusText
         )
         return (updatedManga, chapters)

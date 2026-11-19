@@ -68,7 +68,7 @@ public struct MangaDetailView: View {
                 .frame(width: 118, height: 168)
                 .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(currentManga.title)
                     .font(.title3.weight(.bold))
                     .lineLimit(3)
@@ -81,7 +81,12 @@ public struct MangaDetailView: View {
                         .lineLimit(2)
                 }
 
-                let tags = displayedTags
+                let status = currentStatusText
+                if !status.isEmpty {
+                    mangaStatusBadge(status)
+                }
+
+                let tags = cleanTags
                 if !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
@@ -231,48 +236,49 @@ public struct MangaDetailView: View {
         }
     }
 
-    private var displayedTags: [String] {
-        var tags = currentManga.tags
+    private var cleanTags: [String] {
+        MangaSerialStatusHelper.sanitizeTags(currentManga.tags)
+    }
+
+    private var currentStatusText: String {
         let status = currentManga.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !status.isEmpty && !tags.contains(status) {
-            tags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: status)
+        if !status.isEmpty {
+            return status
         }
-        return tags
+        return MangaSerialStatusHelper.inferStatusText(
+            title: currentManga.title,
+            tags: currentManga.tags,
+            chapterCount: chapters.count
+        )
+    }
+
+    @ViewBuilder
+    private func mangaStatusBadge(_ status: String) -> some View {
+        let isOngoing = MangaSerialStatusHelper.isOngoingStatus(status)
+        let isCompleted = MangaSerialStatusHelper.isCompletedStatus(status)
+        let color: Color = isOngoing ? .green : (isCompleted ? .orange : .blue)
+
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text(status)
+        }
+        .font(.caption2.weight(.medium))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.14), in: Capsule())
+        .foregroundStyle(color)
     }
 
     @ViewBuilder
     private func mangaTagBadge(_ tag: String) -> some View {
-        if MangaSerialStatusHelper.isOngoingStatus(tag) {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 5, height: 5)
-                Text(tag)
-            }
-            .font(.caption2.weight(.medium))
+        Text(tag)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Color.green.opacity(0.14), in: Capsule())
-            .foregroundStyle(Color.green)
-        } else if MangaSerialStatusHelper.isCompletedStatus(tag) {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(Color.orange)
-                    .frame(width: 5, height: 5)
-                Text(tag)
-            }
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Color.orange.opacity(0.14), in: Capsule())
-            .foregroundStyle(Color.orange)
-        } else {
-            Text(tag)
-                .font(.caption2)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color(.tertiarySystemFill), in: Capsule())
-        }
+            .background(Color(.tertiarySystemFill), in: Capsule())
     }
 }
 

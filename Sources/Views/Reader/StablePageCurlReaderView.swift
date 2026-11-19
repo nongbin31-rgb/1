@@ -106,10 +106,15 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             uiViewController.view.backgroundColor = .clear
         }
 
-        // 立即更新当前可见子页面的背景与纸质纹理，无需等待下一页
+        // 立即更新当前可见子页面的超分状态、对比模式、背景与纸质纹理，无需等待翻页
         if let currentVCs = uiViewController.viewControllers as? [ComicPageHostingController] {
             for vc in currentVCs {
-                vc.updateBackground(
+                vc.updateConfiguration(
+                    config: upscalerConfig,
+                    isEnabled: enableUpscaler,
+                    transitionAfterUpscaled: transitionAfterUpscaled,
+                    isCompareMode: isCompareMode,
+                    isRightToLeft: isRightToLeft,
                     background: background,
                     texture: texture,
                     textureOpacity: textureOpacity,

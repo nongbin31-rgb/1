@@ -27,6 +27,10 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取指定纸张纹理图像（带内存二级缓存）
     public func textureImage(for type: ReaderTextureType) -> UIImage? {
+        if type == .proceduralStucco {
+            return ProceduralStuccoTextureManager.shared.getSharedTile()
+        }
+
         let key = type.rawValue as NSString
         if let cached = cache.object(forKey: key) {
             return cached
@@ -110,7 +114,12 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     public var currentTexture: ReaderTextureType = .classic {
-        didSet { updateTextureImage() }
+        didSet {
+            updateTextureImage()
+            if currentBackground == .texture {
+                baseColorView.backgroundColor = currentTexture.basePaperColor
+            }
+        }
     }
 
     public var textureOpacity: CGFloat = 0.4 {
@@ -233,8 +242,7 @@ public class ReaderBackgroundContainerView: UIView {
         case .texture:
             immersiveBackgroundView.isHidden = true
             textureOverlayView.isHidden = false
-            // 纹理模式下底色使用暖米白，以完美呈现印刷纸浆纤维
-            baseColorView.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+            baseColorView.backgroundColor = currentTexture.basePaperColor
             updateTextureImage()
         }
     }
@@ -296,6 +304,7 @@ public class ReaderBackgroundContainerView: UIView {
 // MARK: - 3. SwiftUI 拟真纸质与书脊光影扩展组件
 
 /// 拟真纸张纹理正片叠底覆盖层 (SwiftUI)
+/// 增强版：内置全局屏幕空间绝对坐标锁定 (Screen-Space Phase Lock)，翻页、滚动、缩放时微粒纹理绝对锚定，彻底解决多页面拼接错位与接缝断层
 public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
     public let opacity: Double
@@ -307,12 +316,63 @@ public struct PaperTextureOverlayView: View {
 
     public var body: some View {
         if let uiImg = ReaderTextureCache.shared.textureImage(for: texture) {
-            Image(uiImage: uiImg)
-                .resizable(resizingMode: .tile)
-                .blendMode(.multiply)
-                .opacity(opacity)
+            GeometryReader { proxy in
+                let tileSize = (texture == .proceduralStucco)
+                    ? ProceduralStuccoTextureManager.tileSize
+                    : max(uiImg.size.width, 256.0)
+                let globalFrame = proxy.frame(in: .global)
+
+                // 正模全局绝对相位计算 (Screen-Space Positive Modulo)
+                // globalFrame.minX 与 minY 代表当前视图左上角在全局物理窗口中的绝对坐标
+                // 严格将屏幕左上角 (0, 0) 映射为纹理网格原点
+                let rawX = globalFrame.minX.truncatingRemainder(dividingBy: tileSize)
+                let phaseX = rawX >= 0 ? rawX : rawX + tileSize
+
+                let rawY = globalFrame.minY.truncatingRemainder(dividingBy: tileSize)
+                let phaseY = rawY >= 0 ? rawY : rawY + tileSize
+
+                // 本地视图左上角的偏移量：使本地 (0, 0) 恰好对齐 globalFrame 在网格中的相对位置
+                let offsetX = -phaseX
+                let offsetY = -phaseY
+
+                // 感知透明度：程序化微粒采用 Gamma 0.66 校准，其它材质保留标准线性
+                let effectiveOpacity = (texture == .proceduralStucco)
+                    ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
+                    : opacity
+
+                // 核心关键架构：
+                // 1. ZStack(alignment: .topLeading) 锁定左上基准，彻底消除居中对齐导致的中心点随尺寸漂移；
+                // 2. 平铺图层尺寸覆盖 view 尺寸 + 1 个 tileSize，确保视口无死角覆盖；
+                // 3. 最外层严格限制在 proxy.size 并 clipped()，彻底杜绝外溢，消除跨页面正片叠底双重叠加暗斑！
+                ZStack(alignment: .topLeading) {
+                    Image(uiImage: uiImg)
+                        .resizable(resizingMode: .tile)
+                        .frame(
+                            width: proxy.size.width + tileSize,
+                            height: proxy.size.height + tileSize
+                        )
+                        .offset(x: offsetX, y: offsetY)
+                        .blendMode(.multiply)
+                        .opacity(effectiveOpacity)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
                 .allowsHitTesting(false)
+            }
         }
+    }
+}
+
+/// MangaPrism 独家粉刷颗粒独立覆盖层 (SwiftUI)
+public struct ProceduralStuccoOverlayView: View {
+    public let opacity: Double
+
+    public init(opacity: Double = 0.4) {
+        self.opacity = opacity
+    }
+
+    public var body: some View {
+        PaperTextureOverlayView(texture: .proceduralStucco, opacity: opacity)
     }
 }
 

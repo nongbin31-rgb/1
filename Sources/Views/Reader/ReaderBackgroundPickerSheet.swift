@@ -104,21 +104,21 @@ public struct ReaderBackgroundPickerSheet: View {
                     .font(.headline)
                     .foregroundStyle(.primary)
                 Spacer()
-                Text("从实体书高精度无损扫描")
+                Text("拟真纸张与粉刷浮雕微粒")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    ForEach(Array(ReaderTextureType.allCases.prefix(3))) { item in
-                        textureCardView(for: item)
-                    }
-                }
-                HStack(spacing: 12) {
-                    ForEach(Array(ReaderTextureType.allCases.suffix(from: 3))) { item in
-                        textureCardView(for: item)
-                    }
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 10),
+                    GridItem(.flexible(), spacing: 10),
+                    GridItem(.flexible(), spacing: 10)
+                ],
+                spacing: 12
+            ) {
+                ForEach(ReaderTextureType.allCases) { item in
+                    textureCardView(for: item)
                 }
             }
         }
@@ -135,15 +135,18 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         } label: {
             VStack(spacing: 6) {
-                // 材质缩略图展示区域：严格定高定宽，图片通过 ZStack 载入并双重裁切，杜绝尺寸溢出
+                // 材质缩略图展示区域：严格定高定宽，底层铺专属原生物理纸浆底色，图片通过 ZStack 载入并双重裁切
                 ZStack {
+                    item.basePaperSwiftUIColor
+
                     if let img = ReaderTextureCache.shared.textureImage(for: item) {
                         Image(uiImage: img)
-                            .resizable()
+                            .resizable(resizingMode: item == .proceduralStucco ? .tile : .stretch)
                             .scaledToFill()
                             .frame(minWidth: 0, maxWidth: .infinity)
                             .frame(height: 72)
                             .clipped()
+                            .blendMode(.multiply)
                     } else {
                         Color(uiColor: .secondarySystemBackground)
                             .frame(minWidth: 0, maxWidth: .infinity)

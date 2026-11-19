@@ -20,6 +20,20 @@ public final class ComicPageSlot: ObservableObject {
         transitionAfterUpscaled: Bool
     ) async {
         errorMessage = nil
+
+        // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
+        if let original = originalImage {
+            if !isEnabled {
+                if processed?.appliedModel == nil, displayImage === original {
+                    return
+                }
+            } else if let currentProcessed = processed,
+                      currentProcessed.appliedModel == config.model,
+                      displayImage === currentProcessed.image {
+                return
+            }
+        }
+
         if originalImage == nil {
             isLoading = true
             do {
@@ -159,7 +173,8 @@ public struct ComicPageCellView: View {
                     SplitCompareView(
                         originalImage: orig,
                         enhancedImage: processed.image,
-                        engineLabel: config.model.displayName
+                        engineLabel: config.model.displayName,
+                        onSingleTap: onSingleTap
                     )
                 } else {
                     ZoomableImageView(
@@ -224,6 +239,16 @@ public struct ComicPageCellView: View {
         .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
             await triggerLoad()
         }
+        .onChange(of: isEnabled) { _ in
+            Task {
+                await triggerLoad()
+            }
+        }
+        .onChange(of: config.cacheKey) { _ in
+            Task {
+                await triggerLoad()
+            }
+        }
         .onChange(of: slot.displayImage) { newImg in
             if let newImg {
                 onImageLoaded?(newImg)
@@ -243,7 +268,7 @@ public struct ComicPageCellView: View {
         case .immersive:
             Color.clear.ignoresSafeArea()
         case .texture:
-            Color(red: 0.965, green: 0.957, blue: 0.941).ignoresSafeArea()
+            texture.basePaperSwiftUIColor.ignoresSafeArea()
         }
     }
 

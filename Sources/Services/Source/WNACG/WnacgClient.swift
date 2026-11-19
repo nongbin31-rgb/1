@@ -408,7 +408,11 @@ public actor WnacgClient {
         let rawData = try await executeApiWithFailover { domain in
             try await self.getApiJsonData(
                 action: "search",
-                queryParameters: ["kw": query, "page": String(page)],
+                queryParameters: [
+                    "kw": query,
+                    "page": String(page),
+                    "limit": "12",
+                ],
                 domain: domain
             )
         }
@@ -496,7 +500,7 @@ public actor WnacgClient {
             chapterCount: chapters.count
         )
 
-        let finalTags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: statusText)
+        let finalTags = MangaSerialStatusHelper.sanitizeTags(tags)
 
         let updated = Manga(
             id: manga.id,

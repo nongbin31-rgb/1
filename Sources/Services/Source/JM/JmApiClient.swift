@@ -476,7 +476,7 @@ public actor JmApiClient {
             chapterCount: chapters.count
         )
 
-        let finalTags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: statusText)
+        let finalTags = MangaSerialStatusHelper.sanitizeTags(tags)
 
         let updatedManga = Manga(
             id: manga.id,
@@ -635,7 +635,7 @@ public actor JmApiClient {
             rawIsEnd: raw["is_end"]
         )
 
-        let finalTags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: statusText)
+        let finalTags = MangaSerialStatusHelper.sanitizeTags(tags)
 
         return Manga(
             id: id,

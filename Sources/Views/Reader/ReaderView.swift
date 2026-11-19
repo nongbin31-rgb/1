@@ -17,6 +17,20 @@ private final class ReaderPageSlot: ObservableObject {
         transitionAfterUpscaled: Bool
     ) async {
         errorMessage = nil
+
+        // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
+        if let original = originalImage {
+            if !isEnabled {
+                if processed?.appliedModel == nil, displayImage === original {
+                    return
+                }
+            } else if let currentProcessed = processed,
+                      currentProcessed.appliedModel == config.model,
+                      displayImage === currentProcessed.image {
+                return
+            }
+        }
+
         if originalImage == nil {
             isLoading = true
             do {
@@ -167,6 +181,35 @@ public struct ReaderView: View {
 
                 if showChrome {
                     chromeOverlay
+                } else if isCompareMode {
+                    // 当处于对比模式且导航栏收起时，提供常驻半透明快捷退出按钮，彻底解决无法退出的死锁
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isCompareMode = false
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "xmark")
+                                        .font(.caption.bold())
+                                    Text("退出对比")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                                .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+                            }
+                            .padding(.trailing, max(windowGeo.safeAreaInsets.trailing, 16))
+                            .padding(.top, max(windowGeo.safeAreaInsets.top, 16) + 4)
+                        }
+                        Spacer()
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }
             .frame(width: windowGeo.size.width, height: windowGeo.size.height)
@@ -241,7 +284,7 @@ public struct ReaderView: View {
             .ignoresSafeArea()
         case .texture:
             ZStack {
-                Color(red: 0.965, green: 0.957, blue: 0.941)
+                store.readerTextureType.basePaperSwiftUIColor
                 if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
                     PaperTextureOverlayView(
                         texture: store.readerTextureType,
@@ -258,34 +301,54 @@ public struct ReaderView: View {
         if store.readerLayoutMode == .verticalWebtoon && !isCompareMode {
             GeometryReader { geo in
                 let contentWidth = geo.size.width
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(pages) { page in
-                            VerticalMangaPageCell(
-                                page: page,
-                                contentWidth: contentWidth,
-                                config: store.upscalerConfig,
-                                isEnabled: store.enableImageUpscaler,
-                                transitionAfterUpscaled: store.transitionAfterImageUpscaled,
-                                background: store.preferredReaderBackground,
-                                texture: store.readerTextureType,
-                                textureOpacity: store.readerTextureOpacity,
-                                textureTarget: store.readerTextureTarget,
-                                onStatusUpdate: { text in
-                                    if page.index == currentPageIndex {
-                                        currentHUDText = text
+                let scale = UIScreen.main.scale
+                let pixelOverlap = 1.0 / scale
+
+                ZStack(alignment: .topLeading) {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(pages) { page in
+                                VerticalMangaPageCell(
+                                    page: page,
+                                    contentWidth: contentWidth,
+                                    config: store.upscalerConfig,
+                                    isEnabled: store.enableImageUpscaler,
+                                    transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                                    background: store.preferredReaderBackground,
+                                    texture: store.readerTextureType,
+                                    textureOpacity: store.readerTextureOpacity,
+                                    textureTarget: store.readerTextureTarget,
+                                    isUnifiedTextureManaged: true,
+                                    onStatusUpdate: { text in
+                                        if page.index == currentPageIndex {
+                                            currentHUDText = text
+                                        }
+                                    },
+                                    onImageLoaded: { img in
+                                        if page.index == currentPageIndex {
+                                            capturedPreviewImage = img
+                                        }
                                     }
-                                },
-                                onImageLoaded: { img in
-                                    if page.index == currentPageIndex {
-                                        capturedPreviewImage = img
-                                    }
+                                )
+                                .padding(.bottom, -pixelOverlap)
+                                .onAppear {
+                                    currentPageIndex = page.index
                                 }
-                            )
-                            .onAppear {
-                                currentPageIndex = page.index
                             }
                         }
+                    }
+
+                    // 条漫全局统一无缝物理纸张正片叠底层 (Unified Webtoon Paper Texture)
+                    // 彻底解决切片独立覆盖导致的相位相移、边界黑带、接缝断层与滑动掉帧
+                    if store.preferredReaderBackground == .texture &&
+                       (store.readerTextureTarget == .both || store.readerTextureTarget == .imageOnly) {
+                        PaperTextureOverlayView(
+                            texture: store.readerTextureType,
+                            opacity: store.readerTextureOpacity
+                        )
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .allowsHitTesting(false)
                     }
                 }
                 .contentShape(Rectangle())
@@ -384,8 +447,13 @@ public struct ReaderView: View {
                 Spacer()
 
                 Button {
-                    withAnimation {
-                        isCompareMode.toggle()
+                    if !store.enableImageUpscaler {
+                        currentHUDText = "请先开启画质增强"
+                        showUpscalerSheet = true
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isCompareMode.toggle()
+                        }
                     }
                 } label: {
                     Label(isCompareMode ? "退出对比" : "对比", systemImage: "rectangle.split.2x1")
@@ -398,7 +466,6 @@ public struct ReaderView: View {
                         )
                         .foregroundStyle(.white)
                 }
-                .disabled(!store.enableImageUpscaler)
             }
             .padding(.leading, max(insets.left, 16))
             .padding(.trailing, max(insets.right, 16))
@@ -643,6 +710,7 @@ private struct VerticalMangaPageCell: View {
     var texture: ReaderTextureType = .classic
     var textureOpacity: Double = 0.4
     var textureTarget: ReaderTextureTarget = .both
+    var isUnifiedTextureManaged: Bool = false
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
 
@@ -653,23 +721,49 @@ private struct VerticalMangaPageCell: View {
             if let displayImage = slot.displayImage {
                 if contentWidth > 0, displayImage.size.width > 0 {
                     let scale = UIScreen.main.scale
+                    let pixelSize = 1.0 / scale
                     let rawHeight = contentWidth * (displayImage.size.height / displayImage.size.width)
-                    let alignedHeight = max(1, (rawHeight * scale).rounded(.down) / scale)
+                    // 向上对齐物理像素，彻底杜绝向下取整造成的像素缺失
+                    let alignedHeight = max(pixelSize, ceil(rawHeight * scale) / scale)
+
+                    // 核心抗接缝设计 (Subpixel Anti-Seam Overlap)：
+                    // 图片高度增加 1 物理像素微重叠，并在显示上严格无缝衔接
                     Image(uiImage: displayImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(width: contentWidth, height: alignedHeight)
+                        .frame(width: contentWidth, height: alignedHeight + pixelSize)
+                        .frame(width: contentWidth, height: alignedHeight, alignment: .top)
                         .clipped()
+
+                    // 真实物理纸张原生底色正片叠底 (彻底解决条漫纯白背景与四周纸浆底色色差)
+                    if background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
+                        texture.basePaperSwiftUIColor
+                            .blendMode(.multiply)
+                            .frame(width: contentWidth, height: alignedHeight)
+                            .clipped()
+                    }
+
+                    // 拟真纸质材质纹理正片叠底 (当未由外层条漫全局视口统一托管时降级为单单元格覆盖)
+                    if !isUnifiedTextureManaged && background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
+                        PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+                            .frame(width: contentWidth, height: alignedHeight)
+                            .clipped()
+                    }
                 } else {
                     Image(uiImage: displayImage)
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity)
-                }
 
-                // 拟真纸质材质纹理正片叠底 (仅在目标包含画面本身时覆盖于图片上)
-                if background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
-                    PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+                    if background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
+                        texture.basePaperSwiftUIColor
+                            .blendMode(.multiply)
+                    }
+
+                    if !isUnifiedTextureManaged && background == .texture && (textureTarget == .both || textureTarget == .imageOnly) {
+                        PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+                            .clipped()
+                    }
                 }
 
                 if slot.isUpscaling {
@@ -713,6 +807,16 @@ private struct VerticalMangaPageCell: View {
         }
         .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
             await triggerLoad()
+        }
+        .onChange(of: isEnabled) { _ in
+            Task {
+                await triggerLoad()
+            }
+        }
+        .onChange(of: config.cacheKey) { _ in
+            Task {
+                await triggerLoad()
+            }
         }
         .onDisappear {
             slot.releaseMemoryPreservingState()

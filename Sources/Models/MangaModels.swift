@@ -1,4 +1,10 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(SwiftUI)
+import SwiftUI
+#endif
 
 /// 在线漫画图源类型
 public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -24,6 +30,32 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendab
 
     public var isBuiltin: Bool {
         self == .demo || self == .jm || self == .wnacg
+    }
+}
+
+/// 在线图源分类筛选选项
+public enum DiscoverPaginationMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case pageByPage = "page_by_page"       // 按页翻阅（上一页/下一页/跳页，独立加载）
+    case infiniteScroll = "infinite_scroll" // 瀑布流（向下滚动自动加载追加）
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .pageByPage:
+            return "按页翻阅"
+        case .infiniteScroll:
+            return "瀑布流滚动"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .pageByPage:
+            return "book.pages"
+        case .infiniteScroll:
+            return "arrow.down.circle"
+        }
     }
 }
 
@@ -262,18 +294,38 @@ public enum MangaSerialStatusHelper {
         return s == "已完结" || s == "已完結" || s == "完结" || s == "完結" || s == "全一话" || s == "全一話"
     }
 
-    /// 确保标签列表中包含连载状态标签
-    public static func ensureStatusTagInTags(tags: [String], statusText: String) -> [String] {
-        let trimmedStatus = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedStatus.isEmpty else { return tags }
-        var result = tags
-        result.removeAll { $0 == "连载中" || $0 == "連載中" || $0 == "已完结" || $0 == "已完結" }
-        if result.isEmpty {
-            result.append(trimmedStatus)
-        } else {
-            result.insert(trimmedStatus, at: min(1, result.count))
+    /// 判断标签文本是否为连载状态相关的词汇
+    public static func isStatusTag(_ tag: String) -> Bool {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if isOngoingStatus(trimmed) || isCompletedStatus(trimmed) { return true }
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        if incompleteRegex.firstMatch(in: trimmed, range: range) != nil {
+            return true
+        }
+        if completedRegex.firstMatch(in: trimmed, range: range) != nil {
+            return true
+        }
+        return false
+    }
+
+    /// 从标签列表中移除所有连载状态相关的标签，确保标签与连载状态独立
+    public static func sanitizeTags(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for tag in tags {
+            let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !isStatusTag(trimmed) else { continue }
+            if seen.insert(trimmed).inserted {
+                result.append(trimmed)
+            }
         }
         return result
+    }
+
+    /// 连载状态与标签已独立，标签列表不再混入连载状态（兼容旧调用，直接返回清洗后的纯标签）
+    public static func ensureStatusTagInTags(tags: [String], statusText: String) -> [String] {
+        sanitizeTags(tags)
     }
 
     public static func inferStatusText(
@@ -477,8 +529,9 @@ public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable
     }
 }
 
-/// 真实纸张与材质纹理类型（100% 对齐原版可达阅读器 ReaderTextureType）
+/// 真实纸张与材质纹理类型（包含原版可达预置材质与 MangaPrism 独家粉刷微粒）
 public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
+    case proceduralStucco = "Texture_Procedural_Stucco"     // MangaPrism 独家粉刷微粒 (免素材无缝)
     case classic        = "Texture_0_classic_paper"       // 经典纸张
     case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸
     case whiteWall      = "Texture_2_white_wall"          // 白墙灰泥
@@ -490,6 +543,7 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
 
     public var displayName: String {
         switch self {
+        case .proceduralStucco: return "粉刷微粒 (MangaPrism)"
         case .classic:      return "经典纸张"
         case .brownPaper:   return "牛皮包装"
         case .whiteWall:    return "微雕白墙"
@@ -501,6 +555,7 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
 
     public var shortName: String {
         switch self {
+        case .proceduralStucco: return "粉刷"
         case .classic:      return "经典"
         case .brownPaper:   return "牛皮"
         case .whiteWall:    return "白墙"
@@ -509,6 +564,46 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         case .wood:         return "木板"
         }
     }
+
+    #if canImport(UIKit)
+    /// 真实材质对应的物理原生纸浆基准底色 (UIKit)
+    public var basePaperColor: UIColor {
+        switch self {
+        case .proceduralStucco:
+            // 独家粉刷颗粒：温润纸浆暖米白 (RGB: 246, 244, 240)
+            return UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+        case .classic:
+            // 经典日漫原色开本纸：自然微暖书刊白 (RGB: 247, 245, 238)
+            return UIColor(red: 0.968, green: 0.960, blue: 0.932, alpha: 1.0)
+        case .brownPaper:
+            // 进口包装牛皮纸：经典温厚牛皮棕 (RGB: 230, 215, 189)
+            return UIColor(red: 0.902, green: 0.843, blue: 0.741, alpha: 1.0)
+        case .whiteWall:
+            // 微雕浮雕白墙：纯净微灰冷白 (RGB: 245, 245, 243)
+            return UIColor(red: 0.960, green: 0.960, blue: 0.953, alpha: 1.0)
+        case .grungePaper:
+            // 复古做旧草稿：岁月沉淀羊皮纸色 (RGB: 236, 228, 210)
+            return UIColor(red: 0.925, green: 0.894, blue: 0.824, alpha: 1.0)
+        case .tissueMarble:
+            // 大理石云纹：柔润素净云白 (RGB: 242, 241, 237)
+            return UIColor(red: 0.949, green: 0.945, blue: 0.929, alpha: 1.0)
+        case .wood:
+            // 浅色实木肌理：温润轻木原色 (RGB: 237, 228, 211)
+            return UIColor(red: 0.929, green: 0.894, blue: 0.827, alpha: 1.0)
+        }
+    }
+    #endif
+
+    #if canImport(SwiftUI)
+    /// 真实材质对应的物理原生纸浆基准底色 (SwiftUI)
+    public var basePaperSwiftUIColor: Color {
+        #if canImport(UIKit)
+        return Color(uiColor: basePaperColor)
+        #else
+        return Color(red: 0.965, green: 0.957, blue: 0.941)
+        #endif
+    }
+    #endif
 }
 
 /// 真实物理纸张材质纹理的作用范围与目标

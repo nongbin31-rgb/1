@@ -49,6 +49,9 @@ public final class AppStore: ObservableObject {
     @Published public var showSpineDividingLine: Bool = true {
         didSet { save(showSpineDividingLine, key: Keys.spineDividingLine) }
     }
+    @Published public var discoverPaginationMode: DiscoverPaginationMode = .pageByPage {
+        didSet { save(discoverPaginationMode, key: Keys.discoverPaginationMode) }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -67,6 +70,7 @@ public final class AppStore: ObservableObject {
         static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
         static let readerTextureTarget = "keda_online_reader_texture_target_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
+        static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
     }
 
     public init() {
@@ -122,6 +126,7 @@ public final class AppStore: ObservableObject {
         self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4
         self.readerTextureTarget = load(key: Keys.readerTextureTarget) ?? .both
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
+        self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
     }
 
     public var enabledSources: [MangaSourceConfig] {

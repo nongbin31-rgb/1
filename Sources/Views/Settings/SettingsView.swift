@@ -65,6 +65,15 @@ public struct SettingsView: View {
                     Text("目前仅会增强宽高均在 2500px 内的图像，超过该大小画质增强的意义不大。")
                 }
 
+                Section("图源浏览与分页模式") {
+                    Picker("发现页默认浏览模式", selection: $store.discoverPaginationMode) {
+                        ForEach(DiscoverPaginationMode.allCases) { mode in
+                            Label(mode.displayName, systemImage: mode.iconName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
                 Section("阅读排版与翻页特效") {
                     Picker("默认排版方式", selection: $store.readerLayoutMode) {
                         ForEach(ReaderLayoutMode.allCases) { mode in

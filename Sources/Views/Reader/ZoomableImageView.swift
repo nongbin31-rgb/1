@@ -1,7 +1,61 @@
 import SwiftUI
 import UIKit
 
-/// 基于 UIScrollView 桥接的高性能漫画缩放视图（支持 1x~5x 双指缩放、双击放大、单击切换工具栏，支持物理纸张纹理正片叠底）
+// MARK: - 拟真纸张与多层正片叠底漫画展示视图容器
+final class ComicContainerImageView: UIImageView {
+    /// Layer 1: 真实物理纸张基准底色正片叠底覆盖层 (使漫画纯白线稿与四周留白纸浆底色100%无缝吻合)
+    let paperTintOverlayView = UIImageView()
+    /// Layer 2: 真实纸张材质纹理覆盖层 (平铺微粒与纤维，随缩放平移天然跟随)
+    let textureOverlayView = UIImageView()
+
+    override init(image: UIImage?) {
+        super.init(image: image)
+        setupOverlays()
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupOverlays()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupOverlays()
+    }
+
+    private func setupOverlays() {
+        contentMode = .scaleAspectFit
+
+        paperTintOverlayView.clipsToBounds = true
+        paperTintOverlayView.isUserInteractionEnabled = false
+        paperTintOverlayView.layer.compositingFilter = "multiplyBlendMode"
+        paperTintOverlayView.isHidden = true
+        addSubview(paperTintOverlayView)
+
+        textureOverlayView.clipsToBounds = true
+        textureOverlayView.isUserInteractionEnabled = false
+        textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
+        textureOverlayView.isHidden = true
+        addSubview(textureOverlayView)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateOverlayFrames()
+    }
+
+    func updateOverlayFrames() {
+        guard let img = image, bounds.width > 0, bounds.height > 0 else { return }
+        let targetRect = ZoomableImageView.Coordinator.calculateImageAspectFitRect(
+            imageSize: img.size,
+            bounds: bounds
+        )
+        paperTintOverlayView.frame = targetRect
+        textureOverlayView.frame = targetRect
+    }
+}
+
+/// 基于 UIScrollView 桥接的高性能漫画缩放视图（支持 1x~5x 双指缩放、双击放大、单击切换工具栏，支持物理纸张原生底色与微粒纹理双重正片叠底）
 public struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
     var texture: ReaderTextureType? = nil
@@ -41,22 +95,12 @@ public struct ZoomableImageView: UIViewRepresentable {
         scrollView.backgroundColor = .clear
         scrollView.contentInsetAdjustmentBehavior = .never
 
-        let imageView = UIImageView(image: image)
-        imageView.contentMode = .scaleAspectFit
+        let imageView = ComicContainerImageView(image: image)
         imageView.frame = scrollView.bounds
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         scrollView.addSubview(imageView)
 
-        // 真实纸张材质纹理覆盖层 (置于 imageView 内部，精准作用于漫画图片本身，随缩放平移天然跟随)
-        let textureOverlayView = UIImageView()
-        textureOverlayView.contentMode = .scaleAspectFill
-        textureOverlayView.clipsToBounds = true
-        textureOverlayView.isUserInteractionEnabled = false
-        textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
-        imageView.addSubview(textureOverlayView)
-
         context.coordinator.imageView = imageView
-        context.coordinator.textureOverlayView = textureOverlayView
         context.coordinator.scrollView = scrollView
 
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
@@ -83,10 +127,12 @@ public struct ZoomableImageView: UIViewRepresentable {
         if let imageView = context.coordinator.imageView {
             if imageView.image !== image {
                 imageView.image = image
+                imageView.updateOverlayFrames()
             }
             if uiView.zoomScale == 1.0 && imageView.frame.size != uiView.bounds.size && uiView.bounds.size != .zero {
                 imageView.frame = uiView.bounds
                 uiView.contentSize = uiView.bounds.size
+                imageView.updateOverlayFrames()
             }
         }
         context.coordinator.updateTexture(
@@ -98,8 +144,7 @@ public struct ZoomableImageView: UIViewRepresentable {
 
     public final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var scrollView: UIScrollView?
-        weak var imageView: UIImageView?
-        weak var textureOverlayView: UIImageView?
+        weak var imageView: ComicContainerImageView?
         var onSingleTap: () -> Void
         var onZoomChanged: ((CGFloat) -> Void)?
 
@@ -113,16 +158,33 @@ public struct ZoomableImageView: UIViewRepresentable {
             opacity: Double,
             applyToImage: Bool
         ) {
-            guard let imageView, let image = imageView.image, let textureOverlayView else { return }
-            let targetRect = Self.calculateImageAspectFitRect(imageSize: image.size, bounds: imageView.bounds)
-            textureOverlayView.frame = targetRect
+            guard let imageView else { return }
+            imageView.updateOverlayFrames()
 
-            if applyToImage, let texture, let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
-                textureOverlayView.isHidden = false
-                textureOverlayView.image = texImg
-                textureOverlayView.alpha = CGFloat(opacity)
+            if applyToImage, let texture {
+                // 1. 物理纸张基准原生底色正片叠底 (彻底解决漫画原本冷白与四周留白纸浆底色不一致的问题)
+                imageView.paperTintOverlayView.isHidden = false
+                imageView.paperTintOverlayView.image = UIImage.solidColorImage(color: texture.basePaperColor)
+
+                // 2. 真实物理纸张材质微粒/纹理正片叠底
+                if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
+                    imageView.textureOverlayView.isHidden = false
+                    if texture == .proceduralStucco {
+                        // 程序化粉刷颗粒保持无缝环形平铺，绝对保持 256x256 物理颗粒度，杜绝放大失真
+                        imageView.textureOverlayView.image = texImg.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+                    } else {
+                        imageView.textureOverlayView.image = texImg
+                    }
+                    let effectiveOpacity = (texture == .proceduralStucco)
+                        ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
+                        : opacity
+                    imageView.textureOverlayView.alpha = CGFloat(effectiveOpacity)
+                } else {
+                    imageView.textureOverlayView.isHidden = true
+                }
             } else {
-                textureOverlayView.isHidden = true
+                imageView.paperTintOverlayView.isHidden = true
+                imageView.textureOverlayView.isHidden = true
             }
         }
 
@@ -178,15 +240,62 @@ public struct ZoomableImageView: UIViewRepresentable {
     }
 }
 
+// MARK: - 极轻量纯色位图内存缓存器
+private extension UIImage {
+    static var solidCache = [UInt32: UIImage]()
+    static let solidLock = NSLock()
+
+    static func solidColorImage(color: UIColor) -> UIImage {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let key = (UInt32(r * 255) << 24) | (UInt32(g * 255) << 16) | (UInt32(b * 255) << 8) | UInt32(a * 255)
+
+        solidLock.lock()
+        if let hit = solidCache[key] {
+            solidLock.unlock()
+            return hit
+        }
+        solidLock.unlock()
+
+        let size = CGSize(width: 4, height: 4)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let generated = renderer.image { ctx in
+            color.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+        }
+
+        solidLock.lock()
+        solidCache[key] = generated
+        solidLock.unlock()
+        return generated
+    }
+}
+
 /// 原图 vs 超分 实时分屏拖动对比视图
 public struct SplitCompareView: View {
     let originalImage: UIImage
     let enhancedImage: UIImage
     let engineLabel: String
+    var onSingleTap: (() -> Void)? = nil
+    var onExitCompare: (() -> Void)? = nil
 
     @State private var splitRatio: CGFloat = 0.5
     @State private var zoomScale: CGFloat = 1.0
     @State private var lastZoomScale: CGFloat = 1.0
+
+    public init(
+        originalImage: UIImage,
+        enhancedImage: UIImage,
+        engineLabel: String,
+        onSingleTap: (() -> Void)? = nil,
+        onExitCompare: (() -> Void)? = nil
+    ) {
+        self.originalImage = originalImage
+        self.enhancedImage = enhancedImage
+        self.engineLabel = engineLabel
+        self.onSingleTap = onSingleTap
+        self.onExitCompare = onExitCompare
+    }
 
     public var body: some View {
         GeometryReader { geo in
@@ -233,8 +342,32 @@ public struct SplitCompareView: View {
                     .frame(width: 36, height: 36)
                     .position(x: dividerX, y: height / 2)
 
-                // 左右角标
+                // 左右角标与常驻退出按钮
                 VStack {
+                    if let onExitCompare {
+                        HStack {
+                            Spacer()
+                            Button {
+                                onExitCompare()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "xmark")
+                                        .font(.caption.bold())
+                                    Text("退出对比")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .overlay(Capsule().stroke(Color.white.opacity(0.3), lineWidth: 1))
+                                .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+                            }
+                            .padding(.trailing, 16)
+                            .padding(.top, 56)
+                        }
+                    }
+
                     Spacer()
                     HStack {
                         Text("原图 1x")
@@ -256,8 +389,11 @@ public struct SplitCompareView: View {
                 }
             }
             .contentShape(Rectangle())
+            .onTapGesture {
+                onSingleTap?()
+            }
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 3)
                     .onChanged { value in
                         splitRatio = max(0.05, min(0.95, value.location.x / width))
                     }

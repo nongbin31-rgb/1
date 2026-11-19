@@ -93,8 +93,13 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         // 1. 更新背景颜色
         uiViewController.updateBackgroundStyle(background)
 
-        // 2. 立即更新当前可见 Cell 的背景与纸质纹理，无需等待下一页
-        uiViewController.updateVisibleCellsBackground(
+        // 2. 立即更新当前可见 Cell 的超分状态、对比模式、背景与纸质纹理，无需等待翻页
+        uiViewController.updateVisibleCellsConfiguration(
+            config: upscalerConfig,
+            isEnabled: enableUpscaler,
+            transitionAfterUpscaled: transitionAfterUpscaled,
+            isCompareMode: isCompareMode,
+            isRightToLeft: isRightToLeft,
             background: background,
             texture: texture,
             textureOpacity: textureOpacity,
@@ -242,6 +247,59 @@ public final class SnapPageViewController: UIViewController {
         view.backgroundColor = color
         if isViewLoaded {
             collectionView?.backgroundColor = color
+        }
+    }
+
+    /// 立即同步所有可见 Cell 的超分状态、排版方向与背景材质（关键修复：开启超分/切换模式时当前页即时生效）
+    func updateVisibleCellsConfiguration(
+        config: ImageUpscalerConfig,
+        isEnabled: Bool,
+        transitionAfterUpscaled: Bool,
+        isCompareMode: Bool,
+        isRightToLeft: Bool,
+        background: ReaderBackground,
+        texture: ReaderTextureType,
+        textureOpacity: Double,
+        textureTarget: ReaderTextureTarget
+    ) {
+        guard isViewLoaded, let cv = collectionView else { return }
+        for cell in cv.visibleCells {
+            if let hostingCell = cell as? SnapPageHostingCell {
+                hostingCell.updateConfiguration(
+                    config: config,
+                    isEnabled: isEnabled,
+                    transitionAfterUpscaled: transitionAfterUpscaled,
+                    isCompareMode: isCompareMode,
+                    isRightToLeft: isRightToLeft,
+                    background: background,
+                    texture: texture,
+                    textureOpacity: textureOpacity,
+                    textureTarget: textureTarget
+                )
+            }
+        }
+        let currentIndexPath = IndexPath(item: currentDisplayIndex, section: 0)
+        if let currentCell = cv.cellForItem(at: currentIndexPath) as? SnapPageHostingCell {
+            currentCell.updateConfiguration(
+                config: config,
+                isEnabled: isEnabled,
+                transitionAfterUpscaled: transitionAfterUpscaled,
+                isCompareMode: isCompareMode,
+                isRightToLeft: isRightToLeft,
+                background: background,
+                texture: texture,
+                textureOpacity: textureOpacity,
+                textureTarget: textureTarget
+            )
+        }
+    }
+
+    func updateVisibleCellsCompareMode(_ isCompareMode: Bool) {
+        guard isViewLoaded, let cv = collectionView else { return }
+        for cell in cv.visibleCells {
+            if let hostingCell = cell as? SnapPageHostingCell {
+                hostingCell.updateCompareMode(isCompareMode)
+            }
         }
     }
 
@@ -469,25 +527,74 @@ final class SnapPageHostingCell: UICollectionViewCell {
         }
     }
 
+    /// 全面动态同步页面超分配置、排版方向与背景材质（关键修复：开启超分/切换模式时当前页即时生效）
+    func updateConfiguration(
+        config: ImageUpscalerConfig,
+        isEnabled: Bool,
+        transitionAfterUpscaled: Bool,
+        isCompareMode: Bool,
+        isRightToLeft: Bool,
+        background: ReaderBackground,
+        texture: ReaderTextureType,
+        textureOpacity: Double,
+        textureTarget: ReaderTextureTarget
+    ) {
+        let upscalerChanged = currentConfig != config
+            || currentIsEnabled != isEnabled
+            || currentTransitionAfterUpscaled != transitionAfterUpscaled
+            || currentIsCompareMode != isCompareMode
+
+        let layoutChanged = currentIsRightToLeft != isRightToLeft
+
+        let backgroundChanged = currentBackground != background
+            || currentTexture != texture
+            || currentTextureOpacity != textureOpacity
+            || currentTextureTarget != textureTarget
+
+        guard upscalerChanged || layoutChanged || backgroundChanged else {
+            return
+        }
+
+        self.currentConfig = config
+        self.currentIsEnabled = isEnabled
+        self.currentTransitionAfterUpscaled = transitionAfterUpscaled
+        self.currentIsCompareMode = isCompareMode
+        self.currentIsRightToLeft = isRightToLeft
+        self.currentBackground = background
+        self.currentTexture = texture
+        self.currentTextureOpacity = textureOpacity
+        self.currentTextureTarget = textureTarget
+
+        if let existing = hostingController {
+            existing.rootView = buildPageView()
+        }
+    }
+
+    func updateCompareMode(_ isCompareMode: Bool) {
+        guard currentIsCompareMode != isCompareMode else { return }
+        self.currentIsCompareMode = isCompareMode
+        if let existing = hostingController {
+            existing.rootView = buildPageView()
+        }
+    }
+
     func updateBackground(
         background: ReaderBackground,
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTarget: ReaderTextureTarget
     ) {
-        guard currentBackground != background
-            || currentTexture != texture
-            || currentTextureOpacity != textureOpacity
-            || currentTextureTarget != textureTarget else {
-            return
-        }
-        self.currentBackground = background
-        self.currentTexture = texture
-        self.currentTextureOpacity = textureOpacity
-        self.currentTextureTarget = textureTarget
-        if let existing = hostingController {
-            existing.rootView = buildPageView()
-        }
+        updateConfiguration(
+            config: currentConfig ?? ImageUpscalerConfig(),
+            isEnabled: currentIsEnabled,
+            transitionAfterUpscaled: currentTransitionAfterUpscaled,
+            isCompareMode: currentIsCompareMode,
+            isRightToLeft: currentIsRightToLeft,
+            background: background,
+            texture: texture,
+            textureOpacity: textureOpacity,
+            textureTarget: textureTarget
+        )
     }
 
     private func buildPageView() -> ComicPageCellView {
