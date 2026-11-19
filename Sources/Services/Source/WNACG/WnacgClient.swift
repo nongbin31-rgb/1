@@ -224,11 +224,11 @@ public actor WnacgClient {
         return body
     }
 
-    private nonisolated func getApiJson(
+    private nonisolated func getApiJsonData(
         action: String,
         queryParameters: [String: String] = [:],
         domain: String
-    ) async throws -> [String: Any] {
+    ) async throws -> Data {
         guard var comps = URLComponents(string: "\(domain)/") else {
             throw MangaSourceError.invalidURL(domain)
         }
@@ -266,6 +266,13 @@ public actor WnacgClient {
         if codeStr != "0" {
             let msg = obj["msg"].map { String(describing: $0) } ?? "WNACG API 返回错误码 \(codeStr)"
             throw MangaSourceError.decodingFailed(msg)
+        }
+        return data
+    }
+
+    private func decodeJsonObject(_ data: Data) throws -> [String: Any] {
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw MangaSourceError.decodingFailed("WNACG API 返回格式异常")
         }
         return obj
     }
@@ -381,8 +388,8 @@ public actor WnacgClient {
             return []
         }
 
-        let payload = try await executeApiWithFailover { domain in
-            try await self.getApiJson(
+        let rawData = try await executeApiWithFailover { domain in
+            try await self.getApiJsonData(
                 action: "albums",
                 queryParameters: [
                     "cate_id": String(numericCate),
@@ -392,18 +399,20 @@ public actor WnacgClient {
                 domain: domain
             )
         }
+        let payload = try decodeJsonObject(rawData)
         guard let data = payload["data"] as? [String: Any] else { return [] }
         return parseApiMangaList(data["list"], sourceID: sourceID)
     }
 
     private func searchViaApi(sourceID: String, query: String, page: Int) async throws -> [Manga] {
-        let payload = try await executeApiWithFailover { domain in
-            try await self.getApiJson(
+        let rawData = try await executeApiWithFailover { domain in
+            try await self.getApiJsonData(
                 action: "search",
                 queryParameters: ["kw": query, "page": String(page)],
                 domain: domain
             )
         }
+        let payload = try decodeJsonObject(rawData)
         guard let data = payload["data"] as? [String: Any] else { return [] }
         return parseApiMangaList(data["list"], sourceID: sourceID)
     }
@@ -412,21 +421,22 @@ public actor WnacgClient {
         sourceID: String,
         manga: Manga
     ) async throws -> (manga: Manga, chapters: [MangaChapter])? {
-        let payload = try await executeApiWithFailover { domain in
-            try await self.getApiJson(
+        let rawDetailData = try await executeApiWithFailover { domain in
+            try await self.getApiJsonData(
                 action: "detail",
                 queryParameters: ["aid": manga.id],
                 domain: domain
             )
         }
+        let payload = try decodeJsonObject(rawDetailData)
         guard let data = payload["data"] as? [String: Any] else { return nil }
 
         let isSeries = readInt(data["is_series"]) == 1
         var chapters: [MangaChapter] = []
 
         if isSeries {
-            let chaptersPayload = try await executeApiWithFailover { domain in
-                try await self.getApiJson(
+            let rawChaptersData = try await executeApiWithFailover { domain in
+                try await self.getApiJsonData(
                     action: "chapters",
                     queryParameters: [
                         "sid": manga.id,
@@ -437,6 +447,7 @@ public actor WnacgClient {
                     domain: domain
                 )
             }
+            let chaptersPayload = try decodeJsonObject(rawChaptersData)
             if let chData = chaptersPayload["data"] as? [String: Any],
                let list = chData["list"] as? [[String: Any]] {
                 for (idx, item) in list.enumerated() {
@@ -500,13 +511,14 @@ public actor WnacgClient {
     }
 
     private func getApiChapterPages(aid: String) async throws -> [MangaPage] {
-        let payload = try await executeApiWithFailover { domain in
-            try await self.getApiJson(
+        let rawPagesData = try await executeApiWithFailover { domain in
+            try await self.getApiJsonData(
                 action: "pages",
                 queryParameters: ["aid": aid],
                 domain: domain
             )
         }
+        let payload = try decodeJsonObject(rawPagesData)
         guard let data = payload["data"] as? [String: Any],
               let rawPages = data["pages"] as? [[String: Any]] else {
             return []
@@ -584,6 +596,14 @@ public actor WnacgClient {
         return WnacgParser.parseListHtml(html, baseUrl: domain, sourceID: sourceID)
     }
 
+    private nonisolated func fetchHanmanTagBatch(domain: String, sourceID: String) async -> [Manga] {
+        guard let html = try? await getSafeHtml(
+            path: "/albums-index-tag-%E9%9F%93%E6%BC%AB.html",
+            domain: domain
+        ) else { return [] }
+        return WnacgParser.parseListHtml(html, baseUrl: domain, sourceID: sourceID)
+    }
+
     private nonisolated func fetchHanmanExplore(
         domain: String,
         sourceID: String,
@@ -592,13 +612,7 @@ public actor WnacgClient {
     ) async throws -> [Manga] {
         let label = cateId == "20" ? "韩漫 / 汉化" : "韩漫"
         if page <= 1 {
-            async let tagBatch: [Manga] = {
-                guard let html = try? await getSafeHtml(
-                    path: "/albums-index-tag-%E9%9F%93%E6%BC%AB.html",
-                    domain: domain
-                ) else { return [] }
-                return WnacgParser.parseListHtml(html, baseUrl: domain, sourceID: sourceID)
-            }()
+            async let tagBatch = fetchHanmanTagBatch(domain: domain, sourceID: sourceID)
             async let search1: [Manga] = (try? await fetchWebSearchPage(
                 domain: domain, sourceID: sourceID, query: "韓漫", page: 1
             )) ?? []

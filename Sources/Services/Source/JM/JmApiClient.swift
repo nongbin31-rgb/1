@@ -120,21 +120,7 @@ public actor JmApiClient {
         }
     }
 
-    private func refreshSetting(base: String) async {
-        defer { isFetchingSetting = false }
-        guard let data = try? await performSingleDecryptedRequest(
-            base: base,
-            path: "/setting",
-            queryParameters: [:],
-            tokenSecret: JmCrypto.defaultAppTokenSecret
-        ) as? [String: Any],
-        let imgHost = data["img_host"] else {
-            return
-        }
-        applyResolvedImageDomain(String(describing: imgHost))
-    }
-
-    private nonisolated func decodeJmResponseBody(_ rawBody: String, timestamp ts: Int) throws -> Any? {
+    private nonisolated func decodeJmResponseData(_ rawBody: String, timestamp ts: Int) throws -> Data? {
         let stripped = rawBody.replacingOccurrences(of: "\u{FEFF}", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard stripped.hasPrefix("{") || stripped.hasPrefix("[") else {
@@ -159,9 +145,12 @@ public actor JmApiClient {
             guard let plainData = plain.data(using: .utf8) else {
                 throw MangaSourceError.decodingFailed("JM 解密后 JSON 编码无效")
             }
-            return try JSONSerialization.jsonObject(with: plainData)
+            return plainData
         }
-        return dataField
+        if let dataField, !(dataField is NSNull), JSONSerialization.isValidJSONObject(dataField) {
+            return try JSONSerialization.data(withJSONObject: dataField)
+        }
+        return nil
     }
 
     private func performSingleDecryptedRequest(
@@ -169,7 +158,7 @@ public actor JmApiClient {
         path: String,
         queryParameters: [String: String],
         tokenSecret: String
-    ) async throws -> Any? {
+    ) async throws -> Data? {
         guard var components = URLComponents(string: "\(base)\(path)") else {
             throw MangaSourceError.invalidURL("\(base)\(path)")
         }
@@ -199,7 +188,22 @@ public actor JmApiClient {
         guard let body = String(data: data, encoding: .utf8) else {
             throw MangaSourceError.decodingFailed("JM 响应非 UTF-8 文本")
         }
-        return try decodeJmResponseBody(body, timestamp: ts)
+        return try decodeJmResponseData(body, timestamp: ts)
+    }
+
+    private func refreshSetting(base: String) async {
+        defer { isFetchingSetting = false }
+        guard let plainData = try? await performSingleDecryptedRequest(
+            base: base,
+            path: "/setting",
+            queryParameters: [:],
+            tokenSecret: JmCrypto.defaultAppTokenSecret
+        ),
+        let data = try? JSONSerialization.jsonObject(with: plainData) as? [String: Any],
+        let imgHost = data["img_host"] else {
+            return
+        }
+        applyResolvedImageDomain(String(describing: imgHost))
     }
 
     public func requestDecryptedJson(
@@ -220,7 +224,8 @@ public actor JmApiClient {
             triedBases: triedBases
         )
         if firstTry.hit {
-            return firstTry.payload
+            guard let jsonData = firstTry.payload else { return nil }
+            return try JSONSerialization.jsonObject(with: jsonData)
         }
         triedBases = firstTry.triedBases
         if let err = firstTry.lastError {
@@ -239,7 +244,8 @@ public actor JmApiClient {
                     triedBases: triedBases
                 )
                 if secondTry.hit {
-                    return secondTry.payload
+                    guard let jsonData = secondTry.payload else { return nil }
+                    return try JSONSerialization.jsonObject(with: jsonData)
                 }
                 if let err = secondTry.lastError {
                     lastError = err
@@ -256,7 +262,7 @@ public actor JmApiClient {
         queryParameters: [String: String],
         tokenSecret: String,
         triedBases initialTried: Set<String>
-    ) async -> (hit: Bool, payload: Any?, triedBases: Set<String>, lastError: Error?) {
+    ) async -> (hit: Bool, payload: Data?, triedBases: Set<String>, lastError: Error?) {
         var triedBases = initialTried
         let pending = bases.filter { triedBases.insert($0).inserted }
         guard !pending.isEmpty else { return (false, nil, triedBases, nil) }
@@ -287,8 +293,8 @@ public actor JmApiClient {
             let end = min(idx + batchSize, pending.count)
             let batch = Array(pending[idx..<end])
 
-            let outcome: (winnerBase: String?, payload: Any?, error: Error?) = await withTaskGroup(
-                of: (base: String, payload: Any?, error: Error?).self
+            let outcome: (winnerBase: String?, payload: Data?, error: Error?) = await withTaskGroup(
+                of: (base: String, payload: Data?, error: Error?).self
             ) { group in
                 for candidate in batch {
                     group.addTask {
