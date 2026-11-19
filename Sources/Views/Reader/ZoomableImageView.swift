@@ -195,23 +195,11 @@ public struct ZoomableImageView: UIViewRepresentable {
                 // 2. 真实物理纸张材质微粒/纹理覆盖 (统一采用稳定可靠的正片叠底 multiplyBlendMode，彻底杜绝失效泛白)
                 imageView.softLightOverlayView.isHidden = true
 
-                let texImg: UIImage?
-                let effectiveOpacity: Double
-                if texture == .proceduralStucco {
-                    texImg = ProceduralStuccoTextureManager.shared.getPaperGrainTile()
-                    effectiveOpacity = ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
-                } else {
-                    texImg = ReaderTextureCache.shared.textureImage(for: texture)
-                    effectiveOpacity = opacity
-                }
-
-                if let texImg {
+                if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
                     imageView.textureClipContainer.isHidden = false
-                    imageView.textureOverlayView.contentMode = (texture == .proceduralStucco) ? .scaleToFill : .scaleAspectFill
-                    imageView.textureOverlayView.image = (texture == .proceduralStucco)
-                        ? texImg.resizableImage(withCapInsets: .zero, resizingMode: .tile)
-                        : texImg
-                    imageView.textureClipContainer.alpha = CGFloat(effectiveOpacity)
+                    imageView.textureOverlayView.contentMode = .scaleAspectFill
+                    imageView.textureOverlayView.image = texImg
+                    imageView.textureClipContainer.alpha = CGFloat(opacity)
                     imageView.textureOverlayView.alpha = 1.0
                 } else {
                     imageView.textureClipContainer.isHidden = true

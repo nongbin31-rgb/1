@@ -349,23 +349,12 @@ public struct ReaderView: View {
             .ignoresSafeArea()
         case .texture:
             ZStack {
-                if store.readerTextureType == .proceduralStucco {
-                    if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
-                        StuccoWallBackgroundView(
-                            baseColor: store.readerTextureType.basePaperSwiftUIColor,
-                            intensity: store.readerTextureOpacity
-                        )
-                    } else {
-                        store.readerTextureType.basePaperSwiftUIColor
-                    }
-                } else {
-                    store.readerTextureType.basePaperSwiftUIColor
-                    if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
-                        PaperTextureOverlayView(
-                            texture: store.readerTextureType,
-                            opacity: store.readerTextureOpacity
-                        )
-                    }
+                store.readerTextureType.basePaperSwiftUIColor
+                if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
+                    PaperTextureOverlayView(
+                        texture: store.readerTextureType,
+                        opacity: store.readerTextureOpacity
+                    )
                 }
             }
             .ignoresSafeArea()
@@ -633,23 +622,6 @@ public struct ReaderView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(Color.white.opacity(0.2), in: Capsule())
-                        .foregroundStyle(.white)
-                    }
-
-                    Spacer()
-
-                    Button {
-                        capturedPreviewImage = resolveCurrentImageForPreview()
-                        showImageFilterSheet = true
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "camera.filters")
-                            Text(store.imageFilterConfig.hasActiveFilters ? "滤镜(\(store.imageFilterConfig.activeFilterTypes.count))" : "画面滤镜")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(store.imageFilterConfig.hasActiveFilters ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
                         .foregroundStyle(.white)
                     }
 

@@ -104,7 +104,7 @@ public struct ReaderBackgroundPickerSheet: View {
                     .font(.headline)
                     .foregroundStyle(.primary)
                 Spacer()
-                Text("拟真纸张与粉刷浮雕微粒")
+                Text("6 款真实纸张与材质")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -139,14 +139,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 ZStack {
                     item.basePaperSwiftUIColor
 
-                    if item == .proceduralStucco {
-                        ProceduralStuccoMultiPassOverlayView(
-                            opacity: 0.65,
-                            phaseAnchor: .local
-                        )
-                        .frame(minWidth: 0, maxWidth: .infinity)
-                        .frame(height: 72)
-                    } else if let img = ReaderTextureCache.shared.textureImage(for: item) {
+                    if let img = ReaderTextureCache.shared.textureImage(for: item) {
                         Image(uiImage: img)
                             .resizable(resizingMode: .stretch)
                             .scaledToFill()

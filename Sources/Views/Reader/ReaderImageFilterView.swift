@@ -42,7 +42,7 @@ public struct ReaderImageFilterView: View {
                     // 顶部导航栏（全屏预览时自动淡出）
                     if !isFullScreenPreview {
                         topNavigationBar
-                            .padding(.top, windowGeo.safeAreaInsets.top)
+                            .padding(.top, safeAreaTop)
                             .background(Color(uiColor: .systemGroupedBackground))
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -76,7 +76,7 @@ public struct ReaderImageFilterView: View {
                                     .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
                             }
                             .padding(.trailing, 20)
-                            .padding(.top, windowGeo.safeAreaInsets.top + 10)
+                            .padding(.top, safeAreaTop + 10)
                         }
                         Spacer()
                     }
@@ -86,7 +86,7 @@ public struct ReaderImageFilterView: View {
                 // 长按对比原图提示悬浮胶囊
                 if isPressingToCompare {
                     VStack {
-                        Spacer().frame(height: max(windowGeo.safeAreaInsets.top + 60, 80))
+                        Spacer().frame(height: max(safeAreaTop + 60, 80))
                         HStack(spacing: 6) {
                             Image(systemName: "eye.fill")
                                 .font(.caption.bold())
@@ -269,7 +269,7 @@ public struct ReaderImageFilterView: View {
                             }
                         }
 
-                        Spacer().frame(height: 20)
+                        Spacer().frame(height: max(safeAreaBottom, 20) + 12)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
@@ -277,6 +277,7 @@ public struct ReaderImageFilterView: View {
                 .frame(maxHeight: windowHeight * 0.44)
             }
         }
+        .padding(.bottom, isSheetCollapsed ? safeAreaBottom : 0)
         .background(
             Color(uiColor: .systemGroupedBackground)
                 .clipShape(RoundedCornerShape(radius: 22, corners: [.topLeft, .topRight]))
@@ -567,6 +568,65 @@ public struct ReaderImageFilterView: View {
                 self.isProcessing = false
             }
         }
+    }
+
+    // MARK: - 安全区域安全边距解析（物理硬件级基线兜底）
+
+    private var safeAreaTop: CGFloat {
+        max(safeAreaInsetsResolved.top, hardwareBaselineSafeAreaTop)
+    }
+
+    private var safeAreaBottom: CGFloat {
+        max(safeAreaInsetsResolved.bottom, hardwareBaselineSafeAreaBottom)
+    }
+
+    private var safeAreaInsetsResolved: UIEdgeInsets {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+
+        if let scene = activeScene {
+            let validWindows = scene.windows.filter {
+                $0.bounds.width > 0 && ($0.safeAreaInsets.top > 0 || $0.safeAreaInsets.bottom > 0)
+            }
+            if let window = validWindows.first(where: { $0.isKeyWindow }) ?? validWindows.first {
+                var insets = window.safeAreaInsets
+                let isPortrait = (scene.interfaceOrientation.isPortrait || window.bounds.height >= window.bounds.width)
+                if isPortrait && insets.top < hardwareBaselineSafeAreaTop {
+                    insets.top = hardwareBaselineSafeAreaTop
+                }
+                if isPortrait && insets.bottom < 34 && hardwareBaselineSafeAreaTop > 24 {
+                    insets.bottom = 34
+                }
+                return insets
+            }
+        }
+
+        let screenBounds = UIScreen.main.bounds
+        let isPortrait = screenBounds.height >= screenBounds.width
+        if isPortrait {
+            return UIEdgeInsets(top: hardwareBaselineSafeAreaTop, left: 0, bottom: hardwareBaselineSafeAreaBottom, right: 0)
+        } else {
+            return UIEdgeInsets(top: 0, left: hardwareBaselineSafeAreaTop, bottom: 21, right: hardwareBaselineSafeAreaTop)
+        }
+    }
+
+    private var hardwareBaselineSafeAreaTop: CGFloat {
+        let maxDimension = max(UIScreen.main.bounds.height, UIScreen.main.bounds.width)
+        if maxDimension >= 852 {
+            // 灵动岛机型 (iPhone 14 Pro/Pro Max, 15/15 Pro 全系, 16 全系)
+            return 59
+        } else if maxDimension >= 812 {
+            // 刘海屏机型 (iPhone X/XS/XR/11/12/13/14 标准版)
+            return 47
+        } else {
+            // 经典无刘海机型或 iPad
+            return 24
+        }
+    }
+
+    private var hardwareBaselineSafeAreaBottom: CGFloat {
+        let maxDimension = max(UIScreen.main.bounds.height, UIScreen.main.bounds.width)
+        return maxDimension >= 812 ? 34 : 12
     }
 }
 

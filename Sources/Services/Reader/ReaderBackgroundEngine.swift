@@ -27,20 +27,29 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取指定纸张纹理图像（带内存二级缓存）
     public func textureImage(for type: ReaderTextureType) -> UIImage? {
-        if type == .proceduralStucco {
-            return ProceduralStuccoTextureManager.shared.getPaperGrainTile()
-        }
-
         let key = type.rawValue as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
 
+        // 优先全名 (例如 Texture_0_classic_paper) 加载，次选短名 (例如 Texture_0) 加载
         let loaded = loadTextureFromBundle(named: type.rawValue)
+            ?? loadTextureFromBundle(named: shortKey(for: type))
         if let img = loaded {
             cache.setObject(img, forKey: key)
         }
         return loaded
+    }
+
+    private func shortKey(for type: ReaderTextureType) -> String {
+        switch type {
+        case .classic:      return "Texture_0"
+        case .brownPaper:   return "Texture_1"
+        case .whiteWall:    return "Texture_2"
+        case .grungePaper:  return "Texture_3"
+        case .tissueMarble: return "Texture_4"
+        case .wood:         return "Texture_5"
+        }
     }
 
     /// 获取设置页小尺寸样张预览图
@@ -248,13 +257,7 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     private func updateTextureImage() {
-        if currentTexture == .proceduralStucco {
-            let bgStucco = ProceduralStuccoTextureManager.shared.getStuccoTile()
-            textureOverlayView.contentMode = .scaleToFill
-            textureOverlayView.image = bgStucco.resizableImage(withCapInsets: .zero, resizingMode: .tile)
-            textureOverlayView.layer.compositingFilter = nil
-            textureOverlayView.alpha = CGFloat(ProceduralStuccoTextureManager.stuccoPerceptualAlpha(for: Double(textureOpacity)))
-        } else if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
+        if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
             textureOverlayView.contentMode = .scaleAspectFill
             textureOverlayView.image = img
             textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
@@ -325,40 +328,7 @@ public enum TexturePhaseAnchor: Equatable, Sendable {
     case namedSpace(String)
 }
 
-/// 屏幕空间锁定的粉刷批荡底布视图 (SwiftUI)
-/// 100% 对齐 DoveShelf StuccoWallBackground：底色与 42 处抹刀批荡印痕 + 23,500 颗微观浮雕砂砾屏幕空间锁定
-public struct StuccoWallBackgroundView: View {
-    public let baseColor: Color
-    public let intensity: Double
-
-    public init(
-        baseColor: Color = Color(red: 0.965, green: 0.957, blue: 0.941),
-        intensity: Double = 0.35
-    ) {
-        self.baseColor = baseColor
-        self.intensity = intensity
-    }
-
-    public var body: some View {
-        let stucco = ProceduralStuccoTextureManager.shared.getStuccoTile()
-        let alpha = ProceduralStuccoTextureManager.stuccoPerceptualAlpha(for: intensity)
-
-        ZStack {
-            baseColor
-
-            if alpha > 0 {
-                Image(uiImage: stucco)
-                    .resizable(resizingMode: .tile)
-                    .opacity(alpha)
-                    .allowsHitTesting(false)
-            }
-        }
-        .ignoresSafeArea()
-    }
-}
-
 /// 拟真纸张纹理正片叠底覆盖层 (SwiftUI)
-/// 默认与所属页面/漫画视图刚性贴合，滚动或翻页时颗粒随漫画一同移动，绝不固定在屏幕上产生抽离感
 /// 严格采用正片叠底 Multiply 模式，暗部与深色墨水天然吸收，彻底杜绝任何泛白与发灰
 public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
@@ -376,14 +346,8 @@ public struct PaperTextureOverlayView: View {
     }
 
     public var body: some View {
-        let uiImg: UIImage? = (texture == .proceduralStucco)
-            ? ProceduralStuccoTextureManager.shared.getPaperGrainTile()
-            : ReaderTextureCache.shared.textureImage(for: texture)
-
-        if let img = uiImg {
-            let effectiveOpacity = (texture == .proceduralStucco)
-                ? ProceduralStuccoTextureManager.perceptualAlpha(for: opacity)
-                : opacity
+        if let img = ReaderTextureCache.shared.textureImage(for: texture) {
+            let effectiveOpacity = opacity
 
             switch phaseAnchor {
             case .local:
@@ -427,8 +391,7 @@ public struct PaperTextureOverlayView: View {
     }
 }
 
-/// MangaPrism 独家粉刷颗粒正片叠底覆层 (SwiftUI)
-/// 严格采用正片叠底 Multiply 模式，呈现细腻纸浆微纤维与粉刷矿物微粒，暗部零泛白
+/// 兼容性覆层 (向后兼容历史调用)
 public struct ProceduralStuccoMultiPassOverlayView: View {
     public let opacity: Double
     public let phaseAnchor: TexturePhaseAnchor
@@ -440,14 +403,14 @@ public struct ProceduralStuccoMultiPassOverlayView: View {
 
     public var body: some View {
         PaperTextureOverlayView(
-            texture: .proceduralStucco,
+            texture: .whiteWall,
             opacity: opacity,
             phaseAnchor: phaseAnchor
         )
     }
 }
 
-/// MangaPrism 独家粉刷颗粒独立覆盖层 (SwiftUI)
+/// 兼容性白墙覆盖层 (向后兼容历史调用)
 public struct ProceduralStuccoOverlayView: View {
     public let opacity: Double
     public let phaseAnchor: TexturePhaseAnchor
@@ -458,7 +421,33 @@ public struct ProceduralStuccoOverlayView: View {
     }
 
     public var body: some View {
-        ProceduralStuccoMultiPassOverlayView(opacity: opacity, phaseAnchor: phaseAnchor)
+        PaperTextureOverlayView(
+            texture: .whiteWall,
+            opacity: opacity,
+            phaseAnchor: phaseAnchor
+        )
+    }
+}
+
+/// 兼容性白墙底布视图 (向后兼容历史调用)
+public struct StuccoWallBackgroundView: View {
+    public let baseColor: Color
+    public let intensity: Double
+
+    public init(
+        baseColor: Color = Color(red: 0.960, green: 0.960, blue: 0.953),
+        intensity: Double = 0.35
+    ) {
+        self.baseColor = baseColor
+        self.intensity = intensity
+    }
+
+    public var body: some View {
+        ZStack {
+            baseColor
+            PaperTextureOverlayView(texture: .whiteWall, opacity: intensity)
+        }
+        .ignoresSafeArea()
     }
 }
 
