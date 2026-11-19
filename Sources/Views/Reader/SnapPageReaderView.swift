@@ -2,7 +2,7 @@ import AudioToolbox
 import SwiftUI
 import UIKit
 
-/// 自定义水平阻尼磁吸分页流式布局（重写 targetContentOffset 确保手指离开时弹簧对齐整页）
+/// 自定义水平阻尼磁吸分页流式布局（基于全屏尺寸与系统原生分页引擎联动）
 public final class SnapPageFlowLayout: UICollectionViewFlowLayout {
     public override init() {
         super.init()
@@ -14,36 +14,15 @@ public final class SnapPageFlowLayout: UICollectionViewFlowLayout {
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-
-    public override func targetContentOffset(
-        forProposedContentOffset proposedOffset: CGPoint,
-        withScrollingVelocity velocity: CGPoint
-    ) -> CGPoint {
-        guard let cv = collectionView else { return proposedOffset }
-        let pageWidth = cv.bounds.width
-        guard pageWidth > 0 else { return proposedOffset }
-
-        let currentOffset = cv.contentOffset.x
-        var targetIndex: CGFloat
-
-        if abs(velocity.x) > 0.25 {
-            targetIndex = velocity.x > 0 ? ceil(currentOffset / pageWidth) : floor(currentOffset / pageWidth)
-        } else {
-            targetIndex = round(proposedOffset.x / pageWidth)
-        }
-
-        let maxIndex = CGFloat(max(0, cv.numberOfItems(inSection: 0) - 1))
-        let clampedIndex = max(0, min(maxIndex, targetIndex))
-        return CGPoint(x: clampedIndex * pageWidth, y: proposedOffset.y)
-    }
 }
 
-/// 磁吸吸附滑动与零延迟即时阅读容器（基于 UICollectionView + 自定义阻尼吸附布局）
+/// 磁吸吸附滑动与零延迟即时阅读容器（基于 UICollectionView + 原生整页吸附）
 /// 特性：
 /// 1. 消除手势冲突：单页放大缩放时动态锁死外层横向滑动，恢复 1.0 时释放；
-/// 2. 磁吸对齐：滑行减速时自动阻尼吸附整页，无半页停靠尴尬；
-/// 3. 零延迟模式：关闭动画时以毫秒级即时跳转；
-/// 4. RTL/LTR 原生感知与触觉联动。
+/// 2. 磁吸对齐：滑行减速时自动整页吸附，无半页停靠，彻底解决 RTL 与 LTR 下的反向跳页震荡；
+/// 3. 单向状态驱动：精准区分手势滚动与代码导航，彻底杜绝“来回翻”死循环；
+/// 4. 零延迟模式：关闭动画时以毫秒级即时跳转；
+/// 5. RTL/LTR 原生感知与触觉联动。
 public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let pages: [MangaPage]
     public let upscalerConfig: ImageUpscalerConfig
@@ -108,8 +87,15 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public func updateUIViewController(_ uiViewController: SnapPageViewController, context: Context) {
         context.coordinator.parent = self
 
-        // 更新背景颜色
+        // 1. 更新背景颜色
         uiViewController.updateBackgroundStyle(background)
+
+        // 2. 立即更新当前可见 Cell 的背景与纸质纹理，无需等待下一页
+        uiViewController.updateVisibleCellsBackground(
+            background: background,
+            texture: texture,
+            textureOpacity: textureOpacity
+        )
 
         uiViewController.applyConfiguration(
             pages: pages,
@@ -158,7 +144,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 textureOpacity: parent.textureOpacity,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate,
-                onZoomChanged: { [weak self, weak collectionView] scale in
+                onZoomChanged: { [weak collectionView] scale in
                     // 核心手势隔离：当单页处于放大状态时，锁死外层水平翻页手势，杜绝冲突！
                     let shouldEnableScroll = scale <= 1.01
                     if collectionView?.isScrollEnabled != shouldEnableScroll {
@@ -182,22 +168,27 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
             collectionView.bounds.size
         }
 
+        // 手势开始拖拽：解除可能遗留的代码滚动状态
+        public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            viewController?.isProgrammaticScrolling = false
+        }
+
+        // 惯性减速停止
         public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            updateCurrentPageFromScroll(scrollView)
+            viewController?.handlePageSettled()
         }
 
-        public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-            updateCurrentPageFromScroll(scrollView)
-        }
-
-        private func updateCurrentPageFromScroll(_ scrollView: UIScrollView) {
-            let pageWidth = scrollView.bounds.width
-            guard pageWidth > 0 else { return }
-            let index = Int(round(scrollView.contentOffset.x / pageWidth))
-            if parent.pages.indices.contains(index), parent.currentPageIndex != index {
-                parent.currentPageIndex = index
-                playPageFeedback()
+        // 慢速拖拽释放（未触发惯性减速）
+        public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate {
+                viewController?.handlePageSettled()
             }
+        }
+
+        // 代码动画滚动完成
+        public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            viewController?.isProgrammaticScrolling = false
+            viewController?.handlePageSettled()
         }
 
         func playPageFeedback() {
@@ -210,13 +201,20 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
 }
 
 public final class SnapPageViewController: UIViewController {
-    private let coordinator: SnapPageReaderView.Coordinator
+    fileprivate let coordinator: SnapPageReaderView.Coordinator
     var collectionView: UICollectionView!
-    private var layout: SnapPageFlowLayout!
-    private var lastRecordedIndex: Int = -1
+    fileprivate var layout: SnapPageFlowLayout!
+
+    fileprivate var currentDisplayIndex: Int
+    fileprivate var pages: [MangaPage] = []
+    fileprivate var pendingTargetIndex: Int?
+    fileprivate var isProgrammaticScrolling = false
+    fileprivate var hasInitiallyPositioned = false
 
     init(coordinator: SnapPageReaderView.Coordinator) {
         self.coordinator = coordinator
+        self.currentDisplayIndex = coordinator.parent.currentPageIndex
+        self.pages = coordinator.parent.pages
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -231,10 +229,10 @@ public final class SnapPageViewController: UIViewController {
             color = .systemBackground
         case .light:
             color = .white
-        case .dark, .immersive:
+        case .dark:
             color = .black
-        case .texture:
-            color = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+        case .immersive, .texture:
+            color = .clear
         }
         view.backgroundColor = color
         if isViewLoaded {
@@ -242,14 +240,31 @@ public final class SnapPageViewController: UIViewController {
         }
     }
 
+    func updateVisibleCellsBackground(
+        background: ReaderBackground,
+        texture: ReaderTextureType,
+        textureOpacity: Double
+    ) {
+        guard isViewLoaded, let cv = collectionView else { return }
+        for cell in cv.visibleCells {
+            if let hostingCell = cell as? SnapPageHostingCell {
+                hostingCell.updateBackground(
+                    background: background,
+                    texture: texture,
+                    textureOpacity: textureOpacity
+                )
+            }
+        }
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        updateBackgroundStyle(coordinator.parent.background)
 
         layout = SnapPageFlowLayout()
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
-        collectionView.backgroundColor = .black
-        collectionView.isPagingEnabled = false // 使用 SnapPageFlowLayout 实现自然磁吸阻尼
+        collectionView.backgroundColor = view.backgroundColor
+        collectionView.isPagingEnabled = true
         collectionView.decelerationRate = .fast
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.showsVerticalScrollIndicator = false
@@ -268,25 +283,115 @@ public final class SnapPageViewController: UIViewController {
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        layout.itemSize = collectionView.bounds.size
-        layout.invalidateLayout()
+        let size = collectionView.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+
+        if layout.itemSize != size {
+            layout.itemSize = size
+            layout.invalidateLayout()
+        }
+
+        if let pending = pendingTargetIndex {
+            pendingTargetIndex = nil
+            scrollToPage(at: pending, animated: false)
+        } else if !hasInitiallyPositioned && pages.indices.contains(currentDisplayIndex) {
+            hasInitiallyPositioned = true
+            scrollToPage(at: currentDisplayIndex, animated: false)
+        }
     }
 
     func applyConfiguration(pages: [MangaPage], isRightToLeft: Bool, targetIndex: Int, animated: Bool) {
         guard isViewLoaded else { return }
 
+        let oldPagesCount = self.pages.count
+        self.pages = pages
+
         let semantic: UISemanticContentAttribute = isRightToLeft ? .forceRightToLeft : .forceLeftToRight
         if collectionView.semanticContentAttribute != semantic {
             collectionView.semanticContentAttribute = semantic
             collectionView.reloadData()
+            currentDisplayIndex = targetIndex
+            scrollToPage(at: targetIndex, animated: false)
+            return
         }
 
-        if lastRecordedIndex != targetIndex && pages.indices.contains(targetIndex) {
-            lastRecordedIndex = targetIndex
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                let indexPath = IndexPath(item: targetIndex, section: 0)
-                self.collectionView.scrollToItem(at: indexPath, at: .centeredHorizontally, animated: animated)
+        let isFirstDataLoad = (oldPagesCount == 0 && !pages.isEmpty)
+        if oldPagesCount != pages.count {
+            collectionView.reloadData()
+        }
+
+        guard pages.indices.contains(targetIndex) else { return }
+
+        if isFirstDataLoad || !hasInitiallyPositioned {
+            hasInitiallyPositioned = true
+            currentDisplayIndex = targetIndex
+            scrollToPage(at: targetIndex, animated: false)
+            return
+        }
+
+        // 如果展示的当前页与 targetIndex 一致，则无需额外滚动
+        if currentDisplayIndex == targetIndex {
+            return
+        }
+
+        // 如果用户正在拖拽交互中，避免外部状态更新打断手势
+        if collectionView.isTracking || collectionView.isDragging {
+            return
+        }
+
+        currentDisplayIndex = targetIndex
+        scrollToPage(at: targetIndex, animated: animated)
+    }
+
+    func scrollToPage(at index: Int, animated: Bool) {
+        guard pages.indices.contains(index) else { return }
+        guard collectionView.bounds.width > 0, collectionView.bounds.height > 0 else {
+            pendingTargetIndex = index
+            return
+        }
+
+        let indexPath = IndexPath(item: index, section: 0)
+
+        if let current = determineCurrentPageIndex(), current == index {
+            isProgrammaticScrolling = false
+            return
+        }
+
+        if animated {
+            isProgrammaticScrolling = true
+            collectionView.scrollToItem(at: indexPath, at: .centeredHorizontally, animated: true)
+        } else {
+            isProgrammaticScrolling = false
+            collectionView.scrollToItem(at: indexPath, at: .centeredHorizontally, animated: false)
+        }
+    }
+
+    func determineCurrentPageIndex() -> Int? {
+        guard let cv = collectionView, cv.bounds.width > 0, cv.bounds.height > 0 else { return nil }
+        let centerPoint = CGPoint(x: cv.bounds.midX, y: cv.bounds.midY)
+        if let indexPath = cv.indexPathForItem(at: centerPoint) {
+            return indexPath.item
+        }
+        let visibleIndexPaths = cv.indexPathsForVisibleItems
+        guard !visibleIndexPaths.isEmpty else { return nil }
+        let closest = visibleIndexPaths.min(by: { a, b in
+            let centerA = cv.layoutAttributesForItem(at: a)?.center.x ?? .greatestFiniteMagnitude
+            let centerB = cv.layoutAttributesForItem(at: b)?.center.x ?? .greatestFiniteMagnitude
+            return abs(centerA - centerPoint.x) < abs(centerB - centerPoint.x)
+        })
+        return closest?.item
+    }
+
+    func handlePageSettled() {
+        guard !isProgrammaticScrolling else { return }
+        guard let newIndex = determineCurrentPageIndex() else { return }
+        guard pages.indices.contains(newIndex) else { return }
+
+        if currentDisplayIndex != newIndex {
+            currentDisplayIndex = newIndex
+            if coordinator.parent.currentPageIndex != newIndex {
+                coordinator.parent.currentPageIndex = newIndex
+                coordinator.playPageFeedback()
             }
         }
     }
@@ -297,6 +402,19 @@ final class SnapPageHostingCell: UICollectionViewCell {
     static let reuseIdentifier = "SnapPageHostingCell"
 
     private var hostingController: UIHostingController<ComicPageCellView>?
+    private var currentPage: MangaPage?
+    private var currentConfig: ImageUpscalerConfig?
+    private var currentIsEnabled: Bool = false
+    private var currentTransitionAfterUpscaled: Bool = true
+    private var currentIsCompareMode: Bool = false
+    private var currentIsRightToLeft: Bool = false
+    private var currentBackground: ReaderBackground = .followSystem
+    private var currentTexture: ReaderTextureType = .classic
+    private var currentTextureOpacity: Double = 0.4
+    private var currentOnSingleTap: (() -> Void)?
+    private var currentOnStatusUpdate: ((String) -> Void)?
+    private var currentOnZoomChanged: ((CGFloat) -> Void)?
+    private var currentOnImageLoaded: ((UIImage) -> Void)?
 
     func configure(
         page: MangaPage,
@@ -313,22 +431,21 @@ final class SnapPageHostingCell: UICollectionViewCell {
         onZoomChanged: @escaping (CGFloat) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
-        let pageView = ComicPageCellView(
-            page: page,
-            config: config,
-            isEnabled: isEnabled,
-            transitionAfterUpscaled: transitionAfterUpscaled,
-            isCompareMode: isCompareMode,
-            showSpineShadow: false,
-            isRightToLeft: isRightToLeft,
-            background: background,
-            texture: texture,
-            textureOpacity: textureOpacity,
-            onSingleTap: onSingleTap,
-            onStatusUpdate: onStatusUpdate,
-            onZoomChanged: onZoomChanged,
-            onImageLoaded: onImageLoaded
-        )
+        self.currentPage = page
+        self.currentConfig = config
+        self.currentIsEnabled = isEnabled
+        self.currentTransitionAfterUpscaled = transitionAfterUpscaled
+        self.currentIsCompareMode = isCompareMode
+        self.currentIsRightToLeft = isRightToLeft
+        self.currentBackground = background
+        self.currentTexture = texture
+        self.currentTextureOpacity = textureOpacity
+        self.currentOnSingleTap = onSingleTap
+        self.currentOnStatusUpdate = onStatusUpdate
+        self.currentOnZoomChanged = onZoomChanged
+        self.currentOnImageLoaded = onImageLoaded
+
+        let pageView = buildPageView()
 
         if let existing = hostingController {
             existing.rootView = pageView
@@ -342,8 +459,60 @@ final class SnapPageHostingCell: UICollectionViewCell {
         }
     }
 
+    func updateBackground(
+        background: ReaderBackground,
+        texture: ReaderTextureType,
+        textureOpacity: Double
+    ) {
+        guard currentBackground != background || currentTexture != texture || currentTextureOpacity != textureOpacity else {
+            return
+        }
+        self.currentBackground = background
+        self.currentTexture = texture
+        self.currentTextureOpacity = textureOpacity
+        if let existing = hostingController {
+            existing.rootView = buildPageView()
+        }
+    }
+
+    private func buildPageView() -> ComicPageCellView {
+        guard let page = currentPage, let config = currentConfig else {
+            return ComicPageCellView(
+                page: MangaPage(index: 0, imageURL: ""),
+                config: ImageUpscalerConfig(),
+                background: currentBackground,
+                texture: currentTexture,
+                textureOpacity: currentTextureOpacity,
+                onSingleTap: {},
+                onStatusUpdate: { _ in }
+            )
+        }
+        return ComicPageCellView(
+            page: page,
+            config: config,
+            isEnabled: currentIsEnabled,
+            transitionAfterUpscaled: currentTransitionAfterUpscaled,
+            isCompareMode: currentIsCompareMode,
+            showSpineShadow: false,
+            isRightToLeft: currentIsRightToLeft,
+            background: currentBackground,
+            texture: currentTexture,
+            textureOpacity: currentTextureOpacity,
+            onSingleTap: currentOnSingleTap ?? {},
+            onStatusUpdate: currentOnStatusUpdate ?? { _ in },
+            onZoomChanged: currentOnZoomChanged,
+            onImageLoaded: currentOnImageLoaded
+        )
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if let hcView = hostingController?.view, hcView.frame != contentView.bounds {
+            hcView.frame = contentView.bounds
+        }
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
-        // 复用时重置
     }
 }

@@ -90,7 +90,8 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
         self.id = id
         self.sourceID = sourceID
         self.title = title
-        self.author = author
+        let formattedAuthor = MangaAuthorFormatter.format(author)
+        self.author = formattedAuthor.isEmpty ? author : formattedAuthor
         self.coverURL = coverURL
         self.coverHeaders = coverHeaders
         self.summary = summary
@@ -107,7 +108,9 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
         self.id = try container.decode(String.self, forKey: .id)
         self.sourceID = try container.decode(String.self, forKey: .sourceID)
         self.title = try container.decode(String.self, forKey: .title)
-        self.author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        let rawAuthor = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        let formattedAuthor = MangaAuthorFormatter.format(rawAuthor)
+        self.author = formattedAuthor.isEmpty ? rawAuthor : formattedAuthor
         self.coverURL = try container.decodeIfPresent(String.self, forKey: .coverURL) ?? ""
         self.coverHeaders = try container.decodeIfPresent([String: String].self, forKey: .coverHeaders) ?? [:]
         self.summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
@@ -115,8 +118,118 @@ public struct Manga: Identifiable, Codable, Equatable, Hashable, Sendable {
         self.statusText = try container.decodeIfPresent(String.self, forKey: .statusText) ?? ""
     }
 
+    public var displayAuthor: String {
+        let formatted = MangaAuthorFormatter.format(author)
+        return formatted.isEmpty ? (author.isEmpty ? "佚名" : author) : formatted
+    }
+
     public var compositeKey: String {
         "\(sourceID)::\(id)"
+    }
+}
+
+/// 作者字符串解码与规整格式化工具
+public enum MangaAuthorFormatter {
+    private static let unicodeEscapeRegex = try! NSRegularExpression(
+        pattern: #"\\([uU])([0-9a-fA-F]{4,8})"#,
+        options: []
+    )
+    private static let nsArrayItemRegex = try! NSRegularExpression(
+        pattern: #""([^"]*)""#,
+        options: []
+    )
+    private static let titleAuthorBracketRegex = try! NSRegularExpression(
+        pattern: #"(?:\[|\()(.*?)(?:\]|\))"#,
+        options: []
+    )
+
+    /// 解码 \Uxxxx / \uxxxx Unicode 转义字符为标准字符
+    public static func decodeUnicodeEscape(_ text: String) -> String {
+        guard text.contains("\\u") || text.contains("\\U") else { return text }
+        let nsString = text as NSString
+        let matches = unicodeEscapeRegex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+        guard !matches.isEmpty else { return text }
+
+        var result = ""
+        var lastLocation = 0
+
+        for match in matches {
+            let fullRange = match.range
+            if fullRange.location > lastLocation {
+                result += nsString.substring(with: NSRange(location: lastLocation, length: fullRange.location - lastLocation))
+            }
+            let hexRange = match.range(at: 2)
+            let hexStr = nsString.substring(with: hexRange)
+            if let code = UInt32(hexStr, radix: 16), let scalar = UnicodeScalar(code) {
+                result.append(Character(scalar))
+            } else {
+                result += nsString.substring(with: fullRange)
+            }
+            lastLocation = fullRange.location + fullRange.length
+        }
+        if lastLocation < nsString.length {
+            result += nsString.substring(with: NSRange(location: lastLocation, length: nsString.length - lastLocation))
+        }
+        return result
+    }
+
+    /// 将任意对象（字符串、NSArray 描述、[Any] 列表、字典）规范化为以 " / " 分隔的人类可读作者名
+    public static func format(_ raw: Any?) -> String {
+        guard let raw, !(raw is NSNull) else { return "" }
+
+        if let array = raw as? [Any] {
+            let parts = array.compactMap { item -> String? in
+                let formatted = format(item)
+                return formatted.isEmpty ? nil : formatted
+            }
+            return parts.joined(separator: " / ")
+        }
+
+        if let dict = raw as? [String: Any] {
+            if let name = dict["name"] ?? dict["author"] ?? dict["title"] {
+                return format(name)
+            }
+        }
+
+        var str = String(describing: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        if str.isEmpty || str == "<null>" { return "" }
+
+        // 处理形如 (\n  "\\U65e5...",\n  "\\U5800..."\n) 的 NSArray description 字符串
+        if str.hasPrefix("(") && str.hasSuffix(")") {
+            let nsStr = str as NSString
+            let matches = nsArrayItemRegex.matches(in: str, options: [], range: NSRange(location: 0, length: nsStr.length))
+            if !matches.isEmpty {
+                let items = matches.map { match -> String in
+                    let itemStr = nsStr.substring(with: match.range(at: 1))
+                    return decodeUnicodeEscape(itemStr).trimmingCharacters(in: .whitespacesAndNewlines)
+                }.filter { !$0.isEmpty }
+                if !items.isEmpty {
+                    return items.joined(separator: " / ")
+                }
+            }
+        }
+
+        str = decodeUnicodeEscape(str)
+        return str
+    }
+
+    /// 从漫画标题中提取括号中的作者名作为 fallback
+    public static func extractAuthorFromTitle(_ title: String?) -> String? {
+        guard let title, !title.isEmpty else { return nil }
+        let ns = title as NSString
+        let matches = titleAuthorBracketRegex.matches(in: title, range: NSRange(location: 0, length: ns.length))
+        for match in matches.reversed() {
+            let content = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if content.isEmpty { continue }
+            // 过滤明显是话数、语言或版本标识的内容
+            if content.contains("话") || content.contains("話") || content.contains("卷")
+                || content.contains("汉化") || content.contains("漢化") || content.contains("中文")
+                || content.contains("DL版") || content.contains("同人") {
+                continue
+            }
+            return content
+        }
+        return nil
     }
 }
 
@@ -134,6 +247,34 @@ public enum MangaSerialStatusHelper {
         pattern: "未完结|未完結|未完",
         options: []
     )
+    private static let chapterNumberIndicatorRegex = try! NSRegularExpression(
+        pattern: "(?:第\\s*\\d+\\s*[话話卷]|\\b(?:ch|ep|vol)[\\.\\s]*\\d+|\\[\\d+[\\]话話]|\\b\\d+\\s*話|\\b\\d+\\s*话)",
+        options: [.caseInsensitive]
+    )
+
+    public static func isOngoingStatus(_ status: String) -> Bool {
+        let s = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s == "连载中" || s == "連載中" || s == "连载" || s == "連載" || s == "更新中"
+    }
+
+    public static func isCompletedStatus(_ status: String) -> Bool {
+        let s = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s == "已完结" || s == "已完結" || s == "完结" || s == "完結" || s == "全一话" || s == "全一話"
+    }
+
+    /// 确保标签列表中包含连载状态标签
+    public static func ensureStatusTagInTags(tags: [String], statusText: String) -> [String] {
+        let trimmedStatus = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedStatus.isEmpty else { return tags }
+        var result = tags
+        result.removeAll { $0 == "连载中" || $0 == "連載中" || $0 == "已完结" || $0 == "已完結" }
+        if result.isEmpty {
+            result.append(trimmedStatus)
+        } else {
+            result.insert(trimmedStatus, at: min(1, result.count))
+        }
+        return result
+    }
 
     public static func inferStatusText(
         title: String? = nil,
@@ -150,9 +291,7 @@ public enum MangaSerialStatusHelper {
                 return "已完结"
             }
             if v == "0" || v == "false" || v == "no" {
-                if isSeries || chapterCount > 1 {
-                    return "连载中"
-                }
+                return "连载中"
             }
         }
 
@@ -189,6 +328,18 @@ public enum MangaSerialStatusHelper {
         if hasCompleted { return "已完结" }
         if hasOngoing { return "连载中" }
         if isSeries || chapterCount > 1 { return "连载中" }
+
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            let range = NSRange(title.startIndex..<title.endIndex, in: title)
+            if chapterNumberIndicatorRegex.firstMatch(in: title, range: range) != nil {
+                return "连载中"
+            }
+        }
+
+        if chapterCount == 1 {
+            return "已完结"
+        }
+
         return ""
     }
 }

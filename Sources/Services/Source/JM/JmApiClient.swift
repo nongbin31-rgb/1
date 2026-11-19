@@ -414,7 +414,11 @@ public actor JmApiClient {
         }
 
         let title = cleanField(data["name"]) ?? manga.title
-        let author = cleanField(data["author"]) ?? (manga.author.isEmpty ? "佚名" : manga.author)
+        let rawAuthor = data["author"] ?? data["authors"]
+        let parsedAuthor = parseAuthor(rawAuthor, fallbackTitle: title)
+        let author = (parsedAuthor.isEmpty || parsedAuthor == "佚名") && !manga.author.isEmpty && manga.author != "佚名"
+            ? manga.author
+            : (parsedAuthor.isEmpty ? "佚名" : parsedAuthor)
         let summary = cleanField(data["description"]) ?? "暂无简介"
         let coverURL = buildCoverURL(albumId: manga.id)
 
@@ -472,6 +476,8 @@ public actor JmApiClient {
             chapterCount: chapters.count
         )
 
+        let finalTags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: statusText)
+
         let updatedManga = Manga(
             id: manga.id,
             sourceID: sourceID,
@@ -480,7 +486,7 @@ public actor JmApiClient {
             coverURL: coverURL,
             coverHeaders: ["User-Agent": JmCrypto.defaultUserAgent],
             summary: summary,
-            tags: tags,
+            tags: finalTags,
             statusText: statusText
         )
         return (updatedManga, chapters)
@@ -607,7 +613,8 @@ public actor JmApiClient {
     ) -> Manga {
         let id = cleanField(raw["id"]) ?? fallbackId ?? ""
         let title = cleanField(raw["name"]) ?? fallbackTitle ?? "JM \(id)"
-        let author = cleanField(raw["author"]) ?? "佚名"
+        let rawAuthor = raw["author"] ?? raw["authors"]
+        let author = parseAuthor(rawAuthor, fallbackTitle: title)
         let category = extractCategoryTitle(raw["category"], raw["category_sub"]) ?? "禁漫单行本"
         let latestChapter = cleanField(raw["latest_ep_name"])
 
@@ -628,6 +635,8 @@ public actor JmApiClient {
             rawIsEnd: raw["is_end"]
         )
 
+        let finalTags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: statusText)
+
         return Manga(
             id: id,
             sourceID: sourceID,
@@ -636,9 +645,20 @@ public actor JmApiClient {
             coverURL: buildCoverURL(albumId: id),
             coverHeaders: ["User-Agent": JmCrypto.defaultUserAgent],
             summary: "",
-            tags: tags,
+            tags: finalTags,
             statusText: statusText.isEmpty ? (latestChapter ?? "") : statusText
         )
+    }
+
+    private func parseAuthor(_ raw: Any?, fallbackTitle: String? = nil) -> String {
+        let formatted = MangaAuthorFormatter.format(raw)
+        if !formatted.isEmpty && formatted != "佚名" {
+            return formatted
+        }
+        if let fallbackTitle, let fromTitle = MangaAuthorFormatter.extractAuthorFromTitle(fallbackTitle) {
+            return fromTitle
+        }
+        return formatted.isEmpty ? "佚名" : formatted
     }
 
     private func extractCategoryTitle(_ rawCat: Any?, _ rawSubCat: Any?) -> String? {
@@ -656,7 +676,12 @@ public actor JmApiClient {
     private func cleanField(_ value: Any?) -> String? {
         guard let value else { return nil }
         if value is NSNull { return nil }
+        if let arr = value as? [Any] {
+            let parts = arr.compactMap { cleanField($0) }
+            return parts.isEmpty ? nil : parts.joined(separator: " ")
+        }
         let s = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
+        if s.isEmpty || s == "<null>" { return nil }
+        return MangaAuthorFormatter.decodeUnicodeEscape(s)
     }
 }

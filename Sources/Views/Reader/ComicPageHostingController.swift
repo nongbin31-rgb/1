@@ -4,6 +4,21 @@ import UIKit
 /// 封装单页漫画视图的 UIHostingController
 public final class ComicPageHostingController: UIHostingController<ComicPageCellView> {
     public let pageIndex: Int
+    private var page: MangaPage
+    private var config: ImageUpscalerConfig
+    private var isEnabled: Bool
+    private var transitionAfterUpscaled: Bool
+    private var isCompareMode: Bool
+    private var showSpineShadow: Bool
+    private var isRightToLeft: Bool
+    private var background: ReaderBackground
+    private var texture: ReaderTextureType
+    private var textureOpacity: Double
+    private var showDividingLine: Bool
+    private var onSingleTap: () -> Void
+    private var onStatusUpdate: (String) -> Void
+    private var onZoomChanged: ((CGFloat) -> Void)?
+    private var onImageLoaded: ((UIImage) -> Void)?
 
     public init(
         pageIndex: Int,
@@ -24,6 +39,22 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         onImageLoaded: ((UIImage) -> Void)? = nil
     ) {
         self.pageIndex = pageIndex
+        self.page = page
+        self.config = config
+        self.isEnabled = isEnabled
+        self.transitionAfterUpscaled = transitionAfterUpscaled
+        self.isCompareMode = isCompareMode
+        self.showSpineShadow = showSpineShadow
+        self.isRightToLeft = isRightToLeft
+        self.background = background
+        self.texture = texture
+        self.textureOpacity = textureOpacity
+        self.showDividingLine = showDividingLine
+        self.onSingleTap = onSingleTap
+        self.onStatusUpdate = onStatusUpdate
+        self.onZoomChanged = onZoomChanged
+        self.onImageLoaded = onImageLoaded
+
         let rootView = ComicPageCellView(
             page: page,
             config: config,
@@ -51,5 +82,43 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     public override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+    }
+
+    public func updateBackground(
+        background: ReaderBackground,
+        texture: ReaderTextureType,
+        textureOpacity: Double,
+        showSpineShadow: Bool? = nil,
+        showDividingLine: Bool? = nil
+    ) {
+        guard self.background != background
+            || self.texture != texture
+            || self.textureOpacity != textureOpacity
+            || (showSpineShadow != nil && self.showSpineShadow != showSpineShadow)
+            || (showDividingLine != nil && self.showDividingLine != showDividingLine) else {
+            return
+        }
+        self.background = background
+        self.texture = texture
+        self.textureOpacity = textureOpacity
+        if let showSpineShadow { self.showSpineShadow = showSpineShadow }
+        if let showDividingLine { self.showDividingLine = showDividingLine }
+        self.rootView = ComicPageCellView(
+            page: page,
+            config: config,
+            isEnabled: isEnabled,
+            transitionAfterUpscaled: transitionAfterUpscaled,
+            isCompareMode: isCompareMode,
+            showSpineShadow: self.showSpineShadow,
+            isRightToLeft: isRightToLeft,
+            background: self.background,
+            texture: self.texture,
+            textureOpacity: self.textureOpacity,
+            showDividingLine: self.showDividingLine,
+            onSingleTap: onSingleTap,
+            onStatusUpdate: onStatusUpdate,
+            onZoomChanged: onZoomChanged,
+            onImageLoaded: onImageLoaded
+        )
     }
 }

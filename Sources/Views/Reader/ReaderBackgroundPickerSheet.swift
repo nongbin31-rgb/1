@@ -51,7 +51,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 }
             }
         }
-        .presentationDetents([.fraction(0.55), .fraction(0.85)])
+        .presentationDetents([.fraction(0.68), .fraction(0.92)])
         .presentationDragIndicator(.visible)
     }
 
@@ -95,6 +95,12 @@ public struct ReaderBackgroundPickerSheet: View {
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
+    private let textureGridColumns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
     // MARK: - 2. 真实物理纸张材质选择网格
     private var texturePickerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -108,7 +114,7 @@ public struct ReaderBackgroundPickerSheet: View {
                     .foregroundStyle(.secondary)
             }
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            LazyVGrid(columns: textureGridColumns, spacing: 12) {
                 ForEach(ReaderTextureType.allCases) { item in
                     let isSelected = store.readerTextureType == item
                     Button {
@@ -117,43 +123,60 @@ public struct ReaderBackgroundPickerSheet: View {
                         }
                     } label: {
                         VStack(spacing: 6) {
+                            // 材质缩略图区域（严格固定高度与宽度，杜绝子视图撑乱网格）
                             ZStack {
-                                // 材质缩略图
                                 if let img = ReaderTextureCache.shared.textureImage(for: item) {
                                     Image(uiImage: img)
                                         .resizable()
                                         .aspectRatio(contentMode: .fill)
                                         .frame(height: 72)
+                                        .frame(maxWidth: .infinity)
                                         .clipped()
                                 } else {
                                     Color.secondary.opacity(0.2)
                                         .frame(height: 72)
-                                }
-
-                                if isSelected {
-                                    Color.accentColor.opacity(0.12)
-                                    VStack {
-                                        Spacer()
-                                        HStack {
-                                            Spacer()
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(Color.accentColor)
-                                                .background(Circle().fill(Color.white))
-                                                .padding(6)
-                                        }
-                                    }
+                                        .frame(maxWidth: .infinity)
                                 }
                             }
+                            .frame(height: 72)
+                            .frame(maxWidth: .infinity)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
+                            // 选中高亮半透明蒙层（通过 overlay 附加，不影响底层尺寸）
+                            .overlay {
+                                if isSelected {
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color.accentColor.opacity(0.12))
+                                }
+                            }
+                            // 选中右下角角标（独立 overlay 锚定布局，不参与容器尺寸计算）
+                            .overlay(alignment: .bottomTrailing) {
+                                if isSelected {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundStyle(Color.accentColor)
+                                        .background(
+                                            Circle()
+                                                .fill(Color.white)
+                                                .padding(2)
+                                        )
+                                        .padding(6)
+                                }
+                            }
+                            // 描边（未选中细浅灰框，选中加粗主题色边框）
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10)
-                                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isSelected ? 2.5 : 1)
+                                    .stroke(
+                                        isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                                        lineWidth: isSelected ? 2.5 : 1
+                                    )
                             )
 
                             Text(item.displayName)
                                 .font(.caption.weight(isSelected ? .bold : .regular))
                                 .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                                .lineLimit(1)
                         }
+                        .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.plain)
                 }

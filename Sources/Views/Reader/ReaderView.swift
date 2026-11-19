@@ -113,54 +113,66 @@ public struct ReaderView: View {
     }
 
     public var body: some View {
-        ZStack {
-            readerBackgroundView
+        GeometryReader { windowGeo in
+            ZStack {
+                readerBackgroundView
+                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                    .clipped()
 
-            if isLoadingChapter {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .tint(.white)
-                    Text("正在加载章节页面...")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-            } else if let chapterError {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundStyle(.orange)
-                    Text(chapterError)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.85))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                    HStack {
-                        Button("返回") { dismiss() }
-                            .buttonStyle(.bordered)
-                        Button("重试") {
-                            Task { await loadChapterPages() }
-                        }
-                        .buttonStyle(.borderedProminent)
+                if isLoadingChapter {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .tint(.white)
+                        Text("正在加载章节页面...")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.85))
                     }
+                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                } else if let chapterError {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundStyle(.orange)
+                        Text(chapterError)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                        HStack {
+                            Button("返回") { dismiss() }
+                                .buttonStyle(.bordered)
+                            Button("重试") {
+                                Task { await loadChapterPages() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                } else if pages.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.questionmark")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("该章节暂无图片页")
+                            .foregroundStyle(.white.opacity(0.8))
+                        Button("返回") { dismiss() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                } else {
+                    readerContent
+                        .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                        .clipped()
                 }
-            } else if pages.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "doc.questionmark")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    Text("该章节暂无图片页")
-                        .foregroundStyle(.white.opacity(0.8))
-                    Button("返回") { dismiss() }
-                        .buttonStyle(.borderedProminent)
-                }
-            } else {
-                readerContent
-            }
 
-            if showChrome {
-                chromeOverlay
+                if showChrome {
+                    chromeOverlay
+                }
             }
+            .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+            .clipped()
         }
+        .ignoresSafeArea()
         .statusBarHidden(!showChrome)
         .task(id: currentChapter.id) {
             await loadChapterPages()
@@ -210,19 +222,32 @@ public struct ReaderView: View {
         case .dark:
             Color.black.ignoresSafeArea()
         case .immersive:
-            ZStack {
-                Color.black.ignoresSafeArea()
-                if let bgImg = capturedPreviewImage {
-                    Image(uiImage: bgImg)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .blur(radius: 45)
-                        .opacity(0.8)
-                        .ignoresSafeArea()
+            GeometryReader { geo in
+                ZStack {
+                    Color.black
+                    if let bgImg = capturedPreviewImage {
+                        Image(uiImage: bgImg)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                            .blur(radius: 45)
+                            .opacity(0.8)
+                    }
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
             }
+            .ignoresSafeArea()
         case .texture:
-            Color(red: 0.965, green: 0.957, blue: 0.941).ignoresSafeArea()
+            ZStack {
+                Color(red: 0.965, green: 0.957, blue: 0.941)
+                PaperTextureOverlayView(
+                    texture: store.readerTextureType,
+                    opacity: store.readerTextureOpacity
+                )
+            }
+            .ignoresSafeArea()
         }
     }
 
@@ -595,7 +620,7 @@ private struct VerticalMangaPageCell: View {
                         .foregroundStyle(.orange)
                     Text(err)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(textColorForBackground.opacity(0.8))
                     Button("重试") {
                         Task { await triggerLoad() }
                     }
@@ -606,10 +631,10 @@ private struct VerticalMangaPageCell: View {
                 .background(Color.white.opacity(0.06))
             } else {
                 VStack(spacing: 10) {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(textColorForBackground)
                     Text("加载第 \(page.index + 1) 页...")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(textColorForBackground.opacity(0.75))
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 380)
@@ -626,6 +651,17 @@ private struct VerticalMangaPageCell: View {
             if slot.originalImage == nil {
                 Task { await triggerLoad() }
             }
+        }
+    }
+
+    private var textColorForBackground: Color {
+        switch background {
+        case .light:
+            return .black
+        case .texture:
+            return Color(red: 0.2, green: 0.18, blue: 0.15)
+        default:
+            return .white
         }
     }
 

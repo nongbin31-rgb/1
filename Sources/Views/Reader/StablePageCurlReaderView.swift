@@ -75,7 +75,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             navigationOrientation: .horizontal,
             options: options
         )
-        pageVC.view.backgroundColor = .black
+        pageVC.view.backgroundColor = (background == .immersive || background == .texture) ? .clear : .black
         pageVC.dataSource = context.coordinator
         pageVC.delegate = context.coordinator
 
@@ -97,10 +97,23 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             uiViewController.view.backgroundColor = .systemBackground
         case .light:
             uiViewController.view.backgroundColor = .white
-        case .dark, .immersive:
+        case .dark:
             uiViewController.view.backgroundColor = .black
-        case .texture:
-            uiViewController.view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.941, alpha: 1.0)
+        case .immersive, .texture:
+            uiViewController.view.backgroundColor = .clear
+        }
+
+        // 立即更新当前可见子页面的背景与纸质纹理，无需等待下一页
+        if let currentVCs = uiViewController.viewControllers as? [ComicPageHostingController] {
+            for vc in currentVCs {
+                vc.updateBackground(
+                    background: background,
+                    texture: texture,
+                    textureOpacity: textureOpacity,
+                    showSpineShadow: showSpineShadow,
+                    showDividingLine: showDividingLine
+                )
+            }
         }
 
         // 当外部（例如 Slider 或上一话/下一话按钮）修改了页码时，通过安全队列平滑驱动底层翻页

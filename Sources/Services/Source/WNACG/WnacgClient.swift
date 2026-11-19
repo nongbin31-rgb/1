@@ -496,6 +496,8 @@ public actor WnacgClient {
             chapterCount: chapters.count
         )
 
+        let finalTags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: statusText)
+
         let updated = Manga(
             id: manga.id,
             sourceID: sourceID,
@@ -504,7 +506,7 @@ public actor WnacgClient {
             coverURL: cover.isEmpty ? manga.coverURL : cover,
             coverHeaders: ["Referer": "https://www.wnacg.com/"],
             summary: desc.isEmpty ? "暂无简介" : desc,
-            tags: tags,
+            tags: finalTags,
             statusText: statusText
         )
         return (updated, chapters)
@@ -676,7 +678,8 @@ public actor WnacgClient {
 
     private func cleanString(_ value: Any?) -> String {
         guard let value, !(value is NSNull) else { return "" }
-        return String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+        let formatted = MangaAuthorFormatter.format(value)
+        return formatted.isEmpty ? String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines) : formatted
     }
 
     private func readInt(_ value: Any?) -> Int {

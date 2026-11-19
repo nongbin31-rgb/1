@@ -161,11 +161,6 @@ public struct ComicPageCellView: View {
                     )
                 }
 
-                // 物理纸张材质纹理覆盖（使用正片叠底 multiply 混合滤镜）
-                if background == .texture && !isCompareMode {
-                    PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
-                }
-
                 // 书脊中缝立体渐变阴影（还原实体书装订处凹陷光影）
                 if showSpineShadow && !isCompareMode {
                     SpineShadowOverlayView(
@@ -212,8 +207,14 @@ public struct ComicPageCellView: View {
                         .foregroundStyle(textColorForBackground.opacity(0.8))
                 }
             }
+
+            // 物理纸张材质纹理覆盖（使用正片叠底 multiply 混合滤镜，覆盖图片与背景）
+            if background == .texture && !isCompareMode {
+                PaperTextureOverlayView(texture: texture, opacity: textureOpacity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
         .task(id: "\(page.id)::\(config.cacheKey)::\(isEnabled)") {
             await triggerLoad()
         }

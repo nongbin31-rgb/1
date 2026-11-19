@@ -73,21 +73,20 @@ public struct MangaDetailView: View {
                     .font(.title3.weight(.bold))
                     .lineLimit(3)
 
-                if !currentManga.author.isEmpty {
-                    Label(currentManga.author, systemImage: "person")
+                let displayAuthor = currentManga.displayAuthor
+                if !displayAuthor.isEmpty {
+                    Label(displayAuthor, systemImage: "person")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
 
-                if !currentManga.tags.isEmpty {
+                let tags = displayedTags
+                if !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(currentManga.tags, id: \.self) { tag in
-                                Text(tag)
-                                    .font(.caption2)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            ForEach(tags, id: \.self) { tag in
+                                mangaTagBadge(tag)
                             }
                         }
                     }
@@ -229,6 +228,50 @@ public struct MangaDetailView: View {
             chapters = detail.chapters
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private var displayedTags: [String] {
+        var tags = currentManga.tags
+        let status = currentManga.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !status.isEmpty && !tags.contains(status) {
+            tags = MangaSerialStatusHelper.ensureStatusTagInTags(tags: tags, statusText: status)
+        }
+        return tags
+    }
+
+    @ViewBuilder
+    private func mangaTagBadge(_ tag: String) -> some View {
+        if MangaSerialStatusHelper.isOngoingStatus(tag) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 5, height: 5)
+                Text(tag)
+            }
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.green.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.green)
+        } else if MangaSerialStatusHelper.isCompletedStatus(tag) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 5, height: 5)
+                Text(tag)
+            }
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.orange.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.orange)
+        } else {
+            Text(tag)
+                .font(.caption2)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color(.tertiarySystemFill), in: Capsule())
         }
     }
 }

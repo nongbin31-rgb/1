@@ -13,7 +13,7 @@ public struct BookshelfView: View {
         guard !kw.isEmpty else { return store.bookshelf }
         return store.bookshelf.filter {
             $0.title.localizedCaseInsensitiveContains(kw) ||
-            $0.author.localizedCaseInsensitiveContains(kw)
+            $0.displayAuthor.localizedCaseInsensitiveContains(kw)
         }
     }
 
@@ -54,8 +54,8 @@ public struct BookshelfView: View {
                                         Text(manga.title)
                                             .font(.headline)
                                             .lineLimit(2)
-                                        if !manga.author.isEmpty {
-                                            Text(manga.author)
+                                        if !manga.displayAuthor.isEmpty {
+                                            Text(manga.displayAuthor)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                         }
@@ -158,10 +158,21 @@ struct MangaGridCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if !manga.statusText.isEmpty {
-                Text(manga.statusText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 3) {
+                    if MangaSerialStatusHelper.isOngoingStatus(manga.statusText) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 4, height: 4)
+                    } else if MangaSerialStatusHelper.isCompletedStatus(manga.statusText) {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 4, height: 4)
+                    }
+                    Text(manga.statusText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
     }
