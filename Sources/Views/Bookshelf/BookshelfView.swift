@@ -23,77 +23,151 @@ public struct BookshelfView: View {
 
     public var body: some View {
         NavigationView {
-            Group {
-                if store.bookshelf.isEmpty {
-                    emptyStateView
-                } else if isGridMode {
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 18) {
+            VStack(spacing: 0) {
+                bookshelfHeaderBar
+
+                if !store.bookshelf.isEmpty {
+                    bookshelfSearchBar
+                }
+
+                Group {
+                    if store.bookshelf.isEmpty {
+                        emptyStateView
+                    } else if filteredBooks.isEmpty {
+                        emptySearchResultView
+                    } else if isGridMode {
+                        ScrollView {
+                            LazyVGrid(columns: columns, spacing: 18) {
+                                ForEach(filteredBooks) { manga in
+                                    NavigationLink(destination: MangaDetailView(manga: manga)) {
+                                        MangaGridCard(
+                                            manga: manga,
+                                            progress: store.progress(for: manga)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                        }
+                    } else {
+                        List {
                             ForEach(filteredBooks) { manga in
                                 NavigationLink(destination: MangaDetailView(manga: manga)) {
-                                    MangaGridCard(
-                                        manga: manga,
-                                        progress: store.progress(for: manga)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                    }
-                } else {
-                    List {
-                        ForEach(filteredBooks) { manga in
-                            NavigationLink(destination: MangaDetailView(manga: manga)) {
-                                HStack(spacing: 12) {
-                                    AsyncMangaCoverView(urlString: manga.coverURL, cornerRadius: 8)
-                                        .frame(width: 56, height: 80)
+                                    HStack(spacing: 12) {
+                                        AsyncMangaCoverView(urlString: manga.coverURL, cornerRadius: 8)
+                                            .frame(width: 56, height: 80)
 
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(manga.title)
-                                            .font(.headline)
-                                            .lineLimit(2)
-                                        if !manga.displayAuthor.isEmpty {
-                                            Text(manga.displayAuthor)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        if let progress = store.progress(for: manga) {
-                                            Text("上次读到：\(progress.chapterTitle) · 第 \(progress.pageIndex + 1) 页")
-                                                .font(.caption2)
-                                                .foregroundStyle(.tint)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(manga.title)
+                                                .font(.headline)
+                                                .lineLimit(2)
+                                            if !manga.displayAuthor.isEmpty {
+                                                Text(manga.displayAuthor)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            if let progress = store.progress(for: manga) {
+                                                Text("上次读到：\(progress.chapterTitle) · 第 \(progress.pageIndex + 1) 页")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.tint)
+                                            }
                                         }
                                     }
+                                    .padding(.vertical, 4)
                                 }
-                                .padding(.vertical, 4)
+                            }
+                            .onDelete { offsets in
+                                for idx in offsets {
+                                    store.toggleBookshelf(filteredBooks[idx])
+                                }
                             }
                         }
-                        .onDelete { offsets in
-                            for idx in offsets {
-                                store.toggleBookshelf(filteredBooks[idx])
-                            }
-                        }
+                        .listStyle(.plain)
                     }
-                    .listStyle(.plain)
                 }
             }
             .navigationTitle("书架")
-            .searchable(text: $searchText, prompt: "搜索收藏的漫画")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isGridMode.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isGridMode ? "list.bullet" : "square.grid.2x2")
-                    }
-                    .accessibilityLabel(isGridMode ? "切换列表视图" : "切换网格视图")
-                }
-            }
+            .navigationBarTitleDisplayMode(.inline)
+            .compatNavigationBarHidden(true)
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var bookshelfHeaderBar: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("书架")
+                .font(.largeTitle.bold())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isGridMode.toggle()
+                }
+            } label: {
+                Image(systemName: isGridMode ? "list.bullet" : "square.grid.2x2")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.leading, 5)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isGridMode ? "切换列表视图" : "切换网格视图")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private var bookshelfSearchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            TextField("搜索收藏的漫画", text: $searchText)
+                .font(.subheadline)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清空搜索")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+    }
+
+    private var emptySearchResultView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("未找到匹配的收藏漫画")
+                .font(.headline)
+            Text("试试其他关键词，或清空搜索条件。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyStateView: some View {
