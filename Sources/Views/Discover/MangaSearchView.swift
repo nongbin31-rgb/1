@@ -168,8 +168,8 @@ public struct MangaSearchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .compatNavigationBarHidden(false)
             .toolbar {
-                if hasSubmittedSearch && !isAggregateMode && !singleMangas.isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if hasSubmittedSearch && !isAggregateMode && !singleMangas.isEmpty {
                         Button {
                             jumpTargetPageInput = "\(currentPage)"
                             showingJumpSheet = true
@@ -375,37 +375,35 @@ public struct MangaSearchView: View {
                                 .buttonStyle(.plain)
                             }
 
-                            FlowChipLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-                                ForEach(store.searchHistory, id: \.self) { term in
-                                    HStack(spacing: 4) {
-                                        Button {
-                                            submitSearch(term, scrollProxy: scrollProxy)
-                                        } label: {
-                                            Text(term)
-                                                .font(.caption.weight(.medium))
-                                                .lineLimit(1)
-                                                .foregroundStyle(.primary)
-                                        }
-                                        .buttonStyle(.plain)
-
-                                        Button {
-                                            withAnimation(.easeInOut(duration: 0.18)) {
-                                                store.removeSearchHistory(term)
-                                            }
-                                        } label: {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: 9, weight: .bold))
-                                                .foregroundStyle(.secondary)
-                                                .padding(2)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .accessibilityLabel("删除历史记录 \(term)")
+                            FlowChipView(items: store.searchHistory, horizontalSpacing: 8, verticalSpacing: 8) { term in
+                                HStack(spacing: 4) {
+                                    Button {
+                                        submitSearch(term, scrollProxy: scrollProxy)
+                                    } label: {
+                                        Text(term)
+                                            .font(.caption.weight(.medium))
+                                            .lineLimit(1)
+                                            .foregroundStyle(.primary)
                                     }
-                                    .padding(.leading, 12)
-                                    .padding(.trailing, 8)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.secondarySystemFill), in: Capsule())
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            store.removeSearchHistory(term)
+                                        }
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundStyle(.secondary)
+                                            .padding(2)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("删除历史记录 \(term)")
                                 }
+                                .padding(.leading, 12)
+                                .padding(.trailing, 8)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemFill), in: Capsule())
                             }
                         }
                     }
@@ -416,21 +414,19 @@ public struct MangaSearchView: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
 
-                            FlowChipLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-                                ForEach(quickKeywords, id: \.self) { keyword in
-                                    Button {
-                                        submitSearch(keyword, scrollProxy: scrollProxy)
-                                    } label: {
-                                        Text(keyword)
-                                            .font(.caption.weight(.medium))
-                                            .lineLimit(1)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(Color.accentColor.opacity(0.11), in: Capsule())
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                    .buttonStyle(.plain)
+                            FlowChipView(items: quickKeywords, horizontalSpacing: 8, verticalSpacing: 8) { keyword in
+                                Button {
+                                    submitSearch(keyword, scrollProxy: scrollProxy)
+                                } label: {
+                                    Text(keyword)
+                                        .font(.caption.weight(.medium))
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.accentColor.opacity(0.11), in: Capsule())
+                                        .foregroundStyle(Color.accentColor)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -1626,69 +1622,74 @@ private struct SourceSearchOutcome: Sendable {
     let wasCancelled: Bool
 }
 
-/// iOS 16 原生自适应自动换行流式标签布局（用于搜索历史与快捷标签）
-private struct FlowChipLayout: Layout {
-    var horizontalSpacing: CGFloat = 8
-    var verticalSpacing: CGFloat = 8
+/// iOS 15 兼容流式标签布局（用于搜索历史与快捷标签）
+private struct FlowChipView<Data: RandomAccessCollection, Content: View>: View where Data.Element: Hashable {
+    let items: Data
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+    let content: (Data.Element) -> Content
 
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        let itemProposal = ProposedViewSize(
-            width: maxWidth.isFinite ? maxWidth : nil,
-            height: nil
-        )
+    @State private var totalHeight: CGFloat = .zero
 
-        var currentX: CGFloat = 0
-        var currentY: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var maxLineWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(itemProposal)
-            if currentX > 0 && currentX + size.width > maxWidth {
-                currentX = 0
-                currentY += lineHeight + verticalSpacing
-                lineHeight = 0
-            }
-            maxLineWidth = max(maxLineWidth, currentX + size.width)
-            currentX += size.width + horizontalSpacing
-            lineHeight = max(lineHeight, size.height)
-        }
-
-        let totalHeight = subviews.isEmpty ? 0 : (currentY + lineHeight)
-        let resolvedWidth = proposal.width ?? maxLineWidth
-        return CGSize(width: resolvedWidth, height: totalHeight)
+    init(
+        items: Data,
+        horizontalSpacing: CGFloat = 8,
+        verticalSpacing: CGFloat = 8,
+        @ViewBuilder content: @escaping (Data.Element) -> Content
+    ) {
+        self.items = items
+        self.horizontalSpacing = horizontalSpacing
+        self.verticalSpacing = verticalSpacing
+        self.content = content
     }
 
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        let itemProposal = ProposedViewSize(width: bounds.width, height: nil)
-        var currentX = bounds.minX
-        var currentY = bounds.minY
-        var lineHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(itemProposal)
-            if currentX > bounds.minX && currentX + size.width > bounds.maxX {
-                currentX = bounds.minX
-                currentY += lineHeight + verticalSpacing
-                lineHeight = 0
-            }
-            subview.place(
-                at: CGPoint(x: currentX, y: currentY),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: min(size.width, bounds.width), height: size.height)
-            )
-            currentX += size.width + horizontalSpacing
-            lineHeight = max(lineHeight, size.height)
+    var body: some View {
+        GeometryReader { geometry in
+            generateContent(in: geometry)
         }
+        .frame(height: max(totalHeight, 1))
+    }
+
+    private func generateContent(in g: GeometryProxy) -> some View {
+        var width = CGFloat.zero
+        var height = CGFloat.zero
+
+        return ZStack(alignment: .topLeading) {
+            ForEach(items, id: \.self) { item in
+                content(item)
+                    .padding(.trailing, horizontalSpacing)
+                    .padding(.bottom, verticalSpacing)
+                    .alignmentGuide(.leading) { d in
+                        if abs(width - d.width) > g.size.width {
+                            width = 0
+                            height -= d.height
+                        }
+                        let result = width
+                        width -= d.width
+                        return result
+                    }
+                    .alignmentGuide(.top) { _ in
+                        let result = height
+                        return result
+                    }
+            }
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: FlowChipHeightPreferenceKey.self, value: geo.size.height)
+            }
+        )
+        .onPreferenceChange(FlowChipHeightPreferenceKey.self) { newHeight in
+            if abs(totalHeight - newHeight) > 0.5 {
+                totalHeight = newHeight
+            }
+        }
+    }
+}
+
+private struct FlowChipHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

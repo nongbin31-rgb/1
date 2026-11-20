@@ -100,7 +100,7 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
                         : nil
                     )
                     // 双击手势：优先匹配双击，双击成功绝不触发单击
-                    .onTapGesture(count: 2) { location in
+                    .onTapGesture(count: 2) {
                         impactFeedback.impactOccurred()
 
                         if scale > 1.05 {
@@ -112,25 +112,14 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
                             lastScale = 1.0
                             lastOffset = .zero
                         } else {
-                            // 处于常规 1.0x 状态：以双击落点为焦点，平滑聚焦放大至 2.6x
+                            // 处于常规 1.0x 状态：平滑聚焦放大至 2.6x
                             let targetScale: CGFloat = 2.6
-                            let center = CGPoint(x: viewportSize.width * 0.5, y: viewportSize.height * 0.5)
-                            let targetOffsetX = (center.x - location.x) * (targetScale - 1.0)
-                            let targetOffsetY = (center.y - location.y) * (targetScale - 1.0)
-
-                            let clamped = clampOffset(
-                                CGSize(width: targetOffsetX, height: targetOffsetY),
-                                scale: targetScale,
-                                viewportSize: viewportSize,
-                                allowRubberBand: false
-                            )
-
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                                 scale = targetScale
-                                offset = clamped
+                                offset = .zero
                             }
                             lastScale = targetScale
-                            lastOffset = clamped
+                            lastOffset = .zero
                         }
                     }
                     // 单击手势：唤起/隐藏阅读器控制栏
