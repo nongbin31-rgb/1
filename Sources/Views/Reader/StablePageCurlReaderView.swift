@@ -23,6 +23,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let textureOpacity: Double
     public let textureTintOpacity: Double
     public let textureTarget: ReaderTextureTarget
+    public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
@@ -44,6 +45,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
@@ -64,6 +66,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
+        self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
@@ -127,6 +130,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                     textureOpacity: textureOpacity,
                     textureTintOpacity: textureTintOpacity,
                     textureTarget: textureTarget,
+                    imageOnlyBackdrop: imageOnlyBackdrop,
                     showSpineShadow: showSpineShadow,
                     showDividingLine: showDividingLine
                 )
@@ -264,6 +268,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 textureOpacity: parent.textureOpacity,
                 textureTintOpacity: parent.textureTintOpacity,
                 textureTarget: parent.textureTarget,
+                imageOnlyBackdrop: parent.imageOnlyBackdrop,
                 showDividingLine: parent.showDividingLine,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate,

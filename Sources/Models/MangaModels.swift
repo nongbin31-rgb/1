@@ -680,3 +680,45 @@ public enum ReaderTextureTarget: String, Codable, CaseIterable, Identifiable, Se
         }
     }
 }
+
+/// 当纹理作用目标设为「仅图片本身」时，四周留白区域的拼接背景模式
+public enum ReaderImageOnlyBackdrop: String, Codable, CaseIterable, Identifiable, Sendable {
+    case paperTint    = "paper_tint"
+    case followSystem = "follow_system"
+    case light        = "light"
+    case dark         = "dark"
+    case immersive    = "immersive"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .paperTint:    return "纸浆底色"
+        case .followSystem: return "跟随系统"
+        case .light:        return "白色"
+        case .dark:         return "黑色"
+        case .immersive:    return "沉浸式"
+        }
+    }
+
+    public var systemIcon: String {
+        switch self {
+        case .paperTint:    return "doc.plaintext"
+        case .followSystem: return "circle.lefthalf.filled"
+        case .light:        return "sun.max.fill"
+        case .dark:         return "moon.stars.fill"
+        case .immersive:    return "sparkles"
+        }
+    }
+
+    #if canImport(SwiftUI)
+    public var placeholderTextColor: Color {
+        switch self {
+        case .paperTint:        return Color(red: 0.2, green: 0.18, blue: 0.15)
+        case .followSystem:     return .primary
+        case .light:            return .black
+        case .dark, .immersive: return .white
+        }
+    }
+    #endif
+}

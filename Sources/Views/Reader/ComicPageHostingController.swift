@@ -17,6 +17,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     private var textureOpacity: Double
     private var textureTintOpacity: Double
     private var textureTarget: ReaderTextureTarget
+    private var imageOnlyBackdrop: ReaderImageOnlyBackdrop
     private var showDividingLine: Bool
     private var onSingleTap: () -> Void
     private var onStatusUpdate: (String) -> Void
@@ -38,6 +39,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
@@ -58,6 +60,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
+        self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -78,6 +81,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
@@ -108,11 +112,13 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         textureOpacity: Double,
         textureTintOpacity: Double? = nil,
         textureTarget: ReaderTextureTarget? = nil,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop? = nil,
         showSpineShadow: Bool? = nil,
         showDividingLine: Bool? = nil
     ) {
         let newTintOpacity = textureTintOpacity ?? self.textureTintOpacity
         let newTarget = textureTarget ?? self.textureTarget
+        let newBackdrop = imageOnlyBackdrop ?? self.imageOnlyBackdrop
         let newRTL = isRightToLeft ?? self.isRightToLeft
         let newSpineShadow = showSpineShadow ?? self.showSpineShadow
         let newDividingLine = showDividingLine ?? self.showDividingLine
@@ -132,6 +138,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             || self.textureOpacity != textureOpacity
             || self.textureTintOpacity != newTintOpacity
             || self.textureTarget != newTarget
+            || self.imageOnlyBackdrop != newBackdrop
 
         guard upscalerChanged || layoutChanged || backgroundChanged else {
             return
@@ -150,6 +157,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = newTintOpacity
         self.textureTarget = newTarget
+        self.imageOnlyBackdrop = newBackdrop
 
         self.rootView = buildRootView()
     }
@@ -167,6 +175,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         textureOpacity: Double,
         textureTintOpacity: Double? = nil,
         textureTarget: ReaderTextureTarget? = nil,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop? = nil,
         showSpineShadow: Bool? = nil,
         showDividingLine: Bool? = nil
     ) {
@@ -181,6 +190,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop,
             showSpineShadow: showSpineShadow,
             showDividingLine: showDividingLine
         )
@@ -201,6 +211,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,

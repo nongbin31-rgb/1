@@ -126,6 +126,14 @@ public struct SettingsView: View {
                             }
                         }
 
+                        if store.readerTextureTarget == .imageOnly {
+                            Picker("四周拼接背景", selection: $store.readerImageOnlyBackdrop) {
+                                ForEach(ReaderImageOnlyBackdrop.allCases) { backdrop in
+                                    Label(backdrop.title, systemImage: backdrop.systemIcon).tag(backdrop)
+                                }
+                            }
+                        }
+
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 Text("纸质透光与纤维浓度")

@@ -197,6 +197,7 @@ public struct ComicPageCellView: View {
     public let textureOpacity: Double
     public let textureTintOpacity: Double
     public let textureTarget: ReaderTextureTarget
+    public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
     public let filterConfig: ImageFilterConfig
     public let onSingleTap: () -> Void
@@ -220,6 +221,7 @@ public struct ComicPageCellView: View {
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
@@ -239,6 +241,7 @@ public struct ComicPageCellView: View {
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
+        self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -353,7 +356,12 @@ public struct ComicPageCellView: View {
         switch background {
         case .light:
             return .black
+        case .followSystem:
+            return .primary
         case .texture:
+            if textureTarget == .imageOnly {
+                return imageOnlyBackdrop.placeholderTextColor
+            }
             return Color(red: 0.2, green: 0.18, blue: 0.15)
         default:
             return .white

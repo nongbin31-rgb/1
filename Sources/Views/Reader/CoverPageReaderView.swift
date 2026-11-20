@@ -27,6 +27,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public let textureOpacity: Double
     public let textureTintOpacity: Double
     public let textureTarget: ReaderTextureTarget
+    public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
@@ -47,6 +48,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
@@ -66,6 +68,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
+        self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
@@ -102,6 +105,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine
         )
 
@@ -253,6 +257,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool
     ) {
         activeVC?.updateConfiguration(
@@ -267,6 +272,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine
         )
         incomingVC?.updateConfiguration(
@@ -281,6 +287,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine
         )
     }
@@ -327,6 +334,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             textureOpacity: parentConfig.textureOpacity,
             textureTintOpacity: parentConfig.textureTintOpacity,
             textureTarget: parentConfig.textureTarget,
+            imageOnlyBackdrop: parentConfig.imageOnlyBackdrop,
             showDividingLine: parentConfig.showDividingLine,
             onSingleTap: parentConfig.onSingleTap,
             onStatusUpdate: parentConfig.onStatusUpdate,
