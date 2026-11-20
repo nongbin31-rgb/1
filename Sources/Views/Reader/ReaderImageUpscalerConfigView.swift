@@ -47,7 +47,7 @@ public struct ReaderImageUpscalerConfigView: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             ZStack {
                 Color.black.ignoresSafeArea()
 
@@ -182,8 +182,7 @@ public struct ReaderImageUpscalerConfigView: View {
                     .foregroundColor(.white)
                 }
             }
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.black.opacity(0.85), for: .navigationBar)
+            .compatToolbarBackgroundDark()
             .sheet(isPresented: $showingUpscalerFAQ) {
                 upscalerFAQSheet
             }
@@ -195,6 +194,7 @@ public struct ReaderImageUpscalerConfigView: View {
                 await runPreviewEnhance()
             }
         }
+        .navigationViewStyle(.stack)
     }
 
     // MARK: - 底部控制卡片
@@ -252,7 +252,7 @@ public struct ReaderImageUpscalerConfigView: View {
                 HStack {
                     Image(systemName: "sparkles")
                     Text("预览效果")
-                        .fontWeight(.semibold)
+                        .font(.body.weight(.semibold))
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
@@ -401,7 +401,7 @@ public struct ReaderImageUpscalerConfigView: View {
     // MARK: - FAQ 弹窗
 
     private var upscalerFAQSheet: some View {
-        NavigationStack {
+        NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("关于 AI 画质增强")
@@ -443,10 +443,11 @@ public struct ReaderImageUpscalerConfigView: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 
     private var anime4kFAQSheet: some View {
-        NavigationStack {
+        NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Anime4K 各个模式的区别")
@@ -493,6 +494,7 @@ public struct ReaderImageUpscalerConfigView: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 

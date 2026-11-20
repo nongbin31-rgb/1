@@ -73,6 +73,15 @@ public struct DiscoverView: View {
         )
     }
 
+    private var searchDestinationView: some View {
+        MangaSearchView(
+            initialQuery: currentSearchRoute.initialQuery,
+            initialSourceID: currentSearchRoute.initialSourceID,
+            suggestedTags: currentSearchRoute.suggestedTags,
+            autoSubmit: currentSearchRoute.autoSubmit
+        )
+    }
+
     /// 当前图源每页估算获取条数描述
     private var sourcePageSizeDescription: String {
         switch activeSource?.kind {
@@ -84,7 +93,7 @@ public struct DiscoverView: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             ScrollViewReader { scrollProxy in
                 VStack(spacing: 0) {
                     discoverHeaderBar(scrollProxy: scrollProxy)
@@ -153,7 +162,7 @@ public struct DiscoverView: View {
 
                                 LazyVGrid(columns: columns, spacing: 18) {
                                     ForEach(mangas) { manga in
-                                        NavigationLink(value: manga) {
+                                        NavigationLink(destination: MangaDetailView(manga: manga)) {
                                             MangaGridCard(
                                                 manga: manga,
                                                 progress: store.progress(for: manga)
@@ -184,7 +193,7 @@ public struct DiscoverView: View {
                 }
                 .navigationTitle(activeSource?.name ?? "发现")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar(.hidden, for: .navigationBar)
+                .compatNavigationBarHidden(true)
                 .onChange(of: store.selectedSourceID) { _ in
                     selectedCategoryID = activeCategories.first?.id ?? ""
                     scheduleReload(scrollProxy: scrollProxy)
@@ -207,18 +216,8 @@ public struct DiscoverView: View {
                     jumpPageSheet(scrollProxy: scrollProxy)
                 }
             }
-            .navigationDestination(for: Manga.self) { manga in
-                MangaDetailView(manga: manga)
-            }
-            .navigationDestination(for: MangaSearchRoute.self) { route in
-                MangaSearchView(
-                    initialQuery: route.initialQuery,
-                    initialSourceID: route.initialSourceID,
-                    suggestedTags: route.suggestedTags,
-                    autoSubmit: route.autoSubmit
-                )
-            }
         }
+        .navigationViewStyle(.stack)
     }
 
     // MARK: - Subviews
@@ -235,7 +234,7 @@ public struct DiscoverView: View {
 
             HStack(spacing: 8) {
                 // 顶部常驻搜索按钮（滚动至页面深处时亦可随时搜索）
-                NavigationLink(value: currentSearchRoute) {
+                NavigationLink(destination: searchDestinationView) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.accentColor)
@@ -316,7 +315,7 @@ public struct DiscoverView: View {
     }
 
     private var discoverSearchEntryBar: some View {
-        NavigationLink(value: currentSearchRoute) {
+        NavigationLink(destination: searchDestinationView) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline.weight(.medium))
@@ -544,7 +543,7 @@ public struct DiscoverView: View {
     // MARK: - Jump Page Sheet
 
     private func jumpPageSheet(scrollProxy: ScrollViewProxy) -> some View {
-        NavigationStack {
+        NavigationView {
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
                     Text("跳转到指定页")
@@ -659,9 +658,10 @@ public struct DiscoverView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
             }
-            .presentationDetents([.height(380)])
-            .presentationDragIndicator(.visible)
+            .compatPresentationDetentsHeight(380)
+            .compatPresentationDragIndicatorVisible()
         }
+        .navigationViewStyle(.stack)
     }
 
     private func quickStepButton(delta: Int) -> some View {

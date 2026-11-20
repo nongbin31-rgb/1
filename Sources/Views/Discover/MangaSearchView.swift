@@ -166,7 +166,7 @@ public struct MangaSearchView: View {
             }
             .navigationTitle("搜索漫画")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.visible, for: .navigationBar)
+            .compatNavigationBarHidden(false)
             .toolbar {
                 if hasSubmittedSearch && !isAggregateMode && !singleMangas.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -441,7 +441,7 @@ public struct MangaSearchView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
-        .scrollDismissesKeyboard(.interactively)
+        .compatScrollDismissesKeyboard()
     }
 
     private var searchTipsCard: some View {
@@ -563,7 +563,7 @@ public struct MangaSearchView: View {
 
                     LazyVGrid(columns: columns, spacing: 18) {
                         ForEach(singleMangas) { manga in
-                            NavigationLink(value: manga) {
+                            NavigationLink(destination: MangaDetailView(manga: manga)) {
                                 MangaGridCard(
                                     manga: manga,
                                     progress: store.progress(for: manga)
@@ -586,7 +586,7 @@ public struct MangaSearchView: View {
 
                     singlePaginationBar(scrollProxy: scrollProxy)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .compatScrollDismissesKeyboard()
                 .refreshable {
                     await performSingleSearchAsync(page: 1, isLoadMore: false, forceRefresh: true, scrollProxy: scrollProxy)
                 }
@@ -680,7 +680,7 @@ public struct MangaSearchView: View {
                         aggregateGroupedBody(scrollProxy: scrollProxy)
                     }
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .compatScrollDismissesKeyboard()
                 .refreshable {
                     await performAggregateSearchAsync(forceRefresh: true, scrollProxy: scrollProxy)
                 }
@@ -809,7 +809,7 @@ public struct MangaSearchView: View {
                             let previewItems = Array(state.mangas.prefix(12))
                             LazyVGrid(columns: columns, spacing: 16) {
                                 ForEach(previewItems) { manga in
-                                    NavigationLink(value: manga) {
+                                    NavigationLink(destination: MangaDetailView(manga: manga)) {
                                         MangaGridCard(
                                             manga: manga,
                                             progress: store.progress(for: manga),
@@ -889,7 +889,7 @@ public struct MangaSearchView: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 18) {
                         ForEach(state.mangas) { manga in
-                            NavigationLink(value: manga) {
+                            NavigationLink(destination: MangaDetailView(manga: manga)) {
                                 MangaGridCard(
                                     manga: manga,
                                     progress: store.progress(for: manga),
@@ -1099,7 +1099,7 @@ public struct MangaSearchView: View {
     }
 
     private func jumpPageSheet(scrollProxy: ScrollViewProxy) -> some View {
-        NavigationStack {
+        NavigationView {
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
                     Text("搜索结果跳页")
@@ -1185,9 +1185,10 @@ public struct MangaSearchView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
             }
-            .presentationDetents([.height(340)])
-            .presentationDragIndicator(.visible)
+            .compatPresentationDetentsHeight(340)
+            .compatPresentationDragIndicatorVisible()
         }
+        .navigationViewStyle(.stack)
     }
 
     private func quickStepButton(delta: Int) -> some View {

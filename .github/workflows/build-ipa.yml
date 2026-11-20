@@ -2,7 +2,7 @@ name: Build Unsigned iOS IPA
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, ios15 ]
   workflow_dispatch:
 
 concurrency:
@@ -61,27 +61,41 @@ jobs:
           plutil -p "${APP_PATH}/Info.plist"
           plutil -p "${APP_PATH}/Info.plist" | grep -q "UILaunchStoryboardName"
           test -d "${APP_PATH}/LaunchScreen.storyboardc"
-          rm -rf Payload KedaOnlineReader-unsigned.ipa
+          rm -rf Payload *.ipa
           mkdir -p Payload
           cp -R "${APP_PATH}" Payload/
-          zip -qry KedaOnlineReader-unsigned.ipa Payload
-          ls -lh KedaOnlineReader-unsigned.ipa
+          if [ "${GITHUB_REF_NAME}" = "ios15" ]; then
+            IPA_NAME="KedaOnlineReader-iOS15-unsigned.ipa"
+          else
+            IPA_NAME="KedaOnlineReader-unsigned.ipa"
+          fi
+          zip -qry "${IPA_NAME}" Payload
+          ls -lh "${IPA_NAME}"
+          echo "IPA_NAME=${IPA_NAME}" >> $GITHUB_ENV
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KedaOnlineReader-unsigned-ipa
-          path: KedaOnlineReader-unsigned.ipa
+          name: ${{ env.IPA_NAME }}
+          path: ${{ env.IPA_NAME }}
           retention-days: 30
 
-      - name: Publish to GitHub Release (latest)
+      - name: Publish to GitHub Release
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="latest"
+          if [ "${GITHUB_REF_NAME}" = "ios15" ]; then
+            TAG="latest-ios15"
+            TITLE="iOS 15 兼容版构建 (${GITHUB_SHA::7})"
+            NOTES="自动构建的无签名 iOS 15+ 兼容版 IPA（提交 ${GITHUB_SHA::7}），最低支持 iOS 15.0 设备。"
+          else
+            TAG="latest"
+            TITLE="Latest Build (${GITHUB_SHA::7})"
+            NOTES="自动构建的无签名 iOS IPA（提交 ${GITHUB_SHA::7}），已适配全系全面屏 iPhone / iPad。"
+          fi
           gh release delete "${TAG}" --yes 2>/dev/null || true
           git push origin ":refs/tags/${TAG}" 2>/dev/null || true
-          gh release create "${TAG}" KedaOnlineReader-unsigned.ipa \
-            --title "Latest Build (${GITHUB_SHA::7})" \
-            --notes "自动构建的无签名 iOS IPA（提交 ${GITHUB_SHA::7}），已适配全系全面屏 iPhone / iPad。"
+          gh release create "${TAG}" "${IPA_NAME}" \
+            --title "${TITLE}" \
+            --notes "${NOTES}"

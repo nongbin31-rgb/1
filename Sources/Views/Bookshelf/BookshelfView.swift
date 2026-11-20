@@ -22,7 +22,7 @@ public struct BookshelfView: View {
     ]
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             Group {
                 if store.bookshelf.isEmpty {
                     emptyStateView
@@ -30,7 +30,7 @@ public struct BookshelfView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 18) {
                             ForEach(filteredBooks) { manga in
-                                NavigationLink(value: manga) {
+                                NavigationLink(destination: MangaDetailView(manga: manga)) {
                                     MangaGridCard(
                                         manga: manga,
                                         progress: store.progress(for: manga)
@@ -45,7 +45,7 @@ public struct BookshelfView: View {
                 } else {
                     List {
                         ForEach(filteredBooks) { manga in
-                            NavigationLink(value: manga) {
+                            NavigationLink(destination: MangaDetailView(manga: manga)) {
                                 HStack(spacing: 12) {
                                     AsyncMangaCoverView(urlString: manga.coverURL, cornerRadius: 8)
                                         .frame(width: 56, height: 80)
@@ -92,18 +92,8 @@ public struct BookshelfView: View {
                     .accessibilityLabel(isGridMode ? "切换列表视图" : "切换网格视图")
                 }
             }
-            .navigationDestination(for: Manga.self) { manga in
-                MangaDetailView(manga: manga)
-            }
-            .navigationDestination(for: MangaSearchRoute.self) { route in
-                MangaSearchView(
-                    initialQuery: route.initialQuery,
-                    initialSourceID: route.initialSourceID,
-                    suggestedTags: route.suggestedTags,
-                    autoSubmit: route.autoSubmit
-                )
-            }
         }
+        .navigationViewStyle(.stack)
     }
 
     private var emptyStateView: some View {
@@ -175,7 +165,8 @@ struct MangaGridCard: View {
             Text(manga.title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
-                .lineLimit(2, reservesSpace: true)
+                .lineLimit(2)
+                .frame(height: 38, alignment: .topLeading)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 

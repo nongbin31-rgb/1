@@ -312,7 +312,7 @@ public struct ReaderView: View {
                 }
             )
             .environmentObject(store)
-            .presentationDetents([.medium, .large])
+            .compatPresentationDetentsMediumLarge()
         }
         .fullScreenCover(isPresented: $showConfigPreviewSheet) {
             ReaderImageUpscalerConfigView(
@@ -1103,7 +1103,7 @@ private struct ReaderUpscalerSheet: View {
     var onOpenImageFilter: () -> Void
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             Form {
                 Section {
                     Button {
@@ -1240,5 +1240,6 @@ private struct ReaderUpscalerSheet: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }

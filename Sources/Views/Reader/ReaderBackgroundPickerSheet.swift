@@ -15,7 +15,7 @@ public struct ReaderBackgroundPickerSheet: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             ScrollView {
                 VStack(spacing: 22) {
                     // 1. 顶部模式选择器 (5 大模式)
@@ -52,8 +52,9 @@ public struct ReaderBackgroundPickerSheet: View {
                 }
             }
         }
-        .presentationDetents([.fraction(0.68), .fraction(0.92)])
-        .presentationDragIndicator(.visible)
+        .navigationViewStyle(.stack)
+        .compatPresentationDetentsFractions([0.68, 0.92])
+        .compatPresentationDragIndicatorVisible()
     }
 
     // MARK: - 1. 背景模式分段网格
