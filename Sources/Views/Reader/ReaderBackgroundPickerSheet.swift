@@ -138,7 +138,11 @@ public struct ReaderBackgroundPickerSheet: View {
             VStack(spacing: 6) {
                 // 材质缩略图展示区域：严格定高定宽，底层铺专属原生物理纸浆底色，图片通过 ZStack 载入并双重裁切
                 ZStack {
-                    item.basePaperSwiftUIColor
+                    Color.white
+                    if store.readerTextureTintOpacity > 0.001 {
+                        item.basePaperSwiftUIColor
+                            .opacity(store.readerTextureTintOpacity)
+                    }
 
                     if let img = ReaderTextureCache.shared.textureImage(for: item) {
                         Image(uiImage: img)
@@ -243,31 +247,60 @@ public struct ReaderBackgroundPickerSheet: View {
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // MARK: - 4. 纹理浓度与透明度滑块
+    // MARK: - 4. 纹理浓度与纸张着色滑块
     private var textureOpacitySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("纸质透光与纤维浓度")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text("\(Int(store.readerTextureOpacity * 100))%")
-                    .font(.subheadline.monospacedDigit())
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("纸质透光与纤维浓度")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(Int(store.readerTextureOpacity * 100))%")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { store.readerTextureOpacity },
+                        set: { store.readerTextureOpacity = $0 }
+                    ),
+                    in: 0.1...1.0,
+                    step: 0.05
+                )
+                .tint(.accentColor)
+
+                Text("控制纸张纤维颗粒在背景与画面上的显现深度。")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
-            Slider(
-                value: Binding(
-                    get: { store.readerTextureOpacity },
-                    set: { store.readerTextureOpacity = $0 }
-                ),
-                in: 0.1...1.0,
-                step: 0.05
-            )
-            .tint(.accentColor)
+            Divider()
 
-            Text("采用正片叠底 (Multiply) 复合混合，使黑白线稿和对白墨水与纸浆纤维自然渗透融合。")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("纸张着色浓度")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(Int((store.readerTextureTintOpacity * 100).rounded()))%")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { store.readerTextureTintOpacity },
+                        set: { store.readerTextureTintOpacity = $0 }
+                    ),
+                    in: 0.0...1.0,
+                    step: 0.05
+                )
+                .tint(.accentColor)
+
+                Text("控制材质原生纸浆底色对背景与画面的着色深浅；调至 0% 可保持纯白原貌并仅保留纸张微粒。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(14)
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))

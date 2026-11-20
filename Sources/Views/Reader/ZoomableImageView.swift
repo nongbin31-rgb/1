@@ -85,6 +85,7 @@ public struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
     var texture: ReaderTextureType? = nil
     var textureOpacity: Double = 0.4
+    var textureTintOpacity: Double = 1.0
     var applyTextureToImage: Bool = false
     let onSingleTap: () -> Void
     var onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -93,6 +94,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         image: UIImage,
         texture: ReaderTextureType? = nil,
         textureOpacity: Double = 0.4,
+        textureTintOpacity: Double = 1.0,
         applyTextureToImage: Bool = false,
         onSingleTap: @escaping () -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -100,6 +102,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         self.image = image
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTintOpacity = textureTintOpacity
         self.applyTextureToImage = applyTextureToImage
         self.onSingleTap = onSingleTap
         self.onZoomChanged = onZoomChanged
@@ -141,6 +144,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         context.coordinator.updateTexture(
             texture: texture,
             opacity: textureOpacity,
+            tintOpacity: textureTintOpacity,
             applyToImage: applyTextureToImage
         )
 
@@ -164,6 +168,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         context.coordinator.updateTexture(
             texture: texture,
             opacity: textureOpacity,
+            tintOpacity: textureTintOpacity,
             applyToImage: applyTextureToImage
         )
     }
@@ -182,15 +187,23 @@ public struct ZoomableImageView: UIViewRepresentable {
         public func updateTexture(
             texture: ReaderTextureType?,
             opacity: Double,
+            tintOpacity: Double,
             applyToImage: Bool
         ) {
             guard let imageView else { return }
             imageView.updateOverlayFrames()
 
             if applyToImage, let texture {
-                // 1. 物理纸张基准原生底色正片叠底 (彻底解决漫画原本冷白与四周留白纸浆底色不一致的问题)
-                imageView.paperTintOverlayView.isHidden = false
-                imageView.paperTintOverlayView.image = UIImage.solidColorImage(color: texture.basePaperColor)
+                // 1. 物理纸张基准原生底色正片叠底 (支持 0%~100% 着色浓度调节，0% 时保留原图纯白不发黄)
+                let clampedTint = min(max(tintOpacity, 0.0), 1.0)
+                if clampedTint > 0.001 {
+                    imageView.paperTintOverlayView.isHidden = false
+                    imageView.paperTintOverlayView.image = UIImage.solidColorImage(color: texture.basePaperColor)
+                    imageView.paperTintOverlayView.alpha = CGFloat(clampedTint)
+                } else {
+                    imageView.paperTintOverlayView.isHidden = true
+                    imageView.paperTintOverlayView.alpha = 0.0
+                }
 
                 // 2. 真实物理纸张材质微粒/纹理覆盖 (统一采用稳定可靠的正片叠底 multiplyBlendMode，彻底杜绝失效泛白)
                 imageView.softLightOverlayView.isHidden = true

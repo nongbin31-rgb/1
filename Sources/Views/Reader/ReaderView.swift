@@ -360,7 +360,11 @@ public struct ReaderView: View {
             .ignoresSafeArea()
         case .texture:
             ZStack {
-                store.readerTextureType.basePaperSwiftUIColor
+                Color.white
+                if store.readerTextureTintOpacity > 0.001 {
+                    store.readerTextureType.basePaperSwiftUIColor
+                        .opacity(store.readerTextureTintOpacity)
+                }
                 if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
                     PaperTextureOverlayView(
                         texture: store.readerTextureType,
@@ -401,6 +405,7 @@ public struct ReaderView: View {
                                         background: store.preferredReaderBackground,
                                         texture: store.readerTextureType,
                                         textureOpacity: store.readerTextureOpacity,
+                                        textureTintOpacity: store.readerTextureTintOpacity,
                                         textureTarget: store.readerTextureTarget,
                                         texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
                                         textureReferenceSize: geo.size,
@@ -456,6 +461,7 @@ public struct ReaderView: View {
                 background: store.preferredReaderBackground,
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
+                textureTintOpacity: store.readerTextureTintOpacity,
                 textureTarget: store.readerTextureTarget,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
@@ -486,6 +492,7 @@ public struct ReaderView: View {
                 background: store.preferredReaderBackground,
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
+                textureTintOpacity: store.readerTextureTintOpacity,
                 textureTarget: store.readerTextureTarget,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
@@ -517,6 +524,7 @@ public struct ReaderView: View {
                 background: store.preferredReaderBackground,
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
+                textureTintOpacity: store.readerTextureTintOpacity,
                 textureTarget: store.readerTextureTarget,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
@@ -879,6 +887,7 @@ private struct VerticalMangaPageCell: View {
     var background: ReaderBackground = .followSystem
     var texture: ReaderTextureType = .classic
     var textureOpacity: Double = 0.4
+    var textureTintOpacity: Double = 1.0
     var textureTarget: ReaderTextureTarget = .both
     var texturePhaseAnchor: TexturePhaseAnchor = .local
     var textureReferenceSize: CGSize? = nil
@@ -920,12 +929,15 @@ private struct VerticalMangaPageCell: View {
                         .frame(width: contentWidth, height: alignedHeight, alignment: .top)
                         .clipped()
 
-                    // 真实物理纸张原生底色正片叠底 (彻底解决条漫纯白背景与四周纸浆底色色差)
+                    // 真实物理纸张原生底色正片叠底 (支持 0%~100% 着色浓度调节，0% 时保留原图纯白不发黄)
                     if shouldApplyImageTexture {
-                        texture.basePaperSwiftUIColor
-                            .blendMode(.multiply)
-                            .frame(width: contentWidth, height: alignedHeight)
-                            .clipped()
+                        if textureTintOpacity > 0.001 {
+                            texture.basePaperSwiftUIColor
+                                .opacity(textureTintOpacity)
+                                .blendMode(.multiply)
+                                .frame(width: contentWidth, height: alignedHeight)
+                                .clipped()
+                        }
 
                         // 拟真纸质材质纹理正片叠底：绑定滚动内容坐标系，随漫画紧贴同步滚动且多图接缝无缝对齐
                         PaperTextureOverlayView(
@@ -947,8 +959,11 @@ private struct VerticalMangaPageCell: View {
                         .frame(maxWidth: .infinity)
 
                     if shouldApplyImageTexture {
-                        texture.basePaperSwiftUIColor
-                            .blendMode(.multiply)
+                        if textureTintOpacity > 0.001 {
+                            texture.basePaperSwiftUIColor
+                                .opacity(textureTintOpacity)
+                                .blendMode(.multiply)
+                        }
 
                         PaperTextureOverlayView(
                             texture: texture,
@@ -974,7 +989,11 @@ private struct VerticalMangaPageCell: View {
             } else if let err = slot.errorMessage {
                 ZStack {
                     if shouldApplyPlaceholderTexture {
-                        texture.basePaperSwiftUIColor
+                        Color.white
+                        if textureTintOpacity > 0.001 {
+                            texture.basePaperSwiftUIColor
+                                .opacity(textureTintOpacity)
+                        }
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
@@ -1003,7 +1022,11 @@ private struct VerticalMangaPageCell: View {
             } else {
                 ZStack {
                     if shouldApplyPlaceholderTexture {
-                        texture.basePaperSwiftUIColor
+                        Color.white
+                        if textureTintOpacity > 0.001 {
+                            texture.basePaperSwiftUIColor
+                                .opacity(textureTintOpacity)
+                        }
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,

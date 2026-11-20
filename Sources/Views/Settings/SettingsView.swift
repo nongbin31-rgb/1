@@ -139,6 +139,20 @@ public struct SettingsView: View {
                                 step: 0.05
                             )
                         }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("纸张着色浓度")
+                                Spacer()
+                                Text("\(Int((store.readerTextureTintOpacity * 100).rounded()))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(
+                                value: $store.readerTextureTintOpacity,
+                                in: 0.0...1.0,
+                                step: 0.05
+                            )
+                        }
                     }
 
                     Toggle("书脊中缝立体阴影", isOn: $store.showSpineShadowInCurl)
