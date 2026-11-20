@@ -39,6 +39,7 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
             ZStack(alignment: .topTrailing) {
                 // 条漫内容展示层
                 content()
+                    .environment(\.readerZoomScale, scale)
                     .frame(width: viewportSize.width, height: viewportSize.height)
                     .scaleEffect(scale, anchor: .center)
                     .offset(offset)

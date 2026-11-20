@@ -62,12 +62,54 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return 0.0
     }
 
+    /// 双层细节纸纹 (Detail Mipmap) 动态权重计算：
+    /// - 1.0x 常规阅读：100% 宏观层 (128pt 切片)，0% 微观层 (64pt 切片，零额外渲染开销)；
+    /// - 1.08x -> 2.35x 双指/双击放大：Smoothstep 平滑交叉过渡，2.0x 时由细一倍的微观层接管，精准还原 1:1 物理像素细腻度；
+    /// - > 2.6x 超高倍放大：施加轻度高倍阻尼衰减，查看极小字或局部笔触时清爽不噪。
+    public static func zoomMipmapOpacities(
+        for texture: ReaderTextureType,
+        baseOpacity: Double,
+        zoomScale: CGFloat
+    ) -> (coarse: Double, fine: Double) {
+        let effBase = perceptualOpacity(for: texture, rawOpacity: baseOpacity)
+        guard texture.usesFineTilePattern, effBase > 0.001, zoomScale > 1.08 else {
+            return (coarse: effBase, fine: 0.0)
+        }
+
+        let z = Double(min(max(zoomScale, 1.0), 5.2))
+        let u = min(max((z - 1.08) / (2.35 - 1.08), 0.0), 1.0)
+        let t = u * u * (3.0 - 2.0 * u) // Smoothstep 三次平滑曲线，捏合过程零突变
+
+        // 能量守恒交叉权重：宏观层退居保留 28% 柔和纸浆底斑起伏，微观层接管 88% 精细微粒
+        let coarseWeight = 1.0 - t * 0.72
+        let fineWeight = t * 0.88
+
+        // 超高倍率 (> 2.6x ~ 5.0x) 轻度衰减，避免极端放大时微观层也变粗
+        let highZoomDamping: Double
+        if z > 2.60 {
+            let hu = min(max((z - 2.60) / (5.0 - 2.60), 0.0), 1.0)
+            highZoomDamping = 1.0 - hu * 0.38
+        } else {
+            highZoomDamping = 1.0
+        }
+
+        return (
+            coarse: effBase * coarseWeight * highZoomDamping,
+            fine: effBase * fineWeight * highZoomDamping
+        )
+    }
+
     private func cacheKey(for type: ReaderTextureType, grainDensity: Double) -> NSString {
         if type.usesFineTilePattern {
             let pct = Self.quantizedGrainDensityPercent(grainDensity)
             return "\(type.rawValue)_d\(pct)" as NSString
         }
         return type.rawValue as NSString
+    }
+
+    private func fineDetailCacheKey(for type: ReaderTextureType, grainDensity: Double) -> NSString {
+        let pct = Self.quantizedGrainDensityPercent(grainDensity)
+        return "\(type.rawValue)_fine64_d\(pct)" as NSString
     }
 
     /// 获取指定纸张纹理图像（带内存二级缓存；经典材质支持按 10%~100% 颗粒数量缓存切片）
@@ -115,6 +157,48 @@ public final class ReaderTextureCache: @unchecked Sendable {
             return cached
         }
         guard let img = textureImage(for: type, grainDensity: grainDensity) else {
+            return nil
+        }
+        let tiled = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+        tiledImageCache.setObject(tiled, forKey: key)
+        return tiled
+    }
+
+    /// 获取双层细节纸纹 (Mipmap Level 1) 的 2x 细度微观切片（64×64pt 逻辑尺寸，放大 2x 时还原 1:1 物理像素细腻颗粒）
+    public func fineDetailTextureImage(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIImage? {
+        guard type.usesFineTilePattern else { return nil }
+        let key = fineDetailCacheKey(for: type, grainDensity: grainDensity)
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+
+        let pct = Self.quantizedGrainDensityPercent(grainDensity)
+        let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+        let generated = Self.buildProceduralClassicStuccoTile(
+            densityPercent: pct,
+            screenScale: screenScale,
+            plasterBase: nil,
+            tileSize: 64.0,
+            seed: 20261119
+        )
+        cache.setObject(generated, forKey: key)
+        return generated
+    }
+
+    /// 获取缓存的微观层 GPU 原生无缝平铺图像（供放大状态下的第二层 Multiply 细节叠加使用）
+    public func tiledFineDetailTextureImage(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIImage? {
+        guard type.usesFineTilePattern else { return nil }
+        let key = fineDetailCacheKey(for: type, grainDensity: grainDensity)
+        if let cached = tiledImageCache.object(forKey: key) {
+            return cached
+        }
+        guard let img = fineDetailTextureImage(for: type, grainDensity: grainDensity) else {
             return nil
         }
         let tiled = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
@@ -332,14 +416,15 @@ public final class ReaderTextureCache: @unchecked Sendable {
     }
 
     /// 1:1 复刻 MangaPrism StuccoTextureManager 的程序化高密立体浮雕纸纹引擎：
-    /// 透明底 128×128pt 逻辑切片（按设备原生 2x/3x 屏幕像素 1:1 渲染，零放大零模糊），
+    /// 支持宏观基础层 (128×128pt) 与放大微观细节层 (64×64pt) 双尺度生成，
     /// 100% 对应 23,500 颗最大微粒数量，支持按 10%~100% 向下平滑调节颗粒疏密
     private static func buildProceduralClassicStuccoTile(
         densityPercent: Int,
         screenScale: CGFloat,
-        plasterBase: UIImage
+        plasterBase: UIImage?,
+        tileSize: CGFloat = 128.0,
+        seed: UInt64 = 20261109
     ) -> UIImage {
-        let tileSize: CGFloat = 128.0
         let scaleFactor: CGFloat = tileSize / 256.0
         let grainCount = max(1, Int((Double(maxClassicGrainCount) * Double(densityPercent) / 100.0).rounded()))
 
@@ -355,12 +440,12 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return renderer.image { ctx in
             let cg = ctx.cgContext
 
-            // 严格保持透明底（对齐 MangaPrism）：先叠加缓存好的 42 处柔和纸浆起伏斑块
+            // 严格保持透明底（对齐 MangaPrism）：宏观层叠加 42 处柔和纸浆起伏斑块，微观层专注纯粹细微纤维
             cg.clear(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
-            plasterBase.draw(in: CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
+            plasterBase?.draw(in: CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
 
             // Layer 2: 按目标密度绘制前 grainCount 颗无缝立体浮雕微粒（固定种子保证减密时保留的颗粒原地不动）
-            var grainRng = SplitMix64RNG(seed: 20261109)
+            var grainRng = SplitMix64RNG(seed: seed)
             cg.setAllowsAntialiasing(false)
             cg.setShouldAntialias(false)
 
@@ -982,9 +1067,23 @@ public enum TexturePhaseAnchor: Equatable, Sendable {
     case namedSpace(String)
 }
 
+// MARK: - 阅读器当前缩放倍率环境键（驱动条漫/SwiftUI 纸纹双层细节 Mipmap 平滑交叉过渡）
+private struct ReaderZoomScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1.0
+}
+
+public extension EnvironmentValues {
+    var readerZoomScale: CGFloat {
+        get { self[ReaderZoomScaleKey.self] }
+        set { self[ReaderZoomScaleKey.self] = newValue }
+    }
+}
+
 /// 拟真纸张纹理正片叠底覆盖层 (SwiftUI)
 /// 严格采用正片叠底 Multiply 模式，暗部与深色墨水天然吸收，彻底杜绝任何泛白与发灰
 public struct PaperTextureOverlayView: View {
+    @Environment(\.readerZoomScale) private var readerZoomScale: CGFloat
+
     public let texture: ReaderTextureType
     public let opacity: Double
     public let tintOpacity: Double
@@ -1011,18 +1110,37 @@ public struct PaperTextureOverlayView: View {
     public var body: some View {
         if let img = ReaderTextureCache.shared.textureImage(for: texture, grainDensity: grainDensity) {
             let effectiveOpacity = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
+            let mip = ReaderTextureCache.zoomMipmapOpacities(
+                for: texture,
+                baseOpacity: opacity,
+                zoomScale: readerZoomScale
+            )
             let clampedTint = min(max(tintOpacity, 0.0), 1.0)
 
             switch phaseAnchor {
             case .local:
                 if texture.usesFineTilePattern {
-                    // 经典高密粉刷微粒：原生 1:1 物理像素 (128×128pt) 最近邻锐利平铺 + 纯单层 Multiply（对齐 MangaPrism StuccoTextureOverlay）
-                    Image(uiImage: img)
-                        .interpolation(.none)
-                        .resizable(resizingMode: .tile)
-                        .opacity(effectiveOpacity)
-                        .blendMode(.multiply)
-                        .allowsHitTesting(false)
+                    // 经典高密粉刷微粒：双层细节纸纹 Mipmap 交叉过渡（1x 宏观 128pt + 2x 微观 64pt），纯 Multiply 正片叠底
+                    ZStack {
+                        Image(uiImage: img)
+                            .interpolation(.none)
+                            .resizable(resizingMode: .tile)
+                            .opacity(mip.coarse)
+                            .blendMode(.multiply)
+
+                        if mip.fine > 0.005,
+                           let fineImg = ReaderTextureCache.shared.fineDetailTextureImage(
+                               for: texture,
+                               grainDensity: grainDensity
+                           ) {
+                            Image(uiImage: fineImg)
+                                .interpolation(.none)
+                                .resizable(resizingMode: .tile)
+                                .opacity(mip.fine)
+                                .blendMode(.multiply)
+                        }
+                    }
+                    .allowsHitTesting(false)
                 } else {
                     let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
                     // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
@@ -1057,18 +1175,44 @@ public struct PaperTextureOverlayView: View {
                             let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
                             let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
 
-                            Color.clear
-                                .frame(width: viewW, height: viewH)
-                                .overlay(alignment: .topLeading) {
-                                    Image(uiImage: img)
-                                        .interpolation(.none)
-                                        .resizable(resizingMode: .tile)
-                                        .frame(width: viewW + tileW, height: viewH + tileH)
-                                        .offset(x: -phaseX, y: -phaseY)
+                            ZStack {
+                                Color.clear
+                                    .frame(width: viewW, height: viewH)
+                                    .overlay(alignment: .topLeading) {
+                                        Image(uiImage: img)
+                                            .interpolation(.none)
+                                            .resizable(resizingMode: .tile)
+                                            .frame(width: viewW + tileW, height: viewH + tileH)
+                                            .offset(x: -phaseX, y: -phaseY)
+                                    }
+                                    .clipped()
+                                    .opacity(mip.coarse)
+                                    .blendMode(.multiply)
+
+                                if mip.fine > 0.005,
+                                   let fineImg = ReaderTextureCache.shared.fineDetailTextureImage(
+                                       for: texture,
+                                       grainDensity: grainDensity
+                                   ) {
+                                    let fineTileW = max(fineImg.size.width, 32.0)
+                                    let fineTileH = max(fineImg.size.height, 32.0)
+                                    let finePhaseX = Self.positiveModulo(contentFrame.minX, divisor: fineTileW)
+                                    let finePhaseY = Self.positiveModulo(contentFrame.minY, divisor: fineTileH)
+
+                                    Color.clear
+                                        .frame(width: viewW, height: viewH)
+                                        .overlay(alignment: .topLeading) {
+                                            Image(uiImage: fineImg)
+                                                .interpolation(.none)
+                                                .resizable(resizingMode: .tile)
+                                                .frame(width: viewW + fineTileW, height: viewH + fineTileH)
+                                                .offset(x: -finePhaseX, y: -finePhaseY)
+                                        }
+                                        .clipped()
+                                        .opacity(mip.fine)
+                                        .blendMode(.multiply)
                                 }
-                                .clipped()
-                                .opacity(effectiveOpacity)
-                                .blendMode(.multiply)
+                            }
                         }
                     }
                     .allowsHitTesting(false)
