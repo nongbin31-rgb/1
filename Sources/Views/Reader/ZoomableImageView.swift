@@ -115,6 +115,7 @@ public struct ZoomableImageView: UIViewRepresentable {
     var texture: ReaderTextureType? = nil
     var textureOpacity: Double = 0.4
     var textureTintOpacity: Double = 1.0
+    var textureGrainDensity: Double = 1.0
     var applyTextureToImage: Bool = false
     let onSingleTap: () -> Void
     var onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -124,6 +125,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         texture: ReaderTextureType? = nil,
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         applyTextureToImage: Bool = false,
         onSingleTap: @escaping () -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil
@@ -132,6 +134,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         self.texture = texture
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
+        self.textureGrainDensity = textureGrainDensity
         self.applyTextureToImage = applyTextureToImage
         self.onSingleTap = onSingleTap
         self.onZoomChanged = onZoomChanged
@@ -174,6 +177,7 @@ public struct ZoomableImageView: UIViewRepresentable {
             texture: texture,
             opacity: textureOpacity,
             tintOpacity: textureTintOpacity,
+            grainDensity: textureGrainDensity,
             applyToImage: applyTextureToImage
         )
 
@@ -198,6 +202,7 @@ public struct ZoomableImageView: UIViewRepresentable {
             texture: texture,
             opacity: textureOpacity,
             tintOpacity: textureTintOpacity,
+            grainDensity: textureGrainDensity,
             applyToImage: applyTextureToImage
         )
     }
@@ -217,6 +222,7 @@ public struct ZoomableImageView: UIViewRepresentable {
             texture: ReaderTextureType?,
             opacity: Double,
             tintOpacity: Double,
+            grainDensity: Double = 1.0,
             applyToImage: Bool
         ) {
             guard let imageView else { return }
@@ -237,14 +243,14 @@ public struct ZoomableImageView: UIViewRepresentable {
                 // 2. 真实物理纸张材质微粒/纹理覆盖 (统一采用稳定可靠的正片叠底 multiplyBlendMode，彻底杜绝失效泛白)
                 imageView.softLightOverlayView.isHidden = true
 
-                if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
+                if let texImg = ReaderTextureCache.shared.textureImage(for: texture, grainDensity: grainDensity) {
                     imageView.textureClipContainer.isHidden = false
                     let effectiveAlpha = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
                     imageView.textureClipContainer.alpha = CGFloat(effectiveAlpha)
 
                     if texture.usesFineTilePattern {
                         // 程序化 128×128pt 原生像素透明底浮雕纸纹：GPU 原生无缝平铺 + nearest 最近邻锐利采样 + Overlay 凸粒高光
-                        let tiled = ReaderTextureCache.shared.tiledTextureImage(for: texture) ?? texImg
+                        let tiled = ReaderTextureCache.shared.tiledTextureImage(for: texture, grainDensity: grainDensity) ?? texImg
                         let highlightAlpha = ReaderTextureCache.highlightOverlayOpacity(for: texture, rawOpacity: opacity)
 
                         imageView.neutralTextureOverlayView.isHidden = true

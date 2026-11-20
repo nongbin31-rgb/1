@@ -16,6 +16,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     private var texture: ReaderTextureType
     private var textureOpacity: Double
     private var textureTintOpacity: Double
+    private var textureGrainDensity: Double
     private var textureTarget: ReaderTextureTarget
     private var imageOnlyBackdrop: ReaderImageOnlyBackdrop
     private var showDividingLine: Bool
@@ -38,6 +39,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
@@ -59,6 +61,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.texture = texture
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
+        self.textureGrainDensity = textureGrainDensity
         self.textureTarget = textureTarget
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
@@ -80,6 +83,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine,
@@ -111,12 +115,14 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double? = nil,
+        textureGrainDensity: Double? = nil,
         textureTarget: ReaderTextureTarget? = nil,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop? = nil,
         showSpineShadow: Bool? = nil,
         showDividingLine: Bool? = nil
     ) {
         let newTintOpacity = textureTintOpacity ?? self.textureTintOpacity
+        let newGrainDensity = textureGrainDensity ?? self.textureGrainDensity
         let newTarget = textureTarget ?? self.textureTarget
         let newBackdrop = imageOnlyBackdrop ?? self.imageOnlyBackdrop
         let newRTL = isRightToLeft ?? self.isRightToLeft
@@ -137,6 +143,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             || self.texture != texture
             || self.textureOpacity != textureOpacity
             || self.textureTintOpacity != newTintOpacity
+            || self.textureGrainDensity != newGrainDensity
             || self.textureTarget != newTarget
             || self.imageOnlyBackdrop != newBackdrop
 
@@ -156,6 +163,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.texture = texture
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = newTintOpacity
+        self.textureGrainDensity = newGrainDensity
         self.textureTarget = newTarget
         self.imageOnlyBackdrop = newBackdrop
 
@@ -174,6 +182,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double? = nil,
+        textureGrainDensity: Double? = nil,
         textureTarget: ReaderTextureTarget? = nil,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop? = nil,
         showSpineShadow: Bool? = nil,
@@ -189,6 +198,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop,
             showSpineShadow: showSpineShadow,
@@ -210,6 +220,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine,

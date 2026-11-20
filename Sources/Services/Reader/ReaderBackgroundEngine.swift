@@ -22,6 +22,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private let seamlessTileCache = NSCache<NSString, UIImage>()
     private let tiledImageCache = NSCache<NSString, UIImage>()
     private let patternColorCache = NSCache<NSString, UIColor>()
+    private var classicPlasterBaseImage: UIImage?
     private let loadLock = NSLock()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
     private let srgbContext: CIContext = {
@@ -33,10 +34,20 @@ public final class ReaderTextureCache: @unchecked Sendable {
         ])
     }()
 
+    /// 经典程序化浮雕纸纹的 100% 最大颗粒数量基准（与 MangaPrism 1:1 对齐）
+    public static let maxClassicGrainCount: Int = 23_500
+
     private init() {
-        cache.countLimit = 24
+        cache.countLimit = 40
         seamlessTileCache.countLimit = 24
-        tiledImageCache.countLimit = 12
+        tiledImageCache.countLimit = 28
+    }
+
+    /// 将颗粒密度归一化到 10% ~ 100% 的 5% 离散步进百分比，确保缓存命中率高、滑块拖动跟手
+    public static func quantizedGrainDensityPercent(_ density: Double) -> Int {
+        let clamped = min(max(density, 0.10), 1.0)
+        let stepped = (clamped * 20.0).rounded() * 5.0
+        return min(max(Int(stepped), 10), 100)
     }
 
     /// 感知强度映射：经典浮雕纸纹沿用 MangaPrism 0.66 幂次曲线，让低档位也保持清晰立体颗粒而非雾面发灰
@@ -53,9 +64,17 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return perceptualOpacity(for: texture, rawOpacity: rawOpacity) * 0.24
     }
 
-    /// 获取指定纸张纹理图像（带内存二级缓存）
-    public func textureImage(for type: ReaderTextureType) -> UIImage? {
-        let key = type.rawValue as NSString
+    private func cacheKey(for type: ReaderTextureType, grainDensity: Double) -> NSString {
+        if type.usesFineTilePattern {
+            let pct = Self.quantizedGrainDensityPercent(grainDensity)
+            return "\(type.rawValue)_d\(pct)" as NSString
+        }
+        return type.rawValue as NSString
+    }
+
+    /// 获取指定纸张纹理图像（带内存二级缓存；经典材质支持按 10%~100% 颗粒数量缓存切片）
+    public func textureImage(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIImage? {
+        let key = cacheKey(for: type, grainDensity: grainDensity)
         if let cached = cache.object(forKey: key) {
             return cached
         }
@@ -68,8 +87,18 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
         let loaded: UIImage?
         if type.usesFineTilePattern {
-            // 经典纸张采用 MangaPrism 风格 256×256pt 程序化高密立体浮雕无缝微粒切片
-            loaded = Self.buildProceduralClassicStuccoTile()
+            let pct = Self.quantizedGrainDensityPercent(grainDensity)
+            let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+            let plasterBase = classicPlasterBaseImage ?? {
+                let base = Self.buildClassicPlasterBaseTile(screenScale: screenScale)
+                self.classicPlasterBaseImage = base
+                return base
+            }()
+            loaded = Self.buildProceduralClassicStuccoTile(
+                densityPercent: pct,
+                screenScale: screenScale,
+                plasterBase: plasterBase
+            )
         } else {
             // 优先全名 (例如 Texture_1_brown_paper) 加载，次选短名 (例如 Texture_1) 加载
             loaded = loadTextureFromBundle(named: type.rawValue)
@@ -82,12 +111,12 @@ public final class ReaderTextureCache: @unchecked Sendable {
     }
 
     /// 获取缓存的 GPU 原生无缝平铺图像（供 UIImageView 1:1 左上角对齐平铺，支持 nearest 最近邻采样且无 Y 轴翻转）
-    public func tiledTextureImage(for type: ReaderTextureType) -> UIImage? {
-        let key = type.rawValue as NSString
+    public func tiledTextureImage(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIImage? {
+        let key = cacheKey(for: type, grainDensity: grainDensity)
         if let cached = tiledImageCache.object(forKey: key) {
             return cached
         }
-        guard let img = textureImage(for: type) else {
+        guard let img = textureImage(for: type, grainDensity: grainDensity) else {
             return nil
         }
         let tiled = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
@@ -96,12 +125,12 @@ public final class ReaderTextureCache: @unchecked Sendable {
     }
 
     /// 获取缓存的平铺画刷颜色（向后兼容旧调用）
-    public func patternColor(for type: ReaderTextureType) -> UIColor? {
-        let key = type.rawValue as NSString
+    public func patternColor(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIColor? {
+        let key = cacheKey(for: type, grainDensity: grainDensity)
         if let cached = patternColorCache.object(forKey: key) {
             return cached
         }
-        guard let img = textureImage(for: type) else {
+        guard let img = textureImage(for: type, grainDensity: grainDensity) else {
             return nil
         }
         let color = UIColor(patternImage: img)
@@ -254,14 +283,10 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return CGFloat(total) / CGFloat(pixels.count * 255)
     }
 
-    /// 1:1 复刻 MangaPrism StuccoTextureManager 的程序化高密立体浮雕纸纹引擎：
-    /// 透明底 128×128pt 逻辑切片（按设备原生 2x/3x 屏幕像素 1:1 渲染，零放大零模糊），
-    /// 内含 42 处无缝柔和纸浆光斑 + 23,500 颗带右下投影的立体凸起微粒与炭灰气孔
-    private static func buildProceduralClassicStuccoTile() -> UIImage {
+    /// 仅生成一次的透明底柔和纸浆光斑基础切片（42 处无缝明暗斑块），供各颗粒密度档位直接复用提速
+    private static func buildClassicPlasterBaseTile(screenScale: CGFloat) -> UIImage {
         let tileSize: CGFloat = 128.0
         let scaleFactor: CGFloat = tileSize / 256.0
-        let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
-
         let format = UIGraphicsImageRendererFormat()
         format.scale = screenScale
         format.opaque = false
@@ -273,12 +298,8 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
         return renderer.image { ctx in
             let cg = ctx.cgContext
-
-            // 严格保持透明底（对齐 MangaPrism）：空白间隙完全穿透底色与漫画原画，
-            // 让同一张切片同时支撑 Multiply 凹槽暗影与 Overlay 凸起高光双通道透视混合
             cg.clear(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
 
-            // Layer 1: 42 处无缝柔和纸浆起伏斑块（模拟手工纸张轻微明暗起伏）
             var plasterRng = SplitMix64RNG(seed: 20261108)
             let colorSpace = CGColorSpaceCreateDeviceRGB()
             cg.setAllowsAntialiasing(true)
@@ -309,8 +330,38 @@ public final class ReaderTextureCache: @unchecked Sendable {
                     )
                 }
             }
+        }
+    }
 
-            // Layer 2: 23,500 颗无缝立体浮雕微粒（关闭抗锯齿保持刀锋般清晰的实体纸粒感）
+    /// 1:1 复刻 MangaPrism StuccoTextureManager 的程序化高密立体浮雕纸纹引擎：
+    /// 透明底 128×128pt 逻辑切片（按设备原生 2x/3x 屏幕像素 1:1 渲染，零放大零模糊），
+    /// 100% 对应 23,500 颗最大微粒数量，支持按 10%~100% 向下平滑调节颗粒疏密
+    private static func buildProceduralClassicStuccoTile(
+        densityPercent: Int,
+        screenScale: CGFloat,
+        plasterBase: UIImage
+    ) -> UIImage {
+        let tileSize: CGFloat = 128.0
+        let scaleFactor: CGFloat = tileSize / 256.0
+        let grainCount = max(1, Int((Double(maxClassicGrainCount) * Double(densityPercent) / 100.0).rounded()))
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = screenScale
+        format.opaque = false
+
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: tileSize, height: tileSize),
+            format: format
+        )
+
+        return renderer.image { ctx in
+            let cg = ctx.cgContext
+
+            // 严格保持透明底（对齐 MangaPrism）：先叠加缓存好的 42 处柔和纸浆起伏斑块
+            cg.clear(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
+            plasterBase.draw(in: CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
+
+            // Layer 2: 按目标密度绘制前 grainCount 颗无缝立体浮雕微粒（固定种子保证减密时保留的颗粒原地不动）
             var grainRng = SplitMix64RNG(seed: 20261109)
             cg.setAllowsAntialiasing(false)
             cg.setShouldAntialias(false)
@@ -321,7 +372,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
             let shadowOffset: CGFloat = 0.85 * scaleFactor
             let shadowMinDiameter: CGFloat = 0.95 * scaleFactor
 
-            for _ in 0..<23_500 {
+            for _ in 0..<grainCount {
                 let x = CGFloat(grainRng.nextUnitDouble()) * tileSize
                 let y = CGFloat(grainRng.nextUnitDouble()) * tileSize
                 // 保留大量细砂，同时让 16% 较大高光颗粒形成清晰的立体视觉锚点
@@ -368,6 +419,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let crossesRight = x + r > tileSize
         let crossesTop = y - r < 0
         let crossesBottom = y + r > tileSize
+        if !crossesLeft && !crossesRight && !crossesTop && !crossesBottom {
+            return
+        }
 
         if crossesLeft {
             cg.fillEllipse(in: CGRect(x: x + tileSize - r, y: y - r, width: diameter, height: diameter))
@@ -632,6 +686,14 @@ public class ReaderBackgroundContainerView: UIView {
         }
     }
 
+    public var textureGrainDensity: CGFloat = 1.0 {
+        didSet {
+            if currentBackground == .texture && currentTexture.usesFineTilePattern {
+                updateTextureImage()
+            }
+        }
+    }
+
     public var showSpineShadow: Bool = true {
         didSet { spineGradientLayer.isHidden = !showSpineShadow }
     }
@@ -804,9 +866,10 @@ public class ReaderBackgroundContainerView: UIView {
             ReaderTextureCache.highlightOverlayOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
         )
 
-        if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
+        let grainDensity = Double(textureGrainDensity)
+        if let img = ReaderTextureCache.shared.textureImage(for: currentTexture, grainDensity: grainDensity) {
             if currentTexture.usesFineTilePattern {
-                let tiled = ReaderTextureCache.shared.tiledTextureImage(for: currentTexture) ?? img
+                let tiled = ReaderTextureCache.shared.tiledTextureImage(for: currentTexture, grainDensity: grainDensity) ?? img
                 neutralTextureOverlayView.isHidden = true
                 neutralTextureOverlayView.image = nil
                 neutralTextureOverlayView.backgroundColor = .clear
@@ -930,6 +993,7 @@ public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
     public let opacity: Double
     public let tintOpacity: Double
+    public let grainDensity: Double
     public let phaseAnchor: TexturePhaseAnchor
     public let referenceSize: CGSize?
 
@@ -937,18 +1001,20 @@ public struct PaperTextureOverlayView: View {
         texture: ReaderTextureType,
         opacity: Double = 0.4,
         tintOpacity: Double = 1.0,
+        grainDensity: Double = 1.0,
         phaseAnchor: TexturePhaseAnchor = .local,
         referenceSize: CGSize? = nil
     ) {
         self.texture = texture
         self.opacity = opacity
         self.tintOpacity = tintOpacity
+        self.grainDensity = grainDensity
         self.phaseAnchor = phaseAnchor
         self.referenceSize = referenceSize
     }
 
     public var body: some View {
-        if let img = ReaderTextureCache.shared.textureImage(for: texture) {
+        if let img = ReaderTextureCache.shared.textureImage(for: texture, grainDensity: grainDensity) {
             let effectiveOpacity = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
             let overlayOpacity = ReaderTextureCache.highlightOverlayOpacity(for: texture, rawOpacity: opacity)
             let clampedTint = min(max(tintOpacity, 0.0), 1.0)

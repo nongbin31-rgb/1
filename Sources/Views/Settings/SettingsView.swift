@@ -167,6 +167,22 @@ public struct SettingsView: View {
                                 step: 0.05
                             )
                         }
+
+                        if store.readerTextureType.usesFineTilePattern {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("纸张颗粒数量")
+                                    Spacer()
+                                    Text("\(Int((store.readerClassicGrainDensity * 100).rounded()))%")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(
+                                    value: $store.readerClassicGrainDensity,
+                                    in: 0.1...1.0,
+                                    step: 0.05
+                                )
+                            }
+                        }
                     }
 
                     Toggle("书脊中缝立体阴影", isOn: $store.showSpineShadowInCurl)

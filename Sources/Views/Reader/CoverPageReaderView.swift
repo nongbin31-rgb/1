@@ -26,6 +26,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public let texture: ReaderTextureType
     public let textureOpacity: Double
     public let textureTintOpacity: Double
+    public let textureGrainDensity: Double
     public let textureTarget: ReaderTextureTarget
     public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
@@ -47,6 +48,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
@@ -67,6 +69,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self.texture = texture
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
+        self.textureGrainDensity = textureGrainDensity
         self.textureTarget = textureTarget
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
@@ -104,6 +107,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine
@@ -256,6 +260,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool
@@ -271,6 +276,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine
@@ -286,6 +292,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine
@@ -333,6 +340,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             texture: parentConfig.texture,
             textureOpacity: parentConfig.textureOpacity,
             textureTintOpacity: parentConfig.textureTintOpacity,
+            textureGrainDensity: parentConfig.textureGrainDensity,
             textureTarget: parentConfig.textureTarget,
             imageOnlyBackdrop: parentConfig.imageOnlyBackdrop,
             showDividingLine: parentConfig.showDividingLine,

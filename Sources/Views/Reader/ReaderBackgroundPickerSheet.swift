@@ -144,7 +144,10 @@ public struct ReaderBackgroundPickerSheet: View {
                             .opacity(store.readerTextureTintOpacity)
                     }
 
-                    if let img = ReaderTextureCache.shared.textureImage(for: item) {
+                    if let img = ReaderTextureCache.shared.textureImage(
+                        for: item,
+                        grainDensity: store.readerClassicGrainDensity
+                    ) {
                         if item.usesFineTilePattern {
                             Image(uiImage: img)
                                 .interpolation(.none)
@@ -379,6 +382,35 @@ public struct ReaderBackgroundPickerSheet: View {
                 Text("控制材质自带纸张色调对背景与画面的着色深浅；调至 0% 可去除泛黄偏色并仅保留纯白纸纤维肌理。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+
+            if store.readerTextureType.usesFineTilePattern {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("纸张颗粒数量")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text("\(Int((store.readerClassicGrainDensity * 100).rounded()))%")
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { store.readerClassicGrainDensity },
+                            set: { store.readerClassicGrainDensity = $0 }
+                        ),
+                        in: 0.1...1.0,
+                        step: 0.05
+                    )
+                    .tint(.accentColor)
+
+                    Text("以当前最大颗粒数为 100%，向下调节经典纸面的微粒疏密程度。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(14)

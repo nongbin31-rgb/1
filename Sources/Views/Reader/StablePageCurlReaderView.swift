@@ -22,6 +22,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let texture: ReaderTextureType
     public let textureOpacity: Double
     public let textureTintOpacity: Double
+    public let textureGrainDensity: Double
     public let textureTarget: ReaderTextureTarget
     public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
@@ -44,6 +45,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
@@ -65,6 +67,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.texture = texture
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
+        self.textureGrainDensity = textureGrainDensity
         self.textureTarget = textureTarget
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
@@ -129,6 +132,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                     texture: texture,
                     textureOpacity: textureOpacity,
                     textureTintOpacity: textureTintOpacity,
+                    textureGrainDensity: textureGrainDensity,
                     textureTarget: textureTarget,
                     imageOnlyBackdrop: imageOnlyBackdrop,
                     showSpineShadow: showSpineShadow,
@@ -267,6 +271,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 texture: parent.texture,
                 textureOpacity: parent.textureOpacity,
                 textureTintOpacity: parent.textureTintOpacity,
+                textureGrainDensity: parent.textureGrainDensity,
                 textureTarget: parent.textureTarget,
                 imageOnlyBackdrop: parent.imageOnlyBackdrop,
                 showDividingLine: parent.showDividingLine,

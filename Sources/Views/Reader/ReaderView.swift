@@ -376,7 +376,8 @@ public struct ReaderView: View {
                     PaperTextureOverlayView(
                         texture: store.readerTextureType,
                         opacity: store.readerTextureOpacity,
-                        tintOpacity: store.readerTextureTintOpacity
+                        tintOpacity: store.readerTextureTintOpacity,
+                        grainDensity: store.readerClassicGrainDensity
                     )
                 }
                 .ignoresSafeArea()
@@ -463,6 +464,7 @@ public struct ReaderView: View {
                                         texture: store.readerTextureType,
                                         textureOpacity: store.readerTextureOpacity,
                                         textureTintOpacity: store.readerTextureTintOpacity,
+                                        textureGrainDensity: store.readerClassicGrainDensity,
                                         textureTarget: store.readerTextureTarget,
                                         imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                                         texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
@@ -520,6 +522,7 @@ public struct ReaderView: View {
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
                 textureTintOpacity: store.readerTextureTintOpacity,
+                textureGrainDensity: store.readerClassicGrainDensity,
                 textureTarget: store.readerTextureTarget,
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 showDividingLine: store.showSpineDividingLine,
@@ -552,6 +555,7 @@ public struct ReaderView: View {
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
                 textureTintOpacity: store.readerTextureTintOpacity,
+                textureGrainDensity: store.readerClassicGrainDensity,
                 textureTarget: store.readerTextureTarget,
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 showDividingLine: store.showSpineDividingLine,
@@ -585,6 +589,7 @@ public struct ReaderView: View {
                 texture: store.readerTextureType,
                 textureOpacity: store.readerTextureOpacity,
                 textureTintOpacity: store.readerTextureTintOpacity,
+                textureGrainDensity: store.readerClassicGrainDensity,
                 textureTarget: store.readerTextureTarget,
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 currentPageIndex: $currentPageIndex,
@@ -972,6 +977,7 @@ private struct VerticalMangaPageCell: View {
     var texture: ReaderTextureType = .classic
     var textureOpacity: Double = 0.4
     var textureTintOpacity: Double = 1.0
+    var textureGrainDensity: Double = 1.0
     var textureTarget: ReaderTextureTarget = .both
     var imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     var texturePhaseAnchor: TexturePhaseAnchor = .local
@@ -1029,6 +1035,7 @@ private struct VerticalMangaPageCell: View {
                             texture: texture,
                             opacity: textureOpacity,
                             tintOpacity: textureTintOpacity,
+                            grainDensity: textureGrainDensity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
@@ -1055,6 +1062,7 @@ private struct VerticalMangaPageCell: View {
                             texture: texture,
                             opacity: textureOpacity,
                             tintOpacity: textureTintOpacity,
+                            grainDensity: textureGrainDensity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
@@ -1085,6 +1093,7 @@ private struct VerticalMangaPageCell: View {
                             texture: texture,
                             opacity: textureOpacity,
                             tintOpacity: textureTintOpacity,
+                            grainDensity: textureGrainDensity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
@@ -1119,6 +1128,7 @@ private struct VerticalMangaPageCell: View {
                             texture: texture,
                             opacity: textureOpacity,
                             tintOpacity: textureTintOpacity,
+                            grainDensity: textureGrainDensity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
