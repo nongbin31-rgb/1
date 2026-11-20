@@ -935,7 +935,6 @@ private struct VerticalMangaPageCell: View {
                             referenceSize: textureReferenceSize
                         )
                         .frame(width: contentWidth, height: alignedHeight)
-                        .clipped()
                     }
                 } else {
                     if shouldApplyImageTexture {
@@ -957,7 +956,6 @@ private struct VerticalMangaPageCell: View {
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
-                        .clipped()
                     }
                 }
 
