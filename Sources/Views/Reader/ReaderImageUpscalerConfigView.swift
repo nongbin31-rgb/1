@@ -16,8 +16,8 @@ public struct ReaderImageUpscalerConfigView: View {
     @State private var upscaleError: String? = nil
     @State private var performanceResult: String? = nil
     @State private var revealPercent: CGFloat = 0.5 // 0.0 ~ 1.0 分屏对比滑块位置
-    @State private var scale: CGFloat = 1.0
-    @State private var offset: CGSize = .zero
+    @State private var zoomScale: CGFloat = 1.0
+    @State private var lastZoomScale: CGFloat = 1.0
     @State private var showingAnime4KFAQ: Bool = false
     @State private var showingUpscalerFAQ: Bool = false
 
@@ -51,16 +51,21 @@ public struct ReaderImageUpscalerConfigView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // 1. 核心画面区：支持缩放、拖拽、点击隐藏与原图/超分分屏滑动对比
+                // 1. 核心画面区：仅缩放画面本身，分屏对比滑动条固定于屏幕视口，放大后依然全屏顺滑可拖
                 GeometryReader { geo in
-                    let size = geo.size
+                    let width = max(geo.size.width, 1)
+                    let height = max(geo.size.height, 1)
+                    let dividerX = max(16, min(width - 16, width * revealPercent))
+
                     ZStack {
                         // 底层：原图
                         if activeImage.size.width > 0 {
                             Image(uiImage: activeImage)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: size.width, height: size.height)
+                                .scaleEffect(zoomScale)
+                                .frame(width: width, height: height)
+                                .clipped()
                         } else {
                             VStack(spacing: 12) {
                                 ProgressView().tint(.white)
@@ -70,19 +75,20 @@ public struct ReaderImageUpscalerConfigView: View {
                             }
                         }
 
-                        // 顶层：超分后图像（根据 revealPercent 裁剪遮罩）
+                        // 顶层：超分后图像（根据 dividerX 裁剪右侧对比区域）
                         if let upscaled = upscaledImage {
                             Image(uiImage: upscaled)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: size.width, height: size.height)
-                                .clipShape(SplitRevealShape(percent: revealPercent))
+                                .scaleEffect(zoomScale)
+                                .frame(width: width, height: height)
+                                .clipped()
+                                .clipShape(SplitRevealShape(splitX: dividerX))
 
-                            // 分屏分割线与拖动手柄
+                            // 分屏分割线与拖动手柄（独立于图片缩放层，始终贴合视口坐标）
                             SplitDividerView(
-                                percent: $revealPercent,
-                                containerWidth: size.width,
-                                containerHeight: size.height
+                                xPos: dividerX,
+                                containerHeight: height
                             )
                         }
 
@@ -104,35 +110,28 @@ public struct ReaderImageUpscalerConfigView: View {
                             }
                         }
                     }
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .gesture(
-                        MagnificationGesture()
-                            .onChanged { val in
-                                scale = max(0.8, min(4.0, val))
-                            }
-                    )
-                    .simultaneousGesture(
-                        DragGesture()
-                            .onChanged { val in
-                                if scale > 1.05 {
-                                    offset = val.translation
-                                }
-                            }
-                            .onEnded { _ in
-                                if scale <= 1.05 {
-                                    withAnimation(.spring()) {
-                                        offset = .zero
-                                        scale = 1.0
-                                    }
-                                }
-                            }
-                    )
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             isConfigPanelHided.toggle()
                         }
                     }
+                    .gesture(
+                        DragGesture(minimumDistance: 3)
+                            .onChanged { val in
+                                guard upscaledImage != nil else { return }
+                                revealPercent = max(0.02, min(0.98, val.location.x / width))
+                            }
+                    )
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { val in
+                                zoomScale = max(1.0, min(4.0, lastZoomScale * val))
+                            }
+                            .onEnded { _ in
+                                lastZoomScale = zoomScale
+                            }
+                    )
                 }
 
                 // 2. 顶部/底部悬浮提示与配置面板
@@ -175,6 +174,12 @@ public struct ReaderImageUpscalerConfigView: View {
                     }
                 }
 
+                ToolbarItem(placement: .principal) {
+                    Text("画质增强 - 配置")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                }
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("完成") {
                         dismiss()
@@ -184,6 +189,7 @@ public struct ReaderImageUpscalerConfigView: View {
             }
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarBackground(Color.black.opacity(0.85), for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .sheet(isPresented: $showingUpscalerFAQ) {
                 upscalerFAQSheet
             }
@@ -499,28 +505,26 @@ public struct ReaderImageUpscalerConfigView: View {
 // MARK: - 分屏滑动对比辅助形状与手柄组件
 
 private struct SplitRevealShape: Shape {
-    var percent: CGFloat // 0.0 ~ 1.0
+    var splitX: CGFloat
 
     var animatableData: CGFloat {
-        get { percent }
-        set { percent = newValue }
+        get { splitX }
+        set { splitX = newValue }
     }
 
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        let splitX = rect.width * percent
-        p.addRect(CGRect(x: splitX, y: 0, width: rect.width - splitX, height: rect.height))
+        let clampedX = max(0, min(rect.width, splitX))
+        p.addRect(CGRect(x: clampedX, y: 0, width: rect.width - clampedX, height: rect.height))
         return p
     }
 }
 
 private struct SplitDividerView: View {
-    @Binding var percent: CGFloat
-    let containerWidth: CGFloat
+    let xPos: CGFloat
     let containerHeight: CGFloat
 
     var body: some View {
-        let xPos = containerWidth * percent
         ZStack {
             // 垂直分割白线
             Rectangle()
@@ -531,7 +535,7 @@ private struct SplitDividerView: View {
             // 圆形拖拽手柄
             Circle()
                 .fill(Color.white)
-                .frame(width: 32, height: 32)
+                .frame(width: 34, height: 34)
                 .shadow(color: .black.opacity(0.4), radius: 4)
                 .overlay(
                     HStack(spacing: 2) {
@@ -544,12 +548,6 @@ private struct SplitDividerView: View {
                 )
         }
         .position(x: xPos, y: containerHeight / 2)
-        .gesture(
-            DragGesture()
-                .onChanged { val in
-                    let newPercent = val.location.x / containerWidth
-                    percent = max(0.02, min(0.98, newPercent))
-                }
-        )
+        .allowsHitTesting(false)
     }
 }
