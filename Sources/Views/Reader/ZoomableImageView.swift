@@ -249,9 +249,8 @@ public struct ZoomableImageView: UIViewRepresentable {
                     imageView.textureClipContainer.alpha = CGFloat(effectiveAlpha)
 
                     if texture.usesFineTilePattern {
-                        // 程序化 128×128pt 原生像素透明底浮雕纸纹：GPU 原生无缝平铺 + nearest 最近邻锐利采样 + Overlay 凸粒高光
+                        // 程序化 128×128pt 原生像素透明底粉刷纸纹：GPU 原生无缝平铺 + nearest 最近邻锐利采样 + 纯单层 Multiply（对齐 MangaPrism）
                         let tiled = ReaderTextureCache.shared.tiledTextureImage(for: texture, grainDensity: grainDensity) ?? texImg
-                        let highlightAlpha = ReaderTextureCache.highlightOverlayOpacity(for: texture, rawOpacity: opacity)
 
                         imageView.neutralTextureOverlayView.isHidden = true
                         imageView.neutralTextureOverlayView.image = nil
@@ -265,9 +264,9 @@ public struct ZoomableImageView: UIViewRepresentable {
                         imageView.textureOverlayView.image = tiled
                         imageView.textureOverlayView.alpha = 1.0
 
-                        imageView.highlightClipContainer.isHidden = highlightAlpha <= 0.001
-                        imageView.highlightClipContainer.alpha = CGFloat(highlightAlpha)
-                        imageView.highlightOverlayView.image = tiled
+                        imageView.highlightClipContainer.isHidden = true
+                        imageView.highlightClipContainer.alpha = 0.0
+                        imageView.highlightOverlayView.image = nil
                     } else {
                         imageView.neutralTextureOverlayView.backgroundColor = .clear
                         imageView.textureOverlayView.backgroundColor = .clear

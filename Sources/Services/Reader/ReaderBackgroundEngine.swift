@@ -50,18 +50,16 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return min(max(Int(stepped), 10), 100)
     }
 
-    /// 感知强度映射：经典浮雕纸纹沿用 MangaPrism 0.66 幂次曲线，让低档位也保持清晰立体颗粒而非雾面发灰
+    /// 感知强度映射：经典粉刷采用 1:1 线性透明度（对齐 MangaPrism StuccoTextureOverlay），
+    /// 避免非线性抬升导致高档位人脸发灰显脏，同时让 35%~60% 常用区间保持通透细腻
     public static func perceptualOpacity(for texture: ReaderTextureType, rawOpacity: Double) -> Double {
-        let clamped = min(max(rawOpacity, 0.0), 1.0)
-        guard texture.usesFineTilePattern, clamped > 0 else { return clamped }
-        return pow(clamped, 0.66)
+        return min(max(rawOpacity, 0.0), 1.0)
     }
 
-    /// 经典透明底浮雕纸纹的辅助高光 Overlay 强度：
-    /// 激活透明切片中的纯白凸起高光粒在浅色/彩色纸面形成微浮雕反光，同时纯黑线稿保持纯黑不发灰
+    /// 经典粉刷模式严格采用纯单层 Multiply（正片叠底），不再叠加额外的 Overlay 高光层，
+    /// 以确保深色/中暗调区域零白噪泛灰、彩漫零掉饱和度（保留接口返回 0.0 兼容旧调用）
     public static func highlightOverlayOpacity(for texture: ReaderTextureType, rawOpacity: Double) -> Double {
-        guard texture.usesFineTilePattern else { return 0.0 }
-        return perceptualOpacity(for: texture, rawOpacity: rawOpacity) * 0.24
+        return 0.0
     }
 
     private func cacheKey(for type: ReaderTextureType, grainDensity: Double) -> NSString {
@@ -311,7 +309,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
                 let softRadius = baseRadius + 12.0 * scaleFactor
                 let isLight = plasterRng.nextBool()
                 let component: CGFloat = isLight ? 1.0 : 0.0
-                let peakAlpha: CGFloat = isLight ? 0.055 : 0.022
+                let peakAlpha: CGFloat = isLight ? 0.055 : 0.020
 
                 let colors = [
                     CGColor(colorSpace: colorSpace, components: [component, component, component, peakAlpha])!,
@@ -384,7 +382,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
                 if isRaisedGrain {
                     if diameter > shadowMinDiameter {
-                        let shadowAlpha = 0.13 + CGFloat(grainRng.nextUnitDouble()) * 0.15
+                        let shadowAlpha = 0.10 + CGFloat(grainRng.nextUnitDouble()) * 0.14
                         cg.setFillColor(red: 0.0, green: 0.0, blue: 0.0, alpha: shadowAlpha)
                         var sx = x + shadowOffset
                         if sx >= tileSize { sx -= tileSize }
@@ -393,11 +391,11 @@ public final class ReaderTextureCache: @unchecked Sendable {
                         drawSeamlessDot(in: cg, x: sx, y: sy, diameter: diameter * 0.88, tileSize: tileSize)
                     }
 
-                    let highlightAlpha = 0.86 + CGFloat(grainRng.nextUnitDouble()) * 0.14
+                    let highlightAlpha = 0.82 + CGFloat(grainRng.nextUnitDouble()) * 0.18
                     cg.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: highlightAlpha)
                     drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter, tileSize: tileSize)
                 } else {
-                    let poreAlpha = 0.14 + CGFloat(grainRng.nextUnitDouble()) * 0.16
+                    let poreAlpha = 0.12 + CGFloat(grainRng.nextUnitDouble()) * 0.16
                     cg.setFillColor(red: poreR, green: poreG, blue: poreB, alpha: poreAlpha)
                     drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter * 0.85, tileSize: tileSize)
                 }
@@ -862,9 +860,6 @@ public class ReaderBackgroundContainerView: UIView {
         textureCompositeView.alpha = CGFloat(
             ReaderTextureCache.perceptualOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
         )
-        let highlightAlpha = CGFloat(
-            ReaderTextureCache.highlightOverlayOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
-        )
 
         let grainDensity = Double(textureGrainDensity)
         if let img = ReaderTextureCache.shared.textureImage(for: currentTexture, grainDensity: grainDensity) {
@@ -882,9 +877,9 @@ public class ReaderBackgroundContainerView: UIView {
                 textureOverlayView.image = tiled
                 textureOverlayView.alpha = 1.0
 
-                highlightOverlayView.isHidden = (currentBackground != .texture) || highlightAlpha <= 0.001
-                highlightOverlayView.image = tiled
-                highlightOverlayView.alpha = highlightAlpha
+                highlightOverlayView.isHidden = true
+                highlightOverlayView.image = nil
+                highlightOverlayView.alpha = 0.0
             } else {
                 neutralTextureOverlayView.backgroundColor = .clear
                 textureOverlayView.backgroundColor = .clear
@@ -1016,29 +1011,18 @@ public struct PaperTextureOverlayView: View {
     public var body: some View {
         if let img = ReaderTextureCache.shared.textureImage(for: texture, grainDensity: grainDensity) {
             let effectiveOpacity = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
-            let overlayOpacity = ReaderTextureCache.highlightOverlayOpacity(for: texture, rawOpacity: opacity)
             let clampedTint = min(max(tintOpacity, 0.0), 1.0)
 
             switch phaseAnchor {
             case .local:
                 if texture.usesFineTilePattern {
-                    // 经典高密浮雕微粒：原生 1:1 物理像素 (128×128pt) 最近邻锐利平铺 + Multiply 凹槽 / Overlay 高光双通道
-                    ZStack {
-                        Image(uiImage: img)
-                            .interpolation(.none)
-                            .resizable(resizingMode: .tile)
-                            .opacity(effectiveOpacity)
-                            .blendMode(.multiply)
-
-                        if overlayOpacity > 0.001 {
-                            Image(uiImage: img)
-                                .interpolation(.none)
-                                .resizable(resizingMode: .tile)
-                                .opacity(overlayOpacity)
-                                .blendMode(.overlay)
-                        }
-                    }
-                    .allowsHitTesting(false)
+                    // 经典高密粉刷微粒：原生 1:1 物理像素 (128×128pt) 最近邻锐利平铺 + 纯单层 Multiply（对齐 MangaPrism StuccoTextureOverlay）
+                    Image(uiImage: img)
+                        .interpolation(.none)
+                        .resizable(resizingMode: .tile)
+                        .opacity(effectiveOpacity)
+                        .blendMode(.multiply)
+                        .allowsHitTesting(false)
                 } else {
                     let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
                     // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
@@ -1073,35 +1057,18 @@ public struct PaperTextureOverlayView: View {
                             let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
                             let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
 
-                            ZStack {
-                                Color.clear
-                                    .frame(width: viewW, height: viewH)
-                                    .overlay(alignment: .topLeading) {
-                                        Image(uiImage: img)
-                                            .interpolation(.none)
-                                            .resizable(resizingMode: .tile)
-                                            .frame(width: viewW + tileW, height: viewH + tileH)
-                                            .offset(x: -phaseX, y: -phaseY)
-                                    }
-                                    .clipped()
-                                    .opacity(effectiveOpacity)
-                                    .blendMode(.multiply)
-
-                                if overlayOpacity > 0.001 {
-                                    Color.clear
-                                        .frame(width: viewW, height: viewH)
-                                        .overlay(alignment: .topLeading) {
-                                            Image(uiImage: img)
-                                                .interpolation(.none)
-                                                .resizable(resizingMode: .tile)
-                                                .frame(width: viewW + tileW, height: viewH + tileH)
-                                                .offset(x: -phaseX, y: -phaseY)
-                                        }
-                                        .clipped()
-                                        .opacity(overlayOpacity)
-                                        .blendMode(.overlay)
+                            Color.clear
+                                .frame(width: viewW, height: viewH)
+                                .overlay(alignment: .topLeading) {
+                                    Image(uiImage: img)
+                                        .interpolation(.none)
+                                        .resizable(resizingMode: .tile)
+                                        .frame(width: viewW + tileW, height: viewH + tileH)
+                                        .offset(x: -phaseX, y: -phaseY)
                                 }
-                            }
+                                .clipped()
+                                .opacity(effectiveOpacity)
+                                .blendMode(.multiply)
                         }
                     }
                     .allowsHitTesting(false)
