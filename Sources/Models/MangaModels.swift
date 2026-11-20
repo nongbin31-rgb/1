@@ -876,8 +876,8 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
     public var basePaperColor: UIColor {
         switch self {
         case .classic:
-            // 经典日漫原色开本纸：自然微暖书刊白 (RGB: 247, 245, 238)
-            return UIColor(red: 0.968, green: 0.960, blue: 0.932, alpha: 1.0)
+            // 经典粉刷书纸白：通透洁净高白纸基，穿透彩漫时不泛黄 (RGB: 253, 253, 252)
+            return UIColor(red: 0.992, green: 0.992, blue: 0.988, alpha: 1.0)
         case .brownPaper:
             // 进口包装牛皮纸：经典温厚牛皮棕 (RGB: 230, 215, 189)
             return UIColor(red: 0.902, green: 0.843, blue: 0.741, alpha: 1.0)
@@ -903,7 +903,7 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         #if canImport(UIKit)
         return Color(uiColor: basePaperColor)
         #else
-        return Color(red: 0.968, green: 0.960, blue: 0.932)
+        return Color(red: 0.992, green: 0.992, blue: 0.988)
         #endif
     }
     #endif

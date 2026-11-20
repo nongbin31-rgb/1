@@ -20,6 +20,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     private let cache = NSCache<NSString, UIImage>()
     private let seamlessTileCache = NSCache<NSString, UIImage>()
+    private let tiledImageCache = NSCache<NSString, UIImage>()
     private let patternColorCache = NSCache<NSString, UIColor>()
     private let loadLock = NSLock()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
@@ -35,6 +36,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private init() {
         cache.countLimit = 24
         seamlessTileCache.countLimit = 24
+        tiledImageCache.countLimit = 12
     }
 
     /// 感知强度映射：经典浮雕纸纹沿用 MangaPrism 0.66 幂次曲线，让低档位也保持清晰立体颗粒而非雾面发灰
@@ -42,6 +44,13 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let clamped = min(max(rawOpacity, 0.0), 1.0)
         guard texture.usesFineTilePattern, clamped > 0 else { return clamped }
         return pow(clamped, 0.66)
+    }
+
+    /// 经典透明底浮雕纸纹的辅助高光 Overlay 强度：
+    /// 激活透明切片中的纯白凸起高光粒在浅色/彩色纸面形成微浮雕反光，同时纯黑线稿保持纯黑不发灰
+    public static func highlightOverlayOpacity(for texture: ReaderTextureType, rawOpacity: Double) -> Double {
+        guard texture.usesFineTilePattern else { return 0.0 }
+        return perceptualOpacity(for: texture, rawOpacity: rawOpacity) * 0.24
     }
 
     /// 获取指定纸张纹理图像（带内存二级缓存）
@@ -72,7 +81,21 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return loaded
     }
 
-    /// 获取缓存的平铺画刷颜色（供 UIKit 1:1 逻辑尺寸高频无损平铺，避免拖动滑块时重复创建 CGPattern）
+    /// 获取缓存的 GPU 原生无缝平铺图像（供 UIImageView 1:1 左上角对齐平铺，支持 nearest 最近邻采样且无 Y 轴翻转）
+    public func tiledTextureImage(for type: ReaderTextureType) -> UIImage? {
+        let key = type.rawValue as NSString
+        if let cached = tiledImageCache.object(forKey: key) {
+            return cached
+        }
+        guard let img = textureImage(for: type) else {
+            return nil
+        }
+        let tiled = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+        tiledImageCache.setObject(tiled, forKey: key)
+        return tiled
+    }
+
+    /// 获取缓存的平铺画刷颜色（向后兼容旧调用）
     public func patternColor(for type: ReaderTextureType) -> UIColor? {
         let key = type.rawValue as NSString
         if let cached = patternColorCache.object(forKey: key) {
@@ -232,12 +255,16 @@ public final class ReaderTextureCache: @unchecked Sendable {
     }
 
     /// 1:1 复刻 MangaPrism StuccoTextureManager 的程序化高密立体浮雕纸纹引擎：
-    /// 256×256pt 逻辑尺寸（2x 视网膜锐利渲染），内含 42 处无缝柔和纸浆光斑 + 23,500 颗带右下投影的立体凸起微粒与炭灰气孔
+    /// 透明底 128×128pt 逻辑切片（按设备原生 2x/3x 屏幕像素 1:1 渲染，零放大零模糊），
+    /// 内含 42 处无缝柔和纸浆光斑 + 23,500 颗带右下投影的立体凸起微粒与炭灰气孔
     private static func buildProceduralClassicStuccoTile() -> UIImage {
-        let tileSize: CGFloat = 256.0
+        let tileSize: CGFloat = 128.0
+        let scaleFactor: CGFloat = tileSize / 256.0
+        let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 2.0
-        format.opaque = true
+        format.scale = screenScale
+        format.opaque = false
 
         let renderer = UIGraphicsImageRenderer(
             size: CGSize(width: tileSize, height: tileSize),
@@ -247,9 +274,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return renderer.image { ctx in
             let cg = ctx.cgContext
 
-            // 纯白基底：确保正片叠底 Multiply 时凸起高光区域保持通透洁净不发灰
-            cg.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-            cg.fill(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
+            // 严格保持透明底（对齐 MangaPrism）：空白间隙完全穿透底色与漫画原画，
+            // 让同一张切片同时支撑 Multiply 凹槽暗影与 Overlay 凸起高光双通道透视混合
+            cg.clear(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
 
             // Layer 1: 42 处无缝柔和纸浆起伏斑块（模拟手工纸张轻微明暗起伏）
             var plasterRng = SplitMix64RNG(seed: 20261108)
@@ -259,11 +286,11 @@ public final class ReaderTextureCache: @unchecked Sendable {
             for _ in 0..<42 {
                 let cx = CGFloat(plasterRng.nextUnitDouble()) * tileSize
                 let cy = CGFloat(plasterRng.nextUnitDouble()) * tileSize
-                let baseRadius = 20.0 + CGFloat(plasterRng.nextUnitDouble()) * 38.0
-                let softRadius = baseRadius + 12.0
+                let baseRadius = (20.0 + CGFloat(plasterRng.nextUnitDouble()) * 38.0) * scaleFactor
+                let softRadius = baseRadius + 12.0 * scaleFactor
                 let isLight = plasterRng.nextBool()
                 let component: CGFloat = isLight ? 1.0 : 0.0
-                let peakAlpha: CGFloat = isLight ? 0.055 : 0.024
+                let peakAlpha: CGFloat = isLight ? 0.055 : 0.022
 
                 let colors = [
                     CGColor(colorSpace: colorSpace, components: [component, component, component, peakAlpha])!,
@@ -291,23 +318,26 @@ public final class ReaderTextureCache: @unchecked Sendable {
             let poreR: CGFloat = 69.0 / 255.0   // #45474D 炭灰纸浆微孔
             let poreG: CGFloat = 71.0 / 255.0
             let poreB: CGFloat = 77.0 / 255.0
+            let shadowOffset: CGFloat = 0.85 * scaleFactor
+            let shadowMinDiameter: CGFloat = 0.95 * scaleFactor
 
             for _ in 0..<23_500 {
                 let x = CGFloat(grainRng.nextUnitDouble()) * tileSize
                 let y = CGFloat(grainRng.nextUnitDouble()) * tileSize
                 // 保留大量细砂，同时让 16% 较大高光颗粒形成清晰的立体视觉锚点
-                let diameter: CGFloat = grainRng.nextUnitDouble() < 0.16
+                let rawDiameter: CGFloat = grainRng.nextUnitDouble() < 0.16
                     ? (1.55 + CGFloat(grainRng.nextUnitDouble()) * 1.15)
                     : (0.75 + CGFloat(grainRng.nextUnitDouble()) * 1.05)
+                let diameter = rawDiameter * scaleFactor
                 let isRaisedGrain = grainRng.nextUnitDouble() > 0.36
 
                 if isRaisedGrain {
-                    if diameter > 0.95 {
+                    if diameter > shadowMinDiameter {
                         let shadowAlpha = 0.13 + CGFloat(grainRng.nextUnitDouble()) * 0.15
                         cg.setFillColor(red: 0.0, green: 0.0, blue: 0.0, alpha: shadowAlpha)
-                        var sx = x + 0.85
+                        var sx = x + shadowOffset
                         if sx >= tileSize { sx -= tileSize }
-                        var sy = y + 0.85
+                        var sy = y + shadowOffset
                         if sy >= tileSize { sy -= tileSize }
                         drawSeamlessDot(in: cg, x: sx, y: sy, diameter: diameter * 0.88, tileSize: tileSize)
                     }
@@ -561,6 +591,8 @@ public class ReaderBackgroundContainerView: UIView {
     public let textureCompositeView = UIView()
     public let neutralTextureOverlayView = UIImageView()
     public let textureOverlayView = UIImageView()
+    /// Layer 2.5: 经典透明底浮雕纸纹的辅助高光层 (使用 overlayBlendMode 激活凸起微粒受光面，纯黑线稿零泛白)
+    public let highlightOverlayView = UIImageView()
     /// Layer 3: 书脊中缝立体渐变阴影层 (CAGradientLayer)
     public let spineGradientLayer = CAGradientLayer()
     /// Layer 4: 书脊中缝细分割线 (模拟实体开本中线)
@@ -584,6 +616,9 @@ public class ReaderBackgroundContainerView: UIView {
         didSet {
             textureCompositeView.alpha = CGFloat(
                 ReaderTextureCache.perceptualOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
+            )
+            highlightOverlayView.alpha = CGFloat(
+                ReaderTextureCache.highlightOverlayOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
             )
         }
     }
@@ -657,6 +692,17 @@ public class ReaderBackgroundContainerView: UIView {
         textureOverlayView.contentMode = .scaleAspectFill
         textureCompositeView.addSubview(textureOverlayView)
 
+        highlightOverlayView.frame = bounds
+        highlightOverlayView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        highlightOverlayView.contentMode = .scaleToFill
+        highlightOverlayView.clipsToBounds = true
+        highlightOverlayView.backgroundColor = .clear
+        highlightOverlayView.layer.compositingFilter = "overlayBlendMode"
+        highlightOverlayView.layer.magnificationFilter = .nearest
+        highlightOverlayView.layer.minificationFilter = .nearest
+        highlightOverlayView.isHidden = true
+        addSubview(highlightOverlayView)
+
         // 4. 书脊立体阴影
         setupSpineGradient()
 
@@ -705,21 +751,25 @@ public class ReaderBackgroundContainerView: UIView {
         case .followSystem:
             immersiveBackgroundView.isHidden = true
             textureCompositeView.isHidden = true
+            highlightOverlayView.isHidden = true
             baseColorView.backgroundColor = .systemBackground
 
         case .light:
             immersiveBackgroundView.isHidden = true
             textureCompositeView.isHidden = true
+            highlightOverlayView.isHidden = true
             baseColorView.backgroundColor = .white
 
         case .dark:
             immersiveBackgroundView.isHidden = true
             textureCompositeView.isHidden = true
+            highlightOverlayView.isHidden = true
             baseColorView.backgroundColor = .black
 
         case .immersive:
             immersiveBackgroundView.isHidden = false
             textureCompositeView.isHidden = true
+            highlightOverlayView.isHidden = true
             baseColorView.backgroundColor = .black
 
         case .texture:
@@ -750,20 +800,37 @@ public class ReaderBackgroundContainerView: UIView {
         textureCompositeView.alpha = CGFloat(
             ReaderTextureCache.perceptualOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
         )
+        let highlightAlpha = CGFloat(
+            ReaderTextureCache.highlightOverlayOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
+        )
 
         if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
             if currentTexture.usesFineTilePattern {
+                let tiled = ReaderTextureCache.shared.tiledTextureImage(for: currentTexture) ?? img
                 neutralTextureOverlayView.isHidden = true
                 neutralTextureOverlayView.image = nil
                 neutralTextureOverlayView.backgroundColor = .clear
 
                 textureOverlayView.isHidden = false
-                textureOverlayView.image = nil
-                textureOverlayView.backgroundColor = ReaderTextureCache.shared.patternColor(for: currentTexture)
+                textureOverlayView.backgroundColor = .clear
+                textureOverlayView.contentMode = .scaleToFill
+                textureOverlayView.layer.magnificationFilter = .nearest
+                textureOverlayView.layer.minificationFilter = .nearest
+                textureOverlayView.image = tiled
                 textureOverlayView.alpha = 1.0
+
+                highlightOverlayView.isHidden = (currentBackground != .texture) || highlightAlpha <= 0.001
+                highlightOverlayView.image = tiled
+                highlightOverlayView.alpha = highlightAlpha
             } else {
                 neutralTextureOverlayView.backgroundColor = .clear
                 textureOverlayView.backgroundColor = .clear
+                textureOverlayView.layer.magnificationFilter = .linear
+                textureOverlayView.layer.minificationFilter = .linear
+
+                highlightOverlayView.isHidden = true
+                highlightOverlayView.image = nil
+                highlightOverlayView.alpha = 0.0
 
                 let neutralImg = t < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: currentTexture) : nil
                 if let neutralImg, t < 0.999 {
@@ -791,6 +858,8 @@ public class ReaderBackgroundContainerView: UIView {
             neutralTextureOverlayView.backgroundColor = .clear
             textureOverlayView.image = nil
             textureOverlayView.backgroundColor = .clear
+            highlightOverlayView.isHidden = true
+            highlightOverlayView.image = nil
         }
     }
 
@@ -881,17 +950,29 @@ public struct PaperTextureOverlayView: View {
     public var body: some View {
         if let img = ReaderTextureCache.shared.textureImage(for: texture) {
             let effectiveOpacity = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
+            let overlayOpacity = ReaderTextureCache.highlightOverlayOpacity(for: texture, rawOpacity: opacity)
             let clampedTint = min(max(tintOpacity, 0.0), 1.0)
 
             switch phaseAnchor {
             case .local:
                 if texture.usesFineTilePattern {
-                    // 经典高密浮雕微粒：原生 1:1 逻辑尺寸 (256×256pt) 无缝重复平铺
-                    Image(uiImage: img)
-                        .resizable(resizingMode: .tile)
-                        .blendMode(.multiply)
-                        .opacity(effectiveOpacity)
-                        .allowsHitTesting(false)
+                    // 经典高密浮雕微粒：原生 1:1 物理像素 (128×128pt) 最近邻锐利平铺 + Multiply 凹槽 / Overlay 高光双通道
+                    ZStack {
+                        Image(uiImage: img)
+                            .interpolation(.none)
+                            .resizable(resizingMode: .tile)
+                            .opacity(effectiveOpacity)
+                            .blendMode(.multiply)
+
+                        if overlayOpacity > 0.001 {
+                            Image(uiImage: img)
+                                .interpolation(.none)
+                                .resizable(resizingMode: .tile)
+                                .opacity(overlayOpacity)
+                                .blendMode(.overlay)
+                        }
+                    }
+                    .allowsHitTesting(false)
                 } else {
                     let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
                     // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
@@ -926,19 +1007,37 @@ public struct PaperTextureOverlayView: View {
                             let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
                             let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
 
-                            Color.clear
-                                .frame(width: viewW, height: viewH)
-                                .overlay(alignment: .topLeading) {
-                                    Image(uiImage: img)
-                                        .resizable(resizingMode: .tile)
-                                        .frame(width: viewW + tileW, height: viewH + tileH)
-                                        .offset(x: -phaseX, y: -phaseY)
+                            ZStack {
+                                Color.clear
+                                    .frame(width: viewW, height: viewH)
+                                    .overlay(alignment: .topLeading) {
+                                        Image(uiImage: img)
+                                            .interpolation(.none)
+                                            .resizable(resizingMode: .tile)
+                                            .frame(width: viewW + tileW, height: viewH + tileH)
+                                            .offset(x: -phaseX, y: -phaseY)
+                                    }
+                                    .clipped()
+                                    .opacity(effectiveOpacity)
+                                    .blendMode(.multiply)
+
+                                if overlayOpacity > 0.001 {
+                                    Color.clear
+                                        .frame(width: viewW, height: viewH)
+                                        .overlay(alignment: .topLeading) {
+                                            Image(uiImage: img)
+                                                .interpolation(.none)
+                                                .resizable(resizingMode: .tile)
+                                                .frame(width: viewW + tileW, height: viewH + tileH)
+                                                .offset(x: -phaseX, y: -phaseY)
+                                        }
+                                        .clipped()
+                                        .opacity(overlayOpacity)
+                                        .blendMode(.overlay)
                                 }
-                                .clipped()
+                            }
                         }
                     }
-                    .blendMode(.multiply)
-                    .opacity(effectiveOpacity)
                     .allowsHitTesting(false)
                 } else {
                     let tileImg = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
