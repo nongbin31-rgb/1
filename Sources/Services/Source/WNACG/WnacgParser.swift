@@ -29,6 +29,7 @@ public enum WnacgParser {
 
     private static let cateClassRegex = try! NSRegularExpression(pattern: #"\bcate-(\d+)\b"#)
     private static let aidRegex = try! NSRegularExpression(pattern: #"aid-(\d+)"#)
+    private static let paginatorPageRegex = try! NSRegularExpression(pattern: #"page-(\d+)"#)
     private static let pageUrlArrayRegex = try! NSRegularExpression(
         pattern: #""?page_url"?\s*:\s*\[(.*?)\]"#,
         options: [.dotMatchesLineSeparators]
@@ -143,6 +144,35 @@ public enum WnacgParser {
             )
         }
         return items
+    }
+
+    /// 解析列表页 HTML 底部分页器中的最大页码（供总页数估算）
+    public static func parsePaginatorMaxPage(in html: String) -> Int? {
+        guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let doc = try? SwiftSoup.parse(html),
+              let links = try? doc.select(".paginator a, .paginator .thispage, .f_left.paginator a") else {
+            return nil
+        }
+
+        var maxPage: Int?
+        for element in links.array() {
+            let text = ((try? element.text()) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if let num = Int(text), num > 0 {
+                maxPage = max(maxPage ?? 0, num)
+            }
+            let href = (try? element.attr("href")) ?? ""
+            if !href.isEmpty {
+                let nsRange = NSRange(href.startIndex..<href.endIndex, in: href)
+                if let match = paginatorPageRegex.firstMatch(in: href, range: nsRange),
+                   match.numberOfRanges > 1,
+                   let r1 = Range(match.range(at: 1), in: href),
+                   let num = Int(href[r1]),
+                   num > 0 {
+                    maxPage = max(maxPage ?? 0, num)
+                }
+            }
+        }
+        return maxPage
     }
 
     public static func parseDetailHtml(

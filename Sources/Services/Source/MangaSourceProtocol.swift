@@ -1,5 +1,25 @@
 import Foundation
 
+/// 带总页数与总条数元数据的分页结果
+public struct MangaPagedResult: Sendable {
+    public let items: [Manga]
+    public let totalPages: Int?
+    public let totalItems: Int?
+    public let hasMore: Bool?
+
+    public init(
+        items: [Manga],
+        totalPages: Int? = nil,
+        totalItems: Int? = nil,
+        hasMore: Bool? = nil
+    ) {
+        self.items = items
+        self.totalPages = totalPages
+        self.totalItems = totalItems
+        self.hasMore = hasMore
+    }
+}
+
 /// 在线漫画图源统一协议
 /// 后续接入 Komga、OPDS、WebDAV 或任意自定义在线图源，只需实现此协议并在 SourceManager 注册
 public protocol MangaSourceProtocol: Sendable {
@@ -16,6 +36,12 @@ public protocol MangaSourceProtocol: Sendable {
 
     /// 按分类获取发现列表
     func fetchPopular(category: String, page: Int) async throws -> [Manga]
+
+    /// 获取带总页数元数据的热门 / 推荐分页结果
+    func fetchPopularPaged(page: Int) async throws -> MangaPagedResult
+
+    /// 按分类获取带总页数元数据的发现分页结果
+    func fetchPopularPaged(category: String, page: Int) async throws -> MangaPagedResult
 
     /// 关键词搜索
     func search(query: String, page: Int) async throws -> [Manga]
@@ -43,6 +69,16 @@ public extension MangaSourceProtocol {
 
     func fetchPopular(category: String, page: Int) async throws -> [Manga] {
         try await fetchPopular(page: page)
+    }
+
+    func fetchPopularPaged(page: Int) async throws -> MangaPagedResult {
+        let items = try await fetchPopular(page: page)
+        return MangaPagedResult(items: items)
+    }
+
+    func fetchPopularPaged(category: String, page: Int) async throws -> MangaPagedResult {
+        let items = try await fetchPopular(category: category, page: page)
+        return MangaPagedResult(items: items)
     }
 
     func search(query: String, sort: MangaSearchSort, page: Int) async throws -> [Manga] {

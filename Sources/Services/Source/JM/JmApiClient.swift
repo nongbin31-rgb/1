@@ -376,10 +376,24 @@ public actor JmApiClient {
         order: String = "mr",
         page: Int = 1
     ) async throws -> [Manga] {
+        try await getExplorePaged(
+            sourceID: sourceID,
+            category: category,
+            order: order,
+            page: page
+        ).items
+    }
+
+    public func getExplorePaged(
+        sourceID: String,
+        category: String = "0",
+        order: String = "mr",
+        page: Int = 1
+    ) async throws -> MangaPagedResult {
         let normalizedCategory = category.isEmpty ? "0" : category
         let normalizedOrder = order.isEmpty ? "mr" : order
         let streamKey = "explore:\(sourceID):\(normalizedCategory):\(normalizedOrder)"
-        return try await paginator.fetchPage(key: streamKey, page: page) { rawPage in
+        return try await paginator.fetchPaged(key: streamKey, page: page) { rawPage in
             try await self.fetchRawExplore(
                 sourceID: sourceID,
                 category: normalizedCategory,
@@ -404,12 +418,15 @@ public actor JmApiClient {
             ]
         )
         let items: [Manga]
+        let totalItems: Int?
         if let map = data as? [String: Any] {
             items = parseMangaList(map["content"], sourceID: sourceID)
+            totalItems = readPositiveInt(map["total"])
         } else {
             items = parseMangaList(data, sourceID: sourceID)
+            totalItems = nil
         }
-        return RawPageResult(items: items, hasMore: !items.isEmpty)
+        return RawPageResult(items: items, hasMore: !items.isEmpty, totalItems: totalItems)
     }
 
     public func search(
@@ -796,5 +813,22 @@ public actor JmApiClient {
         let s = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty || s == "<null>" { return nil }
         return MangaAuthorFormatter.decodeUnicodeEscape(s)
+    }
+
+    private func readPositiveInt(_ value: Any?) -> Int? {
+        if let num = value as? Int {
+            return num > 0 ? num : nil
+        }
+        if let num = value as? NSNumber {
+            let i = num.intValue
+            return i > 0 ? i : nil
+        }
+        if let s = cleanField(value) {
+            let digitsOnly = s.replacingOccurrences(of: ",", with: "")
+            if let i = Int(digitsOnly), i > 0 {
+                return i
+            }
+        }
+        return nil
     }
 }

@@ -11,10 +11,12 @@ public enum PaginationCacheScope: Sendable {
 public struct RawPageResult: Sendable {
     public let items: [Manga]
     public let hasMore: Bool
+    public let totalItems: Int?
 
-    public init(items: [Manga], hasMore: Bool? = nil) {
+    public init(items: [Manga], hasMore: Bool? = nil, totalItems: Int? = nil) {
         self.items = items
         self.hasMore = hasMore ?? !items.isEmpty
+        self.totalItems = (totalItems ?? 0) > 0 ? totalItems : nil
     }
 }
 
@@ -31,12 +33,20 @@ public actor UniformPaginator {
         var seenIDs: Set<String> = []
         var nextSequentialRawPage: Int = 1
         var isExhausted: Bool = false
+        var knownTotalItems: Int? = nil
         var updatedAt: Date = Date()
 
         init(sessionID: UUID = UUID(), updatedAt: Date = Date()) {
             self.sessionID = sessionID
             self.updatedAt = updatedAt
         }
+    }
+
+    private struct WindowOutcome {
+        let items: [Manga]
+        let knownTotalItems: Int?
+        let isExhausted: Bool
+        let orderedCount: Int?
     }
 
     public let pageSize: Int
@@ -80,7 +90,17 @@ public actor UniformPaginator {
         page: Int,
         fetchRawPage: @escaping @Sendable (Int) async throws -> RawPageResult
     ) async throws -> [Manga] {
-        guard page >= 1 else { return [] }
+        try await fetchPaged(key: key, page: page, fetchRawPage: fetchRawPage).items
+    }
+
+    public func fetchPaged(
+        key: String,
+        page: Int,
+        fetchRawPage: @escaping @Sendable (Int) async throws -> RawPageResult
+    ) async throws -> MangaPagedResult {
+        guard page >= 1 else {
+            return MangaPagedResult(items: [], totalPages: nil, totalItems: nil, hasMore: false)
+        }
 
         let now = Date()
         pruneStreams(now: now)
@@ -97,31 +117,69 @@ public actor UniformPaginator {
         let start = (page - 1) * pageSize
         let end = page * pageSize
 
+        let outcome: WindowOutcome
         if initialState.orderedItems.count >= end || initialState.isExhausted {
             streams[key]?.updatedAt = now
-            return slice(initialState.orderedItems, start: start, end: end)
-        }
-
-        let missingCount = end - initialState.orderedItems.count
-        let estimatedNeededRawPages = (missingCount + approxRawPageSize - 1) / approxRawPageSize
-
-        if estimatedNeededRawPages <= maxCatchUpRawPages {
-            return try await fetchSequentialWindow(
-                key: key,
-                sessionID: sessionID,
-                initialFallbackState: initialState,
-                start: start,
-                end: end,
-                fetchRawPage: fetchRawPage
+            outcome = WindowOutcome(
+                items: slice(initialState.orderedItems, start: start, end: end),
+                knownTotalItems: initialState.knownTotalItems,
+                isExhausted: initialState.isExhausted,
+                orderedCount: initialState.orderedItems.count
             )
         } else {
-            return try await fetchDirectJumpWindow(
-                key: key,
-                sessionID: sessionID,
-                start: start,
-                fetchRawPage: fetchRawPage
-            )
+            let missingCount = end - initialState.orderedItems.count
+            let estimatedNeededRawPages = (missingCount + approxRawPageSize - 1) / approxRawPageSize
+
+            if estimatedNeededRawPages <= maxCatchUpRawPages {
+                outcome = try await fetchSequentialWindow(
+                    key: key,
+                    sessionID: sessionID,
+                    initialFallbackState: initialState,
+                    start: start,
+                    end: end,
+                    fetchRawPage: fetchRawPage
+                )
+            } else {
+                outcome = try await fetchDirectJumpWindow(
+                    key: key,
+                    sessionID: sessionID,
+                    start: start,
+                    fetchRawPage: fetchRawPage
+                )
+            }
         }
+
+        let resolvedTotalItems: Int?
+        if outcome.isExhausted, let orderedCount = outcome.orderedCount, orderedCount > 0 {
+            resolvedTotalItems = orderedCount
+        } else {
+            resolvedTotalItems = outcome.knownTotalItems
+        }
+
+        let totalPages: Int?
+        if let resolvedTotalItems, resolvedTotalItems > 0 {
+            totalPages = max(1, (resolvedTotalItems + pageSize - 1) / pageSize)
+        } else if outcome.isExhausted, !outcome.items.isEmpty {
+            totalPages = max(1, page)
+        } else {
+            totalPages = nil
+        }
+
+        let hasMore: Bool
+        if outcome.items.isEmpty {
+            hasMore = false
+        } else if let totalPages {
+            hasMore = page < totalPages
+        } else {
+            hasMore = !outcome.isExhausted && outcome.items.count >= pageSize
+        }
+
+        return MangaPagedResult(
+            items: outcome.items,
+            totalPages: totalPages,
+            totalItems: resolvedTotalItems,
+            hasMore: hasMore
+        )
     }
 
     // MARK: - Sequential Window
@@ -133,7 +191,7 @@ public actor UniformPaginator {
         start: Int,
         end: Int,
         fetchRawPage: @escaping @Sendable (Int) async throws -> RawPageResult
-    ) async throws -> [Manga] {
+    ) async throws -> WindowOutcome {
         var fallbackState = initialFallbackState
         var safetyIterations = 0
         let maxIterations = 20
@@ -155,7 +213,12 @@ public actor UniformPaginator {
             }
 
             if workingState.orderedItems.count >= end || workingState.isExhausted {
-                return slice(workingState.orderedItems, start: start, end: end)
+                return WindowOutcome(
+                    items: slice(workingState.orderedItems, start: start, end: end),
+                    knownTotalItems: workingState.knownTotalItems,
+                    isExhausted: workingState.isExhausted,
+                    orderedCount: workingState.orderedItems.count
+                )
             }
 
             let startRawPage = workingState.nextSequentialRawPage
@@ -181,6 +244,9 @@ public actor UniformPaginator {
             if streams[key]?.sessionID == sessionID, var shared = streams[key] {
                 for (rawPage, result) in fetchedMap {
                     shared.rawPages[rawPage] = result
+                    if let total = result.totalItems, total > 0 {
+                        shared.knownTotalItems = max(shared.knownTotalItems ?? 0, total)
+                    }
                 }
                 shared.updatedAt = Date()
                 advanceState(&shared)
@@ -188,23 +254,40 @@ public actor UniformPaginator {
                 fallbackState = shared
 
                 if shared.orderedItems.count >= end || shared.isExhausted {
-                    return slice(shared.orderedItems, start: start, end: end)
+                    return WindowOutcome(
+                        items: slice(shared.orderedItems, start: start, end: end),
+                        knownTotalItems: shared.knownTotalItems,
+                        isExhausted: shared.isExhausted,
+                        orderedCount: shared.orderedItems.count
+                    )
                 }
             } else {
                 for (rawPage, result) in fetchedMap {
                     fallbackState.rawPages[rawPage] = result
+                    if let total = result.totalItems, total > 0 {
+                        fallbackState.knownTotalItems = max(fallbackState.knownTotalItems ?? 0, total)
+                    }
                 }
                 advanceState(&fallbackState)
 
                 if fallbackState.orderedItems.count >= end || fallbackState.isExhausted {
-                    return slice(fallbackState.orderedItems, start: start, end: end)
+                    return WindowOutcome(
+                        items: slice(fallbackState.orderedItems, start: start, end: end),
+                        knownTotalItems: fallbackState.knownTotalItems,
+                        isExhausted: fallbackState.isExhausted,
+                        orderedCount: fallbackState.orderedItems.count
+                    )
                 }
             }
         }
 
-        let finalItems = (streams[key]?.sessionID == sessionID ? streams[key]?.orderedItems : nil)
-            ?? fallbackState.orderedItems
-        return slice(finalItems, start: start, end: end)
+        let finalState = (streams[key]?.sessionID == sessionID ? streams[key] : nil) ?? fallbackState
+        return WindowOutcome(
+            items: slice(finalState.orderedItems, start: start, end: end),
+            knownTotalItems: finalState.knownTotalItems,
+            isExhausted: finalState.isExhausted,
+            orderedCount: finalState.orderedItems.count
+        )
     }
 
     // MARK: - Direct Jump Window
@@ -214,12 +297,14 @@ public actor UniformPaginator {
         sessionID: UUID,
         start: Int,
         fetchRawPage: @escaping @Sendable (Int) async throws -> RawPageResult
-    ) async throws -> [Manga] {
+    ) async throws -> WindowOutcome {
         let startRawPage = start / approxRawPageSize + 1
         var offsetInCurrentRawPage = start % approxRawPageSize
 
         var collected: [Manga] = []
         var collectedIDs: Set<String> = []
+        var observedTotalItems: Int? = (streams[key]?.sessionID == sessionID ? streams[key]?.knownTotalItems : nil)
+        var reachedEnd = false
 
         var cursorRawPage = startRawPage
         var fetchedLoops = 0
@@ -254,16 +339,25 @@ public actor UniformPaginator {
                     }
                     shared.updatedAt = Date()
                     streams[key] = shared
+                    if let sharedTotal = shared.knownTotalItems {
+                        observedTotalItems = max(observedTotalItems ?? 0, sharedTotal)
+                    }
                 }
 
                 guard let resolved = fetchedBatch[cursorRawPage]
                     ?? (streams[key]?.sessionID == sessionID ? streams[key]?.rawPages[cursorRawPage] : nil) else {
+                    reachedEnd = true
                     break
                 }
                 rawResult = resolved
             }
 
+            if let total = rawResult.totalItems, total > 0 {
+                observedTotalItems = max(observedTotalItems ?? 0, total)
+            }
+
             if rawResult.items.isEmpty {
+                reachedEnd = true
                 break
             }
             if offsetInCurrentRawPage >= rawResult.items.count {
@@ -272,6 +366,7 @@ public actor UniformPaginator {
                     offsetInCurrentRawPage = 0
                     continue
                 }
+                reachedEnd = true
                 break
             }
 
@@ -287,6 +382,7 @@ public actor UniformPaginator {
             }
 
             if !rawResult.hasMore || addedThisPage == 0 {
+                reachedEnd = true
                 break
             }
 
@@ -294,7 +390,12 @@ public actor UniformPaginator {
             offsetInCurrentRawPage = 0
         }
 
-        return collected
+        return WindowOutcome(
+            items: collected,
+            knownTotalItems: observedTotalItems,
+            isExhausted: reachedEnd,
+            orderedCount: nil
+        )
     }
 
     // MARK: - Helpers
@@ -349,6 +450,10 @@ public actor UniformPaginator {
             state.rawPages.removeValue(forKey: currentRawPage)
             state.nextSequentialRawPage = currentRawPage + 1
 
+            if let total = result.totalItems, total > 0 {
+                state.knownTotalItems = max(state.knownTotalItems ?? 0, total)
+            }
+
             if result.items.isEmpty {
                 state.isExhausted = true
                 break
@@ -371,6 +476,9 @@ public actor UniformPaginator {
 
     private func storeSparseRawPage(_ state: inout StreamState, rawPage: Int, result: RawPageResult) {
         state.rawPages[rawPage] = result
+        if let total = result.totalItems, total > 0 {
+            state.knownTotalItems = max(state.knownTotalItems ?? 0, total)
+        }
         if state.rawPages.count > maxSparseRawPagesPerStream {
             let excess = state.rawPages.count - maxSparseRawPagesPerStream
             let keysToDrop = state.rawPages.keys.sorted().prefix(excess)

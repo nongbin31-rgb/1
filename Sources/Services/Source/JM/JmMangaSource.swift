@@ -29,6 +29,14 @@ public struct JmMangaSource: MangaSourceProtocol {
         try await JmApiClient.shared.getExplore(sourceID: config.id, category: category, order: "mr", page: page)
     }
 
+    public func fetchPopularPaged(page: Int) async throws -> MangaPagedResult {
+        try await JmApiClient.shared.getExplorePaged(sourceID: config.id, category: "0", order: "mr", page: page)
+    }
+
+    public func fetchPopularPaged(category: String, page: Int) async throws -> MangaPagedResult {
+        try await JmApiClient.shared.getExplorePaged(sourceID: config.id, category: category, order: "mr", page: page)
+    }
+
     public func search(query: String, page: Int) async throws -> [Manga] {
         try await search(query: query, sort: .latest, page: page)
     }
