@@ -356,7 +356,8 @@ public struct ReaderView: View {
                     paperTintBackdropView
                     PaperTextureOverlayView(
                         texture: store.readerTextureType,
-                        opacity: store.readerTextureOpacity
+                        opacity: store.readerTextureOpacity,
+                        tintOpacity: store.readerTextureTintOpacity
                     )
                 }
                 .ignoresSafeArea()
@@ -985,6 +986,7 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
+                            tintOpacity: textureTintOpacity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
@@ -1010,6 +1012,7 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
+                            tintOpacity: textureTintOpacity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
@@ -1039,6 +1042,7 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
+                            tintOpacity: textureTintOpacity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )
@@ -1072,6 +1076,7 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
+                            tintOpacity: textureTintOpacity,
                             phaseAnchor: texturePhaseAnchor,
                             referenceSize: textureReferenceSize
                         )

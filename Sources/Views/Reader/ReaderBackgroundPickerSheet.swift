@@ -144,13 +144,26 @@ public struct ReaderBackgroundPickerSheet: View {
                     }
 
                     if let img = ReaderTextureCache.shared.textureImage(for: item) {
-                        Image(uiImage: img)
-                            .resizable(resizingMode: .stretch)
-                            .scaledToFill()
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                            .frame(height: 72)
-                            .clipped()
-                            .blendMode(.multiply)
+                        let clampedTint = min(max(store.readerTextureTintOpacity, 0.0), 1.0)
+                        let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: item) : nil
+                        ZStack {
+                            if let neutralImg, clampedTint < 0.999 {
+                                Image(uiImage: neutralImg)
+                                    .resizable(resizingMode: .stretch)
+                                    .scaledToFill()
+                            }
+                            if clampedTint > 0.001 || neutralImg == nil {
+                                Image(uiImage: img)
+                                    .resizable(resizingMode: .stretch)
+                                    .scaledToFill()
+                                    .opacity(neutralImg == nil ? 1.0 : clampedTint)
+                            }
+                        }
+                        .compositingGroup()
+                        .frame(minWidth: 0, maxWidth: .infinity)
+                        .frame(height: 72)
+                        .clipped()
+                        .blendMode(.multiply)
                     } else {
                         Color(uiColor: .secondarySystemBackground)
                             .frame(minWidth: 0, maxWidth: .infinity)
@@ -343,7 +356,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 )
                 .tint(.accentColor)
 
-                Text("控制材质原生纸浆底色对背景与画面的着色深浅；调至 0% 可保持纯白原貌并仅保留纸张微粒。")
+                Text("控制材质自带纸张色调对背景与画面的着色深浅；调至 0% 可去除泛黄偏色并仅保留纯白纸纤维肌理。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

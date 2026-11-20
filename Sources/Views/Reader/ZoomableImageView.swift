@@ -9,7 +9,9 @@ final class ComicContainerImageView: UIImageView {
     let softLightOverlayView = UIImageView()
     /// Layer 2 裁剪容器：严格限定在漫画画面区域内，不溢出到四周留白
     let textureClipContainer = UIView()
-    /// Layer 2: 真实纸张材质纹理覆盖层 (原点对齐整页坐标系，且随缩放平移紧密附着于漫画画面)
+    /// Layer 2a: 去色白场校准后的纯白纸张肌理层 (alpha 始终为 1.0，作为 0% 着色基准)
+    let neutralTextureOverlayView = UIImageView()
+    /// Layer 2b: 真实纸张材质原彩纹理覆盖层 (随 tintOpacity 变化混合，100% 时完全呈现原材质色调)
     let textureOverlayView = UIImageView()
 
     override init(image: UIImage?) {
@@ -50,6 +52,12 @@ final class ComicContainerImageView: UIImageView {
         textureClipContainer.isHidden = true
         addSubview(textureClipContainer)
 
+        neutralTextureOverlayView.contentMode = .scaleAspectFill
+        neutralTextureOverlayView.clipsToBounds = true
+        neutralTextureOverlayView.isUserInteractionEnabled = false
+        neutralTextureOverlayView.isHidden = true
+        textureClipContainer.addSubview(neutralTextureOverlayView)
+
         textureOverlayView.contentMode = .scaleAspectFill
         textureOverlayView.clipsToBounds = true
         textureOverlayView.isUserInteractionEnabled = false
@@ -71,12 +79,14 @@ final class ComicContainerImageView: UIImageView {
         softLightOverlayView.frame = targetRect
         textureClipContainer.frame = targetRect
         // 反向定位使平铺原点对齐整页 (0, 0)，与页面四周留白纸张纹理相位 100% 无缝衔接
-        textureOverlayView.frame = CGRect(
+        let alignedFrame = CGRect(
             x: -targetRect.minX,
             y: -targetRect.minY,
             width: bounds.width,
             height: bounds.height
         )
+        neutralTextureOverlayView.frame = alignedFrame
+        textureOverlayView.frame = alignedFrame
     }
 }
 
@@ -210,10 +220,28 @@ public struct ZoomableImageView: UIViewRepresentable {
 
                 if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
                     imageView.textureClipContainer.isHidden = false
-                    imageView.textureOverlayView.contentMode = .scaleAspectFill
-                    imageView.textureOverlayView.image = texImg
                     imageView.textureClipContainer.alpha = CGFloat(opacity)
-                    imageView.textureOverlayView.alpha = 1.0
+
+                    let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
+                    if let neutralImg, clampedTint < 0.999 {
+                        imageView.neutralTextureOverlayView.isHidden = false
+                        imageView.neutralTextureOverlayView.contentMode = .scaleAspectFill
+                        imageView.neutralTextureOverlayView.image = neutralImg
+                        imageView.neutralTextureOverlayView.alpha = 1.0
+                    } else {
+                        imageView.neutralTextureOverlayView.isHidden = true
+                        imageView.neutralTextureOverlayView.image = nil
+                    }
+
+                    if clampedTint > 0.001 || neutralImg == nil {
+                        imageView.textureOverlayView.isHidden = false
+                        imageView.textureOverlayView.contentMode = .scaleAspectFill
+                        imageView.textureOverlayView.image = texImg
+                        imageView.textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : CGFloat(clampedTint)
+                    } else {
+                        imageView.textureOverlayView.isHidden = true
+                        imageView.textureOverlayView.alpha = 0.0
+                    }
                 } else {
                     imageView.textureClipContainer.isHidden = true
                 }
@@ -221,6 +249,7 @@ public struct ZoomableImageView: UIViewRepresentable {
                 imageView.paperTintOverlayView.isHidden = true
                 imageView.softLightOverlayView.isHidden = true
                 imageView.textureClipContainer.isHidden = true
+                imageView.neutralTextureOverlayView.isHidden = true
             }
         }
 
