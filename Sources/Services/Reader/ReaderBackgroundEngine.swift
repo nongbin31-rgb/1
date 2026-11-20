@@ -20,6 +20,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     private let cache = NSCache<NSString, UIImage>()
     private let seamlessTileCache = NSCache<NSString, UIImage>()
+    private let patternColorCache = NSCache<NSString, UIColor>()
     private let loadLock = NSLock()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
     private let srgbContext: CIContext = {
@@ -36,6 +37,13 @@ public final class ReaderTextureCache: @unchecked Sendable {
         seamlessTileCache.countLimit = 24
     }
 
+    /// 感知强度映射：经典浮雕纸纹沿用 MangaPrism 0.66 幂次曲线，让低档位也保持清晰立体颗粒而非雾面发灰
+    public static func perceptualOpacity(for texture: ReaderTextureType, rawOpacity: Double) -> Double {
+        let clamped = min(max(rawOpacity, 0.0), 1.0)
+        guard texture.usesFineTilePattern, clamped > 0 else { return clamped }
+        return pow(clamped, 0.66)
+    }
+
     /// 获取指定纸张纹理图像（带内存二级缓存）
     public func textureImage(for type: ReaderTextureType) -> UIImage? {
         let key = type.rawValue as NSString
@@ -49,11 +57,14 @@ public final class ReaderTextureCache: @unchecked Sendable {
             return cached
         }
 
-        // 优先全名 (例如 Texture_0_classic_paper) 加载，次选短名 (例如 Texture_0) 加载
-        var loaded = loadTextureFromBundle(named: type.rawValue)
-            ?? loadTextureFromBundle(named: shortKey(for: type))
-        if type == .classic, let raw = loaded {
-            loaded = enhanceClassicPaperTexture(raw)
+        let loaded: UIImage?
+        if type.usesFineTilePattern {
+            // 经典纸张采用 MangaPrism 风格 256×256pt 程序化高密立体浮雕无缝微粒切片
+            loaded = Self.buildProceduralClassicStuccoTile()
+        } else {
+            // 优先全名 (例如 Texture_1_brown_paper) 加载，次选短名 (例如 Texture_1) 加载
+            loaded = loadTextureFromBundle(named: type.rawValue)
+                ?? loadTextureFromBundle(named: shortKey(for: type))
         }
         if let img = loaded {
             cache.setObject(img, forKey: key)
@@ -61,8 +72,26 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return loaded
     }
 
+    /// 获取缓存的平铺画刷颜色（供 UIKit 1:1 逻辑尺寸高频无损平铺，避免拖动滑块时重复创建 CGPattern）
+    public func patternColor(for type: ReaderTextureType) -> UIColor? {
+        let key = type.rawValue as NSString
+        if let cached = patternColorCache.object(forKey: key) {
+            return cached
+        }
+        guard let img = textureImage(for: type) else {
+            return nil
+        }
+        let color = UIColor(patternImage: img)
+        patternColorCache.setObject(color, forKey: key)
+        return color
+    }
+
     /// 获取去色白场校准后的中性纸张肌理图（彻底消除材质自带黄/棕色偏色，仅保留纯白纸纤维颗粒）
     public func neutralGrainImage(for type: ReaderTextureType) -> UIImage? {
+        if type.usesFineTilePattern {
+            // 程序化经典浮雕纸纹基底本身即为纯白零偏色，直接复用保持微粒锐度
+            return textureImage(for: type)
+        }
         let key = "\(type.rawValue)_neutral_grain" as NSString
         if let cached = cache.object(forKey: key) {
             return cached
@@ -83,6 +112,10 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取专为条漫连续滚动平铺打造的 2×2 镜像无缝纹理图（裁去边缘暗边并双向镜像衔接，消除拼接线）
     public func seamlessTileImage(for type: ReaderTextureType) -> UIImage? {
+        if type.usesFineTilePattern {
+            // 经典浮雕微粒切片自身采用 8 向边界环绕生成，天然 100% 无缝循环
+            return textureImage(for: type)
+        }
         let key = "\(type.rawValue)_seamless_tile" as NSString
         if let cached = seamlessTileCache.object(forKey: key) {
             return cached
@@ -103,6 +136,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取去色白场校准后的 2×2 镜像无缝纹理图（供条漫 0% 着色或过渡混合使用）
     public func seamlessNeutralTileImage(for type: ReaderTextureType) -> UIImage? {
+        if type.usesFineTilePattern {
+            return textureImage(for: type)
+        }
         let key = "\(type.rawValue)_seamless_neutral_tile" as NSString
         if let cached = seamlessTileCache.object(forKey: key) {
             return cached
@@ -195,93 +231,193 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return CGFloat(total) / CGFloat(pixels.count * 255)
     }
 
-    /// 经典纸张专属增强：4×4 交替镜像加密颗粒分布（约 2.7 倍线密度 / 7 倍以上单位面积颗粒）+ CoreImage 微浮雕立体锐化
-    private func enhanceClassicPaperTexture(_ image: UIImage) -> UIImage {
-        let origW = image.size.width
-        let origH = image.size.height
-        guard origW > 64, origH > 64 else { return image }
+    /// 1:1 复刻 MangaPrism StuccoTextureManager 的程序化高密立体浮雕纸纹引擎：
+    /// 256×256pt 逻辑尺寸（2x 视网膜锐利渲染），内含 42 处无缝柔和纸浆光斑 + 23,500 颗带右下投影的立体凸起微粒与炭灰气孔
+    private static func buildProceduralClassicStuccoTile() -> UIImage {
+        let tileSize: CGFloat = 256.0
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2.0
+        format.opaque = true
 
-        // 取中心 68% 区域并 4×4 交替镜像铺满长边 1680px 画布：保持四边对称无缝且显著提高颗粒密度
-        let gridCols = 4
-        let gridRows = 4
-        let maxLongEdge: CGFloat = 1680.0
-        let cellMaxEdge = maxLongEdge / CGFloat(max(gridCols, gridRows))
-        let aspect = origW / origH
-        let cellW: CGFloat
-        let cellH: CGFloat
-        if aspect >= 1.0 {
-            cellW = floor(cellMaxEdge)
-            cellH = max(64.0, floor(cellMaxEdge / aspect))
-        } else {
-            cellH = floor(cellMaxEdge)
-            cellW = max(64.0, floor(cellMaxEdge * aspect))
-        }
-
-        let denseTile = Self.renderMirroredTileGrid(
-            from: image,
-            columns: gridCols,
-            rows: gridRows,
-            cellSize: CGSize(width: cellW, height: cellH),
-            cropInsetRatio: 0.16
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: tileSize, height: tileSize),
+            format: format
         )
 
-        guard let ciInput = CIImage(image: denseTile) else {
-            return denseTile
-        }
-        let extent = ciInput.extent
-        var current: CIImage = ciInput.clampedToExtent()
+        return renderer.image { ctx in
+            let cg = ctx.cgContext
 
-        // 1. 仅锐化明度与纸纤维高频细节，凸显颗粒边缘
-        if let lumSharpen = CIFilter(name: "CISharpenLuminance") {
-            lumSharpen.setValue(current, forKey: kCIInputImageKey)
-            lumSharpen.setValue(0.75, forKey: kCIInputSharpnessKey)
-            if let out = lumSharpen.outputImage {
-                current = out
+            // 纯白基底：确保正片叠底 Multiply 时凸起高光区域保持通透洁净不发灰
+            cg.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+            cg.fill(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
+
+            // Layer 1: 42 处无缝柔和纸浆起伏斑块（模拟手工纸张轻微明暗起伏）
+            var plasterRng = SplitMix64RNG(seed: 20261108)
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            cg.setAllowsAntialiasing(true)
+            cg.setShouldAntialias(true)
+            for _ in 0..<42 {
+                let cx = CGFloat(plasterRng.nextUnitDouble()) * tileSize
+                let cy = CGFloat(plasterRng.nextUnitDouble()) * tileSize
+                let baseRadius = 20.0 + CGFloat(plasterRng.nextUnitDouble()) * 38.0
+                let softRadius = baseRadius + 12.0
+                let isLight = plasterRng.nextBool()
+                let component: CGFloat = isLight ? 1.0 : 0.0
+                let peakAlpha: CGFloat = isLight ? 0.055 : 0.024
+
+                let colors = [
+                    CGColor(colorSpace: colorSpace, components: [component, component, component, peakAlpha])!,
+                    CGColor(colorSpace: colorSpace, components: [component, component, component, peakAlpha * 0.45])!,
+                    CGColor(colorSpace: colorSpace, components: [component, component, component, 0.0])!
+                ] as CFArray
+                let locations: [CGFloat] = [0.0, 0.55, 1.0]
+                if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: locations) {
+                    drawSeamlessRadialGradient(
+                        in: cg,
+                        gradient: gradient,
+                        cx: cx,
+                        cy: cy,
+                        radius: softRadius,
+                        tileSize: tileSize
+                    )
+                }
+            }
+
+            // Layer 2: 23,500 颗无缝立体浮雕微粒（关闭抗锯齿保持刀锋般清晰的实体纸粒感）
+            var grainRng = SplitMix64RNG(seed: 20261109)
+            cg.setAllowsAntialiasing(false)
+            cg.setShouldAntialias(false)
+
+            let poreR: CGFloat = 69.0 / 255.0   // #45474D 炭灰纸浆微孔
+            let poreG: CGFloat = 71.0 / 255.0
+            let poreB: CGFloat = 77.0 / 255.0
+
+            for _ in 0..<23_500 {
+                let x = CGFloat(grainRng.nextUnitDouble()) * tileSize
+                let y = CGFloat(grainRng.nextUnitDouble()) * tileSize
+                // 保留大量细砂，同时让 16% 较大高光颗粒形成清晰的立体视觉锚点
+                let diameter: CGFloat = grainRng.nextUnitDouble() < 0.16
+                    ? (1.55 + CGFloat(grainRng.nextUnitDouble()) * 1.15)
+                    : (0.75 + CGFloat(grainRng.nextUnitDouble()) * 1.05)
+                let isRaisedGrain = grainRng.nextUnitDouble() > 0.36
+
+                if isRaisedGrain {
+                    if diameter > 0.95 {
+                        let shadowAlpha = 0.13 + CGFloat(grainRng.nextUnitDouble()) * 0.15
+                        cg.setFillColor(red: 0.0, green: 0.0, blue: 0.0, alpha: shadowAlpha)
+                        var sx = x + 0.85
+                        if sx >= tileSize { sx -= tileSize }
+                        var sy = y + 0.85
+                        if sy >= tileSize { sy -= tileSize }
+                        drawSeamlessDot(in: cg, x: sx, y: sy, diameter: diameter * 0.88, tileSize: tileSize)
+                    }
+
+                    let highlightAlpha = 0.86 + CGFloat(grainRng.nextUnitDouble()) * 0.14
+                    cg.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: highlightAlpha)
+                    drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter, tileSize: tileSize)
+                } else {
+                    let poreAlpha = 0.14 + CGFloat(grainRng.nextUnitDouble()) * 0.16
+                    cg.setFillColor(red: poreR, green: poreG, blue: poreB, alpha: poreAlpha)
+                    drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter * 0.85, tileSize: tileSize)
+                }
             }
         }
+    }
 
-        // 2. 反锐化遮罩拉出颗粒微谷与微峰轮廓
-        if let unsharp = CIFilter(name: "CIUnsharpMask") {
-            unsharp.setValue(current, forKey: kCIInputImageKey)
-            unsharp.setValue(1.8, forKey: kCIInputRadiusKey)
-            unsharp.setValue(1.25, forKey: kCIInputIntensityKey)
-            if let out = unsharp.outputImage {
-                current = out
-            }
+    private static func drawSeamlessDot(
+        in cg: CGContext,
+        x: CGFloat,
+        y: CGFloat,
+        diameter: CGFloat,
+        tileSize: CGFloat
+    ) {
+        let r = diameter * 0.5
+        cg.fillEllipse(in: CGRect(x: x - r, y: y - r, width: diameter, height: diameter))
+
+        let crossesLeft = x - r < 0
+        let crossesRight = x + r > tileSize
+        let crossesTop = y - r < 0
+        let crossesBottom = y + r > tileSize
+
+        if crossesLeft {
+            cg.fillEllipse(in: CGRect(x: x + tileSize - r, y: y - r, width: diameter, height: diameter))
+        }
+        if crossesRight {
+            cg.fillEllipse(in: CGRect(x: x - tileSize - r, y: y - r, width: diameter, height: diameter))
+        }
+        if crossesTop {
+            cg.fillEllipse(in: CGRect(x: x - r, y: y + tileSize - r, width: diameter, height: diameter))
+        }
+        if crossesBottom {
+            cg.fillEllipse(in: CGRect(x: x - r, y: y - tileSize - r, width: diameter, height: diameter))
+        }
+        if crossesLeft && crossesTop {
+            cg.fillEllipse(in: CGRect(x: x + tileSize - r, y: y + tileSize - r, width: diameter, height: diameter))
+        }
+        if crossesLeft && crossesBottom {
+            cg.fillEllipse(in: CGRect(x: x + tileSize - r, y: y - tileSize - r, width: diameter, height: diameter))
+        }
+        if crossesRight && crossesTop {
+            cg.fillEllipse(in: CGRect(x: x - tileSize - r, y: y + tileSize - r, width: diameter, height: diameter))
+        }
+        if crossesRight && crossesBottom {
+            cg.fillEllipse(in: CGRect(x: x - tileSize - r, y: y - tileSize - r, width: diameter, height: diameter))
+        }
+    }
+
+    private static func drawSeamlessRadialGradient(
+        in cg: CGContext,
+        gradient: CGGradient,
+        cx: CGFloat,
+        cy: CGFloat,
+        radius: CGFloat,
+        tileSize: CGFloat
+    ) {
+        func drawAt(_ x: CGFloat, _ y: CGFloat) {
+            let center = CGPoint(x: x, y: y)
+            cg.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: [])
         }
 
-        // 3. 3×3 斜向微浮雕卷积（总权重恒为 1.0：平滑底色亮度零漂移，仅在颗粒起伏处雕刻受光面与背光面）
-        if let emboss = CIFilter(name: "CIConvolution3X3") {
-            let relief: CGFloat = 0.42
-            let weights: [CGFloat] = [
-                -relief, -relief * 0.5, 0.0,
-                -relief * 0.5, 1.0, relief * 0.5,
-                0.0, relief * 0.5, relief
-            ]
-            emboss.setValue(current, forKey: kCIInputImageKey)
-            emboss.setValue(CIVector(values: weights, count: 9), forKey: "inputWeights")
-            emboss.setValue(0.0, forKey: "inputBias")
-            if let out = emboss.outputImage {
-                current = out
-            }
+        drawAt(cx, cy)
+
+        let crossesLeft = cx - radius < 0
+        let crossesRight = cx + radius > tileSize
+        let crossesTop = cy - radius < 0
+        let crossesBottom = cy + radius > tileSize
+
+        if crossesLeft { drawAt(cx + tileSize, cy) }
+        if crossesRight { drawAt(cx - tileSize, cy) }
+        if crossesTop { drawAt(cx, cy + tileSize) }
+        if crossesBottom { drawAt(cx, cy - tileSize) }
+        if crossesLeft && crossesTop { drawAt(cx + tileSize, cy + tileSize) }
+        if crossesLeft && crossesBottom { drawAt(cx + tileSize, cy - tileSize) }
+        if crossesRight && crossesTop { drawAt(cx - tileSize, cy + tileSize) }
+        if crossesRight && crossesBottom { drawAt(cx - tileSize, cy - tileSize) }
+    }
+
+    /// 高速确定性伪随机数生成器（SplitMix64），保证每次生成的立体纸粒分布一致且毫秒级完成
+    private struct SplitMix64RNG {
+        private var state: UInt64
+
+        init(seed: UInt64) {
+            self.state = seed
         }
 
-        // 4. 轻度拉开凹凸对比并微提纸基高光，避免正片叠底发灰
-        if let controls = CIFilter(name: "CIColorControls") {
-            controls.setValue(current, forKey: kCIInputImageKey)
-            controls.setValue(1.22, forKey: kCIInputContrastKey)
-            controls.setValue(0.025, forKey: kCIInputBrightnessKey)
-            controls.setValue(1.0, forKey: kCIInputSaturationKey)
-            if let out = controls.outputImage {
-                current = out
-            }
+        mutating func nextUInt64() -> UInt64 {
+            state &+= 0x9e3779b97f4a7c15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+            z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+            return z ^ (z >> 31)
         }
 
-        let croppedCI = current.cropped(to: extent)
-        guard let outCG = srgbContext.createCGImage(croppedCI, from: extent) else {
-            return denseTile
+        mutating func nextUnitDouble() -> Double {
+            Double(nextUInt64() >> 11) * (1.0 / 9007199254740992.0)
         }
-        return UIImage(cgImage: outCG)
+
+        mutating func nextBool() -> Bool {
+            (nextUInt64() & 1) == 1
+        }
     }
 
     private static func buildSeamlessMirroredTile(from image: UIImage) -> UIImage {
@@ -445,7 +581,11 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     public var textureOpacity: CGFloat = 0.4 {
-        didSet { textureCompositeView.alpha = textureOpacity }
+        didSet {
+            textureCompositeView.alpha = CGFloat(
+                ReaderTextureCache.perceptualOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
+            )
+        }
     }
 
     public var textureTintOpacity: CGFloat = 1.0 {
@@ -607,32 +747,50 @@ public class ReaderBackgroundContainerView: UIView {
 
     private func updateTextureImage() {
         let t = min(max(textureTintOpacity, 0.0), 1.0)
-        textureCompositeView.alpha = textureOpacity
+        textureCompositeView.alpha = CGFloat(
+            ReaderTextureCache.perceptualOpacity(for: currentTexture, rawOpacity: Double(textureOpacity))
+        )
 
         if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
-            let neutralImg = t < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: currentTexture) : nil
-            if let neutralImg, t < 0.999 {
-                neutralTextureOverlayView.isHidden = false
-                neutralTextureOverlayView.contentMode = .scaleAspectFill
-                neutralTextureOverlayView.image = neutralImg
-                neutralTextureOverlayView.alpha = 1.0
-            } else {
+            if currentTexture.usesFineTilePattern {
                 neutralTextureOverlayView.isHidden = true
                 neutralTextureOverlayView.image = nil
-            }
+                neutralTextureOverlayView.backgroundColor = .clear
 
-            if t > 0.001 || neutralImg == nil {
                 textureOverlayView.isHidden = false
-                textureOverlayView.contentMode = .scaleAspectFill
-                textureOverlayView.image = img
-                textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : t
+                textureOverlayView.image = nil
+                textureOverlayView.backgroundColor = ReaderTextureCache.shared.patternColor(for: currentTexture)
+                textureOverlayView.alpha = 1.0
             } else {
-                textureOverlayView.isHidden = true
-                textureOverlayView.alpha = 0.0
+                neutralTextureOverlayView.backgroundColor = .clear
+                textureOverlayView.backgroundColor = .clear
+
+                let neutralImg = t < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: currentTexture) : nil
+                if let neutralImg, t < 0.999 {
+                    neutralTextureOverlayView.isHidden = false
+                    neutralTextureOverlayView.contentMode = .scaleAspectFill
+                    neutralTextureOverlayView.image = neutralImg
+                    neutralTextureOverlayView.alpha = 1.0
+                } else {
+                    neutralTextureOverlayView.isHidden = true
+                    neutralTextureOverlayView.image = nil
+                }
+
+                if t > 0.001 || neutralImg == nil {
+                    textureOverlayView.isHidden = false
+                    textureOverlayView.contentMode = .scaleAspectFill
+                    textureOverlayView.image = img
+                    textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : t
+                } else {
+                    textureOverlayView.isHidden = true
+                    textureOverlayView.alpha = 0.0
+                }
             }
         } else {
             neutralTextureOverlayView.image = nil
+            neutralTextureOverlayView.backgroundColor = .clear
             textureOverlayView.image = nil
+            textureOverlayView.backgroundColor = .clear
         }
     }
 
@@ -722,72 +880,108 @@ public struct PaperTextureOverlayView: View {
 
     public var body: some View {
         if let img = ReaderTextureCache.shared.textureImage(for: texture) {
-            let effectiveOpacity = opacity
+            let effectiveOpacity = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
             let clampedTint = min(max(tintOpacity, 0.0), 1.0)
 
             switch phaseAnchor {
             case .local:
-                let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
-                // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
-                // 避免高分原图 1:1 平铺导致背景纹理颗粒过大及边缘接缝错位
-                GeometryReader { proxy in
-                    let targetSize = validReferenceSize() ?? proxy.size
-                    ZStack {
-                        if let neutralImg, clampedTint < 0.999 {
-                            aspectFilledTexture(neutralImg, targetSize: targetSize, containerSize: proxy.size)
+                if texture.usesFineTilePattern {
+                    // 经典高密浮雕微粒：原生 1:1 逻辑尺寸 (256×256pt) 无缝重复平铺
+                    Image(uiImage: img)
+                        .resizable(resizingMode: .tile)
+                        .blendMode(.multiply)
+                        .opacity(effectiveOpacity)
+                        .allowsHitTesting(false)
+                } else {
+                    let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
+                    // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
+                    // 避免高分原图 1:1 平铺导致背景纹理颗粒过大及边缘接缝错位
+                    GeometryReader { proxy in
+                        let targetSize = validReferenceSize() ?? proxy.size
+                        ZStack {
+                            if let neutralImg, clampedTint < 0.999 {
+                                aspectFilledTexture(neutralImg, targetSize: targetSize, containerSize: proxy.size)
+                            }
+                            if clampedTint > 0.001 || neutralImg == nil {
+                                aspectFilledTexture(img, targetSize: targetSize, containerSize: proxy.size)
+                                    .opacity(neutralImg == nil ? 1.0 : clampedTint)
+                            }
                         }
-                        if clampedTint > 0.001 || neutralImg == nil {
-                            aspectFilledTexture(img, targetSize: targetSize, containerSize: proxy.size)
-                                .opacity(neutralImg == nil ? 1.0 : clampedTint)
-                        }
+                        .compositingGroup()
                     }
-                    .compositingGroup()
+                    .blendMode(.multiply)
+                    .opacity(effectiveOpacity)
+                    .allowsHitTesting(false)
                 }
-                .blendMode(.multiply)
-                .opacity(effectiveOpacity)
-                .allowsHitTesting(false)
 
             case .namedSpace(let spaceName):
-                let tileImg = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
-                let neutralTileImg = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralTileImage(for: texture) : nil
-                let refSize = validReferenceSize() ?? fallbackScreenSize()
-                let singleSize = Self.scaledTileSize(for: img, fitting: refSize)
-                let screenScale = max(UIScreen.main.scale, 1.0)
-                let tileW = max(64.0, (singleSize.width * 2.0 * screenScale).rounded() / screenScale)
-                let tileH = max(64.0, (singleSize.height * 2.0 * screenScale).rounded() / screenScale)
-                GeometryReader { proxy in
-                    let viewW = proxy.size.width
-                    let viewH = proxy.size.height
-                    if viewW > 0, viewH > 0 {
-                        let contentFrame = proxy.frame(in: .named(spaceName))
+                if texture.usesFineTilePattern {
+                    let tileW = max(img.size.width, 64.0)
+                    let tileH = max(img.size.height, 64.0)
+                    GeometryReader { proxy in
+                        let viewW = proxy.size.width
+                        let viewH = proxy.size.height
+                        if viewW > 0, viewH > 0 {
+                            let contentFrame = proxy.frame(in: .named(spaceName))
+                            let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
+                            let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
 
-                        let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
-                        let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
-
-                        let cols = min(max(1, Int(ceil((viewW + phaseX) / tileW))), 64)
-                        let rows = min(max(1, Int(ceil((viewH + phaseY) / tileH))), 64)
-
-                        Color.clear
-                            .frame(width: viewW, height: viewH)
-                            .overlay(alignment: .topLeading) {
-                                ZStack {
-                                    if let neutralTileImg, clampedTint < 0.999 {
-                                        tileGridView(tileImg: neutralTileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
-                                    }
-                                    if clampedTint > 0.001 || neutralTileImg == nil {
-                                        tileGridView(tileImg: tileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
-                                            .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
-                                    }
+                            Color.clear
+                                .frame(width: viewW, height: viewH)
+                                .overlay(alignment: .topLeading) {
+                                    Image(uiImage: img)
+                                        .resizable(resizingMode: .tile)
+                                        .frame(width: viewW + tileW, height: viewH + tileH)
+                                        .offset(x: -phaseX, y: -phaseY)
                                 }
-                                .compositingGroup()
-                                .offset(x: -phaseX, y: -phaseY)
-                            }
-                            .clipped()
+                                .clipped()
+                        }
                     }
+                    .blendMode(.multiply)
+                    .opacity(effectiveOpacity)
+                    .allowsHitTesting(false)
+                } else {
+                    let tileImg = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
+                    let neutralTileImg = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralTileImage(for: texture) : nil
+                    let refSize = validReferenceSize() ?? fallbackScreenSize()
+                    let singleSize = Self.scaledTileSize(for: img, fitting: refSize)
+                    let screenScale = max(UIScreen.main.scale, 1.0)
+                    let tileW = max(64.0, (singleSize.width * 2.0 * screenScale).rounded() / screenScale)
+                    let tileH = max(64.0, (singleSize.height * 2.0 * screenScale).rounded() / screenScale)
+                    GeometryReader { proxy in
+                        let viewW = proxy.size.width
+                        let viewH = proxy.size.height
+                        if viewW > 0, viewH > 0 {
+                            let contentFrame = proxy.frame(in: .named(spaceName))
+
+                            let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
+                            let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
+
+                            let cols = min(max(1, Int(ceil((viewW + phaseX) / tileW))), 64)
+                            let rows = min(max(1, Int(ceil((viewH + phaseY) / tileH))), 64)
+
+                            Color.clear
+                                .frame(width: viewW, height: viewH)
+                                .overlay(alignment: .topLeading) {
+                                    ZStack {
+                                        if let neutralTileImg, clampedTint < 0.999 {
+                                            tileGridView(tileImg: neutralTileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                        }
+                                        if clampedTint > 0.001 || neutralTileImg == nil {
+                                            tileGridView(tileImg: tileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                                .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
+                                        }
+                                    }
+                                    .compositingGroup()
+                                    .offset(x: -phaseX, y: -phaseY)
+                                }
+                                .clipped()
+                        }
+                    }
+                    .blendMode(.multiply)
+                    .opacity(effectiveOpacity)
+                    .allowsHitTesting(false)
                 }
-                .blendMode(.multiply)
-                .opacity(effectiveOpacity)
-                .allowsHitTesting(false)
             }
         }
     }
