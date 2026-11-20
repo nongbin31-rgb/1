@@ -12,7 +12,16 @@ public struct BuiltinDemoSource: MangaSourceProtocol {
 
     public func fetchPopular(page: Int) async throws -> [Manga] {
         guard page == 1 else { return [] }
-        return [
+        return demoItems
+    }
+
+    public func fetchPopularPaged(page: Int) async throws -> MangaPagedResult {
+        let items = try await fetchPopular(page: page)
+        return MangaPagedResult(items: items, totalPages: 1, totalItems: demoItems.count, hasMore: false)
+    }
+
+    private var demoItems: [Manga] {
+        [
             Manga(
                 id: "demo-webtoon",
                 sourceID: config.id,

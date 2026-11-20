@@ -10,6 +10,7 @@ public struct DiscoverView: View {
     @State private var mangas: [Manga] = []
     @State private var selectedCategoryID = ""
     @State private var currentPage = 1
+    @State private var totalPages: Int?
     @State private var canLoadMore = false
     @State private var isLoading = false
     @State private var isLoadingMore = false
@@ -81,6 +82,20 @@ public struct DiscoverView: View {
         default:
             return ""
         }
+    }
+
+    private var paginationFooterInfoText: String {
+        var parts: [String] = []
+        if !sourcePageSizeDescription.isEmpty {
+            parts.append(sourcePageSizeDescription)
+        }
+        if let totalPages {
+            parts.append("共 \(totalPages) 页")
+            parts.append("点击跳页")
+        } else {
+            parts.append("点击页码快速跳页")
+        }
+        return parts.joined(separator: " · ")
     }
 
     public var body: some View {
@@ -508,17 +523,13 @@ public struct DiscoverView: View {
                     .padding(.vertical, 2)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 4))
 
-                if !sourcePageSizeDescription.isEmpty {
-                    Text(sourcePageSizeDescription)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("· 点击页码快速跳页")
+                Text(paginationFooterInfoText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
 
-                Spacer()
+                Spacer(minLength: 6)
 
                 // 回到顶部快捷操作
                 Button {
@@ -549,8 +560,9 @@ public struct DiscoverView: View {
                 VStack(spacing: 6) {
                     Text("跳转到指定页")
                         .font(.title3.weight(.bold))
+                    let totalSuffix = totalPages.map { " · 共 \($0) 页" } ?? ""
                     let sizeSuffix = sourcePageSizeDescription.isEmpty ? "" : " (\(sourcePageSizeDescription))"
-                    Text("当前处于第 \(currentPage) 页 · \(activeSource?.name ?? "在线图源")\(sizeSuffix)")
+                    Text("当前处于第 \(currentPage) 页\(totalSuffix) · \(activeSource?.name ?? "在线图源")\(sizeSuffix)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -626,6 +638,15 @@ public struct DiscoverView: View {
                         }
                         .buttonStyle(.bordered)
                         .font(.caption.weight(.medium))
+
+                        if let totalPages, totalPages > 1 {
+                            Button("末页 (\(totalPages))") {
+                                jumpTargetPageInput = "\(totalPages)"
+                                triggerHaptic()
+                            }
+                            .buttonStyle(.bordered)
+                            .font(.caption.weight(.medium))
+                        }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -688,6 +709,7 @@ public struct DiscoverView: View {
         guard let source = activeSource,
               let adapter = store.adapter(for: source.id) else {
             mangas = []
+            totalPages = nil
             canLoadMore = false
             errorMessage = "当前没有启用的在线图源，请先在「在线源」页启用或添加。"
             return
@@ -699,6 +721,7 @@ public struct DiscoverView: View {
         isLoadingMore = false
         errorMessage = nil
         currentPage = 1
+        totalPages = nil
         defer {
             if generation == requestGeneration {
                 isLoading = false
@@ -707,10 +730,12 @@ public struct DiscoverView: View {
 
         do {
             await adapter.resetPaginationCache(scope: .explore)
-            let fetched = try await fetchPage(adapter: adapter, page: 1)
+            let result = try await fetchPagePaged(adapter: adapter, page: 1)
             guard !Task.isCancelled, generation == requestGeneration else { return }
-            mangas = fetched
-            canLoadMore = hasMorePages(fetchedCount: fetched.count, source: source)
+            mangas = result.items
+            let hasMore = resolveHasMore(result: result, targetPage: 1, source: source)
+            canLoadMore = hasMore
+            totalPages = result.totalPages ?? (!hasMore && !result.items.isEmpty ? 1 : nil)
             withAnimation(.easeInOut(duration: 0.25)) {
                 scrollProxy?.scrollTo("discover_top_anchor", anchor: .top)
             }
@@ -720,6 +745,7 @@ public struct DiscoverView: View {
             guard !Task.isCancelled, generation == requestGeneration else { return }
             errorMessage = error.localizedDescription
             mangas = []
+            totalPages = nil
             canLoadMore = false
         }
     }
@@ -742,19 +768,28 @@ public struct DiscoverView: View {
         }
 
         do {
-            let fetched = try await fetchPage(adapter: adapter, page: targetPage)
+            let result = try await fetchPagePaged(adapter: adapter, page: targetPage)
             guard !Task.isCancelled, generation == requestGeneration else { return }
-            if fetched.isEmpty {
+            if result.items.isEmpty {
                 showNotice("第 \(targetPage) 页暂无更多漫画")
                 if targetPage > currentPage {
                     canLoadMore = false
+                    if targetPage == currentPage + 1 {
+                        totalPages = totalPages ?? currentPage
+                    }
                 }
                 return
             }
 
-            mangas = fetched
+            mangas = result.items
             currentPage = targetPage
-            canLoadMore = hasMorePages(fetchedCount: fetched.count, source: source)
+            let hasMore = resolveHasMore(result: result, targetPage: targetPage, source: source)
+            canLoadMore = hasMore
+            if let resolvedTotal = result.totalPages {
+                totalPages = max(resolvedTotal, targetPage)
+            } else if !hasMore {
+                totalPages = targetPage
+            }
 
             withAnimation(.easeInOut(duration: 0.25)) {
                 scrollProxy?.scrollTo("discover_top_anchor", anchor: .top)
@@ -785,21 +820,29 @@ public struct DiscoverView: View {
         let nextPage = currentPage + 1
 
         do {
-            let fetched = try await fetchPage(adapter: adapter, page: nextPage)
+            let result = try await fetchPagePaged(adapter: adapter, page: nextPage)
             guard !Task.isCancelled, generation == requestGeneration else { return }
-            if fetched.isEmpty {
+            if result.items.isEmpty {
                 canLoadMore = false
+                totalPages = totalPages ?? currentPage
                 showNotice("已到底部，无更多漫画")
                 return
             }
             var seen = Set(mangas.map(\.compositeKey))
-            let uniqueNew = fetched.filter { seen.insert($0.compositeKey).inserted }
+            let uniqueNew = result.items.filter { seen.insert($0.compositeKey).inserted }
             if uniqueNew.isEmpty {
                 canLoadMore = false
+                totalPages = totalPages ?? currentPage
             } else {
                 mangas.append(contentsOf: uniqueNew)
                 currentPage = nextPage
-                canLoadMore = hasMorePages(fetchedCount: fetched.count, source: source)
+                let hasMore = resolveHasMore(result: result, targetPage: nextPage, source: source)
+                canLoadMore = hasMore
+                if let resolvedTotal = result.totalPages {
+                    totalPages = max(resolvedTotal, nextPage)
+                } else if !hasMore {
+                    totalPages = nextPage
+                }
                 triggerHaptic()
             }
         } catch is CancellationError {
@@ -809,6 +852,20 @@ public struct DiscoverView: View {
             canLoadMore = false
             showNotice("加载下一页出错: \(error.localizedDescription)")
         }
+    }
+
+    private func resolveHasMore(
+        result: MangaPagedResult,
+        targetPage: Int,
+        source: MangaSourceConfig
+    ) -> Bool {
+        if let hasMore = result.hasMore {
+            return hasMore
+        }
+        if let total = result.totalPages {
+            return targetPage < total && !result.items.isEmpty
+        }
+        return hasMorePages(fetchedCount: result.items.count, source: source)
     }
 
     private func hasMorePages(fetchedCount: Int, source: MangaSourceConfig) -> Bool {
@@ -822,12 +879,12 @@ public struct DiscoverView: View {
         }
     }
 
-    private func fetchPage(adapter: any MangaSourceProtocol, page: Int) async throws -> [Manga] {
+    private func fetchPagePaged(adapter: any MangaSourceProtocol, page: Int) async throws -> MangaPagedResult {
         let category = selectedCategoryID.isEmpty ? (adapter.exploreCategories.first?.id ?? "") : selectedCategoryID
         if category.isEmpty {
-            return try await adapter.fetchPopular(page: page)
+            return try await adapter.fetchPopularPaged(page: page)
         }
-        return try await adapter.fetchPopular(category: category, page: page)
+        return try await adapter.fetchPopularPaged(category: category, page: page)
     }
 
     private func showNotice(_ text: String) {

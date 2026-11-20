@@ -27,6 +27,14 @@ public struct WnacgMangaSource: MangaSourceProtocol {
         try await WnacgClient.shared.getExplore(sourceID: config.id, cateId: category, page: page)
     }
 
+    public func fetchPopularPaged(page: Int) async throws -> MangaPagedResult {
+        try await WnacgClient.shared.getExplorePaged(sourceID: config.id, cateId: "all", page: page)
+    }
+
+    public func fetchPopularPaged(category: String, page: Int) async throws -> MangaPagedResult {
+        try await WnacgClient.shared.getExplorePaged(sourceID: config.id, cateId: category, page: page)
+    }
+
     public func search(query: String, page: Int) async throws -> [Manga] {
         try await WnacgClient.shared.search(sourceID: config.id, query: query, page: page)
     }

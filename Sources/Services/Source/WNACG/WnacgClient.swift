@@ -299,9 +299,17 @@ public actor WnacgClient {
         cateId: String = "all",
         page: Int = 1
     ) async throws -> [Manga] {
+        try await getExplorePaged(sourceID: sourceID, cateId: cateId, page: page).items
+    }
+
+    public func getExplorePaged(
+        sourceID: String,
+        cateId: String = "all",
+        page: Int = 1
+    ) async throws -> MangaPagedResult {
         let normalizedCate = cateId.isEmpty ? "all" : cateId
         let streamKey = "explore:\(sourceID):\(normalizedCate)"
-        return try await paginator.fetchPage(key: streamKey, page: page) { rawPage in
+        return try await paginator.fetchPaged(key: streamKey, page: page) { rawPage in
             try await self.fetchRawExplore(
                 sourceID: sourceID,
                 cateId: normalizedCate,
@@ -316,9 +324,13 @@ public actor WnacgClient {
         page: Int
     ) async throws -> RawPageResult {
         do {
-            let apiItems = try await exploreViaApi(sourceID: sourceID, cateId: cateId, page: page)
-            if !apiItems.isEmpty || page > 1 {
-                return RawPageResult(items: apiItems, hasMore: !apiItems.isEmpty)
+            let apiResult = try await exploreViaApi(sourceID: sourceID, cateId: cateId, page: page)
+            if !apiResult.items.isEmpty || page > 1 {
+                return RawPageResult(
+                    items: apiResult.items,
+                    hasMore: !apiResult.items.isEmpty,
+                    totalItems: apiResult.total > 0 ? apiResult.total : nil
+                )
             }
         } catch {}
 
@@ -333,11 +345,14 @@ public actor WnacgClient {
             ? "/albums-index-page-\(page).html"
             : "/albums-index-page-\(page)-cate-\(cateId).html"
 
-        let items = try await executeWebWithFailover { domain in
+        let (items, maxPage) = try await executeWebWithFailover { domain -> ([Manga], Int?) in
             let html = try await self.getSafeHtml(path: path, domain: domain)
-            return WnacgParser.parseListHtml(html, baseUrl: domain, sourceID: sourceID)
+            let parsed = WnacgParser.parseListHtml(html, baseUrl: domain, sourceID: sourceID)
+            let paginatorMax = WnacgParser.parsePaginatorMaxPage(in: html)
+            return (parsed, paginatorMax)
         }
-        return RawPageResult(items: items, hasMore: !items.isEmpty)
+        let estimatedTotal = maxPage.map { max(1, $0) * max(12, items.count) }
+        return RawPageResult(items: items, hasMore: !items.isEmpty, totalItems: estimatedTotal)
     }
 
     public func search(sourceID: String, query: String, page: Int = 1) async throws -> [Manga] {
@@ -484,14 +499,14 @@ public actor WnacgClient {
 
     // MARK: - API Sub-methods
 
-    private func exploreViaApi(sourceID: String, cateId: String, page: Int) async throws -> [Manga] {
+    private func exploreViaApi(sourceID: String, cateId: String, page: Int) async throws -> (items: [Manga], total: Int) {
         let numericCate: Int
         if cateId == "all" || cateId.isEmpty {
             numericCate = 0
         } else if let parsed = Int(cateId) {
             numericCate = parsed
         } else {
-            return []
+            return ([], 0)
         }
 
         let rawData = try await executeApiWithFailover { domain in
@@ -506,8 +521,10 @@ public actor WnacgClient {
             )
         }
         let payload = try decodeJsonObject(rawData)
-        guard let data = payload["data"] as? [String: Any] else { return [] }
-        return parseApiMangaList(data["list"], sourceID: sourceID)
+        guard let data = payload["data"] as? [String: Any] else { return ([], 0) }
+        let items = parseApiMangaList(data["list"], sourceID: sourceID)
+        let total = readInt(data["total"])
+        return (items, max(total, items.count))
     }
 
     private func searchViaApi(sourceID: String, query: String, page: Int) async throws -> (items: [Manga], total: Int) {
