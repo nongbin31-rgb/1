@@ -384,6 +384,37 @@ public final class Waifu2xService: @unchecked Sendable {
                     dstPixels[dstIdx + 3] = 255
                 }
             }
+        #if arch(arm64)
+        } else if #available(iOS 14.0, *), dataType == .float16 {
+            let ptr = outputArray.dataPointer.bindMemory(to: Float16.self, capacity: 3 * planeSize)
+            let rPtr = ptr
+            let gPtr = ptr.advanced(by: planeSize)
+            let bPtr = ptr.advanced(by: planeSize * 2)
+
+            for sy in 0..<outputTileSize {
+                let dy = destOriginY + sy
+                guard dy >= 0 && dy < targetHeight else { continue }
+                let dstRow = dy * targetWidth
+                let srcRow = sy * outputTileSize
+
+                for sx in 0..<outputTileSize {
+                    let dx = destOriginX + sx
+                    guard dx >= 0 && dx < targetWidth else { continue }
+
+                    let srcIdx = srcRow + sx
+                    let dstIdx = (dstRow + dx) * 4
+
+                    let r = Double(rPtr[srcIdx]) * 255.0
+                    let g = Double(gPtr[srcIdx]) * 255.0
+                    let b = Double(bPtr[srcIdx]) * 255.0
+
+                    dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
+                    dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
+                    dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
+                    dstPixels[dstIdx + 3] = 255
+                }
+            }
+        #endif
         } else {
             // 通用下标兜底（支持 Float16 等未来格式）
             for sy in 0..<outputTileSize {
@@ -422,7 +453,7 @@ public final class Waifu2xService: @unchecked Sendable {
         }
 
         let config = MLModelConfiguration()
-        config.computeUnits = .all // 优先 ANE（Apple Neural Engine）与 GPU
+        config.computeUnits = .cpuAndGPU // 使用 CPU+GPU 混合计算，杜绝 iOS 15 下 ANE 对经典 Espresso 模型转译导致的挂死死锁
         let model = try MLModel(contentsOf: url, configuration: config)
         mlModelCache[key] = model
         return model

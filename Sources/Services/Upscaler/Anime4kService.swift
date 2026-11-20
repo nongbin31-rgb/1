@@ -164,7 +164,6 @@ public actor Anime4kService {
             options: [
                 .SRGB: false,
                 .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
-                .textureStorageMode: NSNumber(value: MTLStorageMode.private.rawValue),
             ]
         )
 

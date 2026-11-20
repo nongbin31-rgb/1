@@ -291,7 +291,9 @@ public final class Anime4K: @unchecked Sendable {
                 textureMap[bufferIndex][shader.outputTextureName] = intermediate
             }
 
-            let outputTex = textureMap[bufferIndex][shader.outputTextureName]!
+            guard let outputTex = textureMap[bufferIndex][shader.outputTextureName] else {
+                throw Anime4KError.encoderFail("未找到目标输出纹理: \(shader.outputTextureName)")
+            }
             encoder.setTexture(outputTex, index: shader.inputTextureNames.count)
 
             let w = pipelineState.threadExecutionWidth
@@ -306,7 +308,17 @@ public final class Anime4K: @unchecked Sendable {
             encoder.endEncoding()
         }
 
-        return textureMap[bufferIndex]["output"]!
+        // 安全获取最终输出纹理，杜绝强制解包闪退
+        guard bufferIndex >= 0 && bufferIndex < textureMap.count else {
+            return input
+        }
+        if let out = textureMap[bufferIndex]["output"] {
+            return out
+        }
+        if let lastShader = enabledShaders.last, let out = textureMap[bufferIndex][lastShader.outputTextureName] {
+            return out
+        }
+        return input
     }
 
     /// 编码并将最终超分结果写入目标输出纹理
@@ -315,12 +327,15 @@ public final class Anime4K: @unchecked Sendable {
         guard let encoder = cmdBuf.makeComputeCommandEncoder() else {
             throw Anime4KError.encoderCreationFail("FinalResizeEncoder")
         }
-        encoder.setComputePipelineState(finalResizePS)
+        guard let finalPS = finalResizePS else {
+            throw Anime4KError.encoderFail("缺失最终缩放着色器管线")
+        }
+        encoder.setComputePipelineState(finalPS)
         encoder.setTexture(outTex, index: 0)
         encoder.setTexture(output, index: 1)
 
-        let w = finalResizePS.threadExecutionWidth
-        let h = max(1, finalResizePS.maxTotalThreadsPerThreadgroup / w)
+        let w = finalPS.threadExecutionWidth
+        let h = max(1, finalPS.maxTotalThreadsPerThreadgroup / w)
         let threadsPerThreadgroup = MTLSizeMake(w, h, 1)
         let threadgroupsPerGrid = MTLSize(
             width: (output.width + w - 1) / w,
