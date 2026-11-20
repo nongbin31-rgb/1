@@ -30,7 +30,7 @@ targets:
       path: Sources/App/Info.plist
       properties:
         CFBundleDevelopmentRegion: zh-Hans
-        CFBundleDisplayName: 清阅在线漫画
+        CFBundleDisplayName: FristLove
         CFBundleLocalizations:
           - zh-Hans
         CFBundleShortVersionString: "1.0.0"
@@ -50,7 +50,6 @@ targets:
           NSAllowsArbitraryLoads: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        UIDesignRequiresCompatibility: true
         UILaunchStoryboardName: LaunchScreen
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:

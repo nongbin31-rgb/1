@@ -14,20 +14,24 @@ permissions:
 
 jobs:
   build-ipa:
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16 (Classic iOS 18 SDK)
+      - name: Select Xcode 26 (iOS 26 Liquid Glass SDK)
         run: |
-          XCODE_16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
-          if [ -n "${XCODE_16}" ]; then
-            echo "Selecting ${XCODE_16}"
-            sudo xcode-select -s "${XCODE_16}/Contents/Developer"
+          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "${XCODE_26}" ]; then
+            echo "Selecting ${XCODE_26}"
+            sudo xcode-select -s "${XCODE_26}/Contents/Developer"
+          else
+            echo "Xcode_26*.app not found, listing available Xcode installations:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || true
           fi
           xcodebuild -version
+          xcodebuild -showsdks | grep iphoneos || true
 
       - name: Install XcodeGen
         run: |
