@@ -37,6 +37,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let texture: ReaderTextureType
     public let textureOpacity: Double
     public let textureTintOpacity: Double
+    public let textureGrainDensity: Double
     public let textureTarget: ReaderTextureTarget
     public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     @Binding public var currentPageIndex: Int
@@ -58,6 +59,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         currentPageIndex: Binding<Int>,
@@ -78,6 +80,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.texture = texture
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
+        self.textureGrainDensity = textureGrainDensity
         self.textureTarget = textureTarget
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self._currentPageIndex = currentPageIndex
@@ -114,6 +117,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop
         )
@@ -165,6 +169,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 texture: parent.texture,
                 textureOpacity: parent.textureOpacity,
                 textureTintOpacity: parent.textureTintOpacity,
+                textureGrainDensity: parent.textureGrainDensity,
                 textureTarget: parent.textureTarget,
                 imageOnlyBackdrop: parent.imageOnlyBackdrop,
                 onSingleTap: parent.onSingleTap,
@@ -277,6 +282,7 @@ public final class SnapPageViewController: UIViewController {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
@@ -294,6 +300,7 @@ public final class SnapPageViewController: UIViewController {
                     texture: texture,
                     textureOpacity: textureOpacity,
                     textureTintOpacity: textureTintOpacity,
+                    textureGrainDensity: textureGrainDensity,
                     textureTarget: textureTarget,
                     imageOnlyBackdrop: imageOnlyBackdrop
                 )
@@ -312,6 +319,7 @@ public final class SnapPageViewController: UIViewController {
                 texture: texture,
                 textureOpacity: textureOpacity,
                 textureTintOpacity: textureTintOpacity,
+                textureGrainDensity: textureGrainDensity,
                 textureTarget: textureTarget,
                 imageOnlyBackdrop: imageOnlyBackdrop
             )
@@ -332,6 +340,7 @@ public final class SnapPageViewController: UIViewController {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
@@ -343,6 +352,7 @@ public final class SnapPageViewController: UIViewController {
                     texture: texture,
                     textureOpacity: textureOpacity,
                     textureTintOpacity: textureTintOpacity,
+                    textureGrainDensity: textureGrainDensity,
                     textureTarget: textureTarget,
                     imageOnlyBackdrop: imageOnlyBackdrop
                 )
@@ -524,6 +534,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentTexture: ReaderTextureType = .classic
     private var currentTextureOpacity: Double = 0.4
     private var currentTextureTintOpacity: Double = 1.0
+    private var currentTextureGrainDensity: Double = 1.0
     private var currentTextureTarget: ReaderTextureTarget = .both
     private var currentImageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     private var currentOnSingleTap: (() -> Void)?
@@ -555,6 +566,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         onSingleTap: @escaping () -> Void,
@@ -573,6 +585,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentTexture = texture
         self.currentTextureOpacity = textureOpacity
         self.currentTextureTintOpacity = textureTintOpacity
+        self.currentTextureGrainDensity = textureGrainDensity
         self.currentTextureTarget = textureTarget
         self.currentImageOnlyBackdrop = imageOnlyBackdrop
         self.currentOnSingleTap = onSingleTap
@@ -606,6 +619,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
@@ -623,6 +637,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             || currentTexture != texture
             || currentTextureOpacity != textureOpacity
             || currentTextureTintOpacity != textureTintOpacity
+            || currentTextureGrainDensity != textureGrainDensity
             || currentTextureTarget != textureTarget
             || currentImageOnlyBackdrop != imageOnlyBackdrop
 
@@ -640,6 +655,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentTexture = texture
         self.currentTextureOpacity = textureOpacity
         self.currentTextureTintOpacity = textureTintOpacity
+        self.currentTextureGrainDensity = textureGrainDensity
         self.currentTextureTarget = textureTarget
         self.currentImageOnlyBackdrop = imageOnlyBackdrop
 
@@ -661,6 +677,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
+        textureGrainDensity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
@@ -674,6 +691,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
+            textureGrainDensity: textureGrainDensity,
             textureTarget: textureTarget,
             imageOnlyBackdrop: imageOnlyBackdrop
         )
@@ -688,6 +706,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
                 texture: currentTexture,
                 textureOpacity: currentTextureOpacity,
                 textureTintOpacity: currentTextureTintOpacity,
+                textureGrainDensity: currentTextureGrainDensity,
                 textureTarget: currentTextureTarget,
                 imageOnlyBackdrop: currentImageOnlyBackdrop,
                 onSingleTap: {},
@@ -707,6 +726,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             texture: currentTexture,
             textureOpacity: currentTextureOpacity,
             textureTintOpacity: currentTextureTintOpacity,
+            textureGrainDensity: currentTextureGrainDensity,
             textureTarget: currentTextureTarget,
             imageOnlyBackdrop: currentImageOnlyBackdrop,
             onSingleTap: currentOnSingleTap ?? {},

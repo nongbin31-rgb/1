@@ -52,6 +52,9 @@ public final class AppStore: ObservableObject {
     @Published public var readerTextureTintOpacity: Double = 1.0 {
         didSet { save(readerTextureTintOpacity, key: Keys.readerTextureTintOpacity) }
     }
+    @Published public var readerClassicGrainDensity: Double = 1.0 {
+        didSet { save(readerClassicGrainDensity, key: Keys.readerClassicGrainDensity) }
+    }
     @Published public var readerTextureTarget: ReaderTextureTarget = .both {
         didSet { save(readerTextureTarget, key: Keys.readerTextureTarget) }
     }
@@ -92,6 +95,7 @@ public final class AppStore: ObservableObject {
         static let readerTextureType = "keda_online_reader_texture_type_v1"
         static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
         static let readerTextureTintOpacity = "keda_online_reader_texture_tint_opacity_v1"
+        static let readerClassicGrainDensity = "keda_online_reader_classic_grain_density_v1"
         static let readerTextureTarget = "keda_online_reader_texture_target_v1"
         static let readerImageOnlyBackdrop = "keda_online_reader_image_only_backdrop_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
@@ -155,6 +159,7 @@ public final class AppStore: ObservableObject {
         self.readerTextureType = load(key: Keys.readerTextureType) ?? .classic
         self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4
         self.readerTextureTintOpacity = load(key: Keys.readerTextureTintOpacity) ?? 1.0
+        self.readerClassicGrainDensity = load(key: Keys.readerClassicGrainDensity) ?? 1.0
         self.readerTextureTarget = load(key: Keys.readerTextureTarget) ?? .both
         self.readerImageOnlyBackdrop = load(key: Keys.readerImageOnlyBackdrop) ?? .paperTint
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
