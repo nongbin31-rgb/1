@@ -20,6 +20,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     private let cache = NSCache<NSString, UIImage>()
     private let seamlessTileCache = NSCache<NSString, UIImage>()
+    private let loadLock = NSLock()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
     private let srgbContext: CIContext = {
         let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
@@ -42,9 +43,18 @@ public final class ReaderTextureCache: @unchecked Sendable {
             return cached
         }
 
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+
         // 优先全名 (例如 Texture_0_classic_paper) 加载，次选短名 (例如 Texture_0) 加载
-        let loaded = loadTextureFromBundle(named: type.rawValue)
+        var loaded = loadTextureFromBundle(named: type.rawValue)
             ?? loadTextureFromBundle(named: shortKey(for: type))
+        if type == .classic, let raw = loaded {
+            loaded = enhanceClassicPaperTexture(raw)
+        }
         if let img = loaded {
             cache.setObject(img, forKey: key)
         }
@@ -185,6 +195,95 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return CGFloat(total) / CGFloat(pixels.count * 255)
     }
 
+    /// 经典纸张专属增强：4×4 交替镜像加密颗粒分布（约 2.7 倍线密度 / 7 倍以上单位面积颗粒）+ CoreImage 微浮雕立体锐化
+    private func enhanceClassicPaperTexture(_ image: UIImage) -> UIImage {
+        let origW = image.size.width
+        let origH = image.size.height
+        guard origW > 64, origH > 64 else { return image }
+
+        // 取中心 68% 区域并 4×4 交替镜像铺满长边 1680px 画布：保持四边对称无缝且显著提高颗粒密度
+        let gridCols = 4
+        let gridRows = 4
+        let maxLongEdge: CGFloat = 1680.0
+        let cellMaxEdge = maxLongEdge / CGFloat(max(gridCols, gridRows))
+        let aspect = origW / origH
+        let cellW: CGFloat
+        let cellH: CGFloat
+        if aspect >= 1.0 {
+            cellW = floor(cellMaxEdge)
+            cellH = max(64.0, floor(cellMaxEdge / aspect))
+        } else {
+            cellH = floor(cellMaxEdge)
+            cellW = max(64.0, floor(cellMaxEdge * aspect))
+        }
+
+        let denseTile = Self.renderMirroredTileGrid(
+            from: image,
+            columns: gridCols,
+            rows: gridRows,
+            cellSize: CGSize(width: cellW, height: cellH),
+            cropInsetRatio: 0.16
+        )
+
+        guard let ciInput = CIImage(image: denseTile) else {
+            return denseTile
+        }
+        let extent = ciInput.extent
+        var current: CIImage = ciInput.clampedToExtent()
+
+        // 1. 仅锐化明度与纸纤维高频细节，凸显颗粒边缘
+        if let lumSharpen = CIFilter(name: "CISharpenLuminance") {
+            lumSharpen.setValue(current, forKey: kCIInputImageKey)
+            lumSharpen.setValue(0.75, forKey: kCIInputSharpnessKey)
+            if let out = lumSharpen.outputImage {
+                current = out
+            }
+        }
+
+        // 2. 反锐化遮罩拉出颗粒微谷与微峰轮廓
+        if let unsharp = CIFilter(name: "CIUnsharpMask") {
+            unsharp.setValue(current, forKey: kCIInputImageKey)
+            unsharp.setValue(1.8, forKey: kCIInputRadiusKey)
+            unsharp.setValue(1.25, forKey: kCIInputIntensityKey)
+            if let out = unsharp.outputImage {
+                current = out
+            }
+        }
+
+        // 3. 3×3 斜向微浮雕卷积（总权重恒为 1.0：平滑底色亮度零漂移，仅在颗粒起伏处雕刻受光面与背光面）
+        if let emboss = CIFilter(name: "CIConvolution3X3") {
+            let relief: CGFloat = 0.42
+            let weights: [CGFloat] = [
+                -relief, -relief * 0.5, 0.0,
+                -relief * 0.5, 1.0, relief * 0.5,
+                0.0, relief * 0.5, relief
+            ]
+            emboss.setValue(current, forKey: kCIInputImageKey)
+            emboss.setValue(CIVector(values: weights, count: 9), forKey: "inputWeights")
+            emboss.setValue(0.0, forKey: "inputBias")
+            if let out = emboss.outputImage {
+                current = out
+            }
+        }
+
+        // 4. 轻度拉开凹凸对比并微提纸基高光，避免正片叠底发灰
+        if let controls = CIFilter(name: "CIColorControls") {
+            controls.setValue(current, forKey: kCIInputImageKey)
+            controls.setValue(1.22, forKey: kCIInputContrastKey)
+            controls.setValue(0.025, forKey: kCIInputBrightnessKey)
+            controls.setValue(1.0, forKey: kCIInputSaturationKey)
+            if let out = controls.outputImage {
+                current = out
+            }
+        }
+
+        let croppedCI = current.cropped(to: extent)
+        guard let outCG = srgbContext.createCGImage(croppedCI, from: extent) else {
+            return denseTile
+        }
+        return UIImage(cgImage: outCG)
+    }
+
     private static func buildSeamlessMirroredTile(from image: UIImage) -> UIImage {
         let origW = image.size.width
         let origH = image.size.height
@@ -197,42 +296,59 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let quadW = max(64.0, floor(origW * visibleRatio * downScale))
         let quadH = max(64.0, floor(origH * visibleRatio * downScale))
 
-        let quadFormat = UIGraphicsImageRendererFormat()
-        quadFormat.scale = 1.0
-        quadFormat.opaque = true
+        return renderMirroredTileGrid(
+            from: image,
+            columns: 2,
+            rows: 2,
+            cellSize: CGSize(width: quadW, height: quadH),
+            cropInsetRatio: trimRatio
+        )
+    }
 
-        let drawW = quadW / visibleRatio
-        let drawH = quadH / visibleRatio
-        let offsetX = -(drawW - quadW) * 0.5
-        let offsetY = -(drawH - quadH) * 0.5
+    private static func renderMirroredTileGrid(
+        from image: UIImage,
+        columns: Int,
+        rows: Int,
+        cellSize: CGSize,
+        cropInsetRatio: CGFloat
+    ) -> UIImage {
+        let visibleRatio = max(0.2, 1.0 - cropInsetRatio * 2.0)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = true
 
-        let croppedQuad = UIGraphicsImageRenderer(size: CGSize(width: quadW, height: quadH), format: quadFormat).image { _ in
+        let drawW = cellSize.width / visibleRatio
+        let drawH = cellSize.height / visibleRatio
+        let offsetX = -(drawW - cellSize.width) * 0.5
+        let offsetY = -(drawH - cellSize.height) * 0.5
+
+        let croppedCell = UIGraphicsImageRenderer(size: cellSize, format: format).image { _ in
             image.draw(in: CGRect(x: offsetX, y: offsetY, width: drawW, height: drawH))
         }
 
-        let fullSize = CGSize(width: quadW * 2.0, height: quadH * 2.0)
-        return UIGraphicsImageRenderer(size: fullSize, format: quadFormat).image { ctx in
+        let fullSize = CGSize(
+            width: cellSize.width * CGFloat(columns),
+            height: cellSize.height * CGFloat(rows)
+        )
+        return UIGraphicsImageRenderer(size: fullSize, format: format).image { ctx in
             let cg = ctx.cgContext
+            for row in 0..<rows {
+                for col in 0..<columns {
+                    let flipX = col % 2 == 1
+                    let flipY = row % 2 == 1
+                    let originX = CGFloat(col) * cellSize.width
+                    let originY = CGFloat(row) * cellSize.height
 
-            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
-
-            cg.saveGState()
-            cg.translateBy(x: fullSize.width, y: 0)
-            cg.scaleBy(x: -1.0, y: 1.0)
-            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
-            cg.restoreGState()
-
-            cg.saveGState()
-            cg.translateBy(x: 0, y: fullSize.height)
-            cg.scaleBy(x: 1.0, y: -1.0)
-            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
-            cg.restoreGState()
-
-            cg.saveGState()
-            cg.translateBy(x: fullSize.width, y: fullSize.height)
-            cg.scaleBy(x: -1.0, y: -1.0)
-            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
-            cg.restoreGState()
+                    cg.saveGState()
+                    cg.translateBy(
+                        x: originX + (flipX ? cellSize.width : 0),
+                        y: originY + (flipY ? cellSize.height : 0)
+                    )
+                    cg.scaleBy(x: flipX ? -1.0 : 1.0, y: flipY ? -1.0 : 1.0)
+                    croppedCell.draw(in: CGRect(origin: .zero, size: cellSize))
+                    cg.restoreGState()
+                }
+            }
         }
     }
 
