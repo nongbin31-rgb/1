@@ -97,6 +97,7 @@ extension View {
             self
                 .toolbarBackground(.visible, for: .navigationBar)
                 .toolbarBackground(Color.black.opacity(0.85), for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
         } else {
             self
         }
