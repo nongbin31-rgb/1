@@ -21,10 +21,18 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private let cache = NSCache<NSString, UIImage>()
     private let seamlessTileCache = NSCache<NSString, UIImage>()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
+    private let srgbContext: CIContext = {
+        let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        return CIContext(options: [
+            .workingColorSpace: srgb,
+            .outputColorSpace: srgb,
+            .useSoftwareRenderer: false
+        ])
+    }()
 
     private init() {
-        cache.countLimit = 12
-        seamlessTileCache.countLimit = 12
+        cache.countLimit = 24
+        seamlessTileCache.countLimit = 24
     }
 
     /// 获取指定纸张纹理图像（带内存二级缓存）
@@ -41,6 +49,26 @@ public final class ReaderTextureCache: @unchecked Sendable {
             cache.setObject(img, forKey: key)
         }
         return loaded
+    }
+
+    /// 获取去色白场校准后的中性纸张肌理图（彻底消除材质自带黄/棕色偏色，仅保留纯白纸纤维颗粒）
+    public func neutralGrainImage(for type: ReaderTextureType) -> UIImage? {
+        let key = "\(type.rawValue)_neutral_grain" as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        guard let baseImg = textureImage(for: type) else {
+            return nil
+        }
+
+        return queue.sync {
+            if let cached = cache.object(forKey: key) {
+                return cached
+            }
+            let generated = buildNeutralGrainImage(from: baseImg)
+            cache.setObject(generated, forKey: key)
+            return generated
+        }
     }
 
     /// 获取专为条漫连续滚动平铺打造的 2×2 镜像无缝纹理图（裁去边缘暗边并双向镜像衔接，消除拼接线）
@@ -61,6 +89,100 @@ public final class ReaderTextureCache: @unchecked Sendable {
             seamlessTileCache.setObject(generated, forKey: key)
             return generated
         }
+    }
+
+    /// 获取去色白场校准后的 2×2 镜像无缝纹理图（供条漫 0% 着色或过渡混合使用）
+    public func seamlessNeutralTileImage(for type: ReaderTextureType) -> UIImage? {
+        let key = "\(type.rawValue)_seamless_neutral_tile" as NSString
+        if let cached = seamlessTileCache.object(forKey: key) {
+            return cached
+        }
+        guard let neutralImg = neutralGrainImage(for: type) else {
+            return nil
+        }
+
+        return queue.sync {
+            if let cached = seamlessTileCache.object(forKey: key) {
+                return cached
+            }
+            let generated = Self.buildSeamlessMirroredTile(from: neutralImg)
+            seamlessTileCache.setObject(generated, forKey: key)
+            return generated
+        }
+    }
+
+    private func buildNeutralGrainImage(from image: UIImage) -> UIImage {
+        let origW = image.size.width
+        let origH = image.size.height
+        guard origW > 16, origH > 16 else { return image }
+
+        let maxDim: CGFloat = 1600.0
+        let scale = min(1.0, maxDim / max(origW, origH))
+        let targetSize = CGSize(
+            width: max(32.0, floor(origW * scale)),
+            height: max(32.0, floor(origH * scale))
+        )
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = true
+        let bounded = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+
+        let meanLuma = estimateAverageLuminance(of: bounded)
+        guard let ciInput = CIImage(image: bounded),
+              let desaturateFilter = CIFilter(name: "CIColorControls") else {
+            return bounded
+        }
+
+        desaturateFilter.setValue(ciInput, forKey: kCIInputImageKey)
+        desaturateFilter.setValue(0.0, forKey: kCIInputSaturationKey)
+
+        guard let grayCI = desaturateFilter.outputImage,
+              let matrixFilter = CIFilter(name: "CIColorMatrix") else {
+            return bounded
+        }
+
+        // 将各款纸张均值亮度拉齐至 ~0.97 纯白纸基，同时保留 0.82 倍纤维暗部肌理对比
+        let gain: CGFloat = 0.82
+        let targetWhite: CGFloat = 0.97
+        let lumaScale = gain / max(meanLuma, 0.25)
+        let lumaBias = targetWhite - gain
+
+        matrixFilter.setValue(grayCI, forKey: kCIInputImageKey)
+        matrixFilter.setValue(CIVector(x: lumaScale, y: 0, z: 0, w: 0), forKey: "inputRVector")
+        matrixFilter.setValue(CIVector(x: 0, y: lumaScale, z: 0, w: 0), forKey: "inputGVector")
+        matrixFilter.setValue(CIVector(x: 0, y: 0, z: lumaScale, w: 0), forKey: "inputBVector")
+        matrixFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+        matrixFilter.setValue(CIVector(x: lumaBias, y: lumaBias, z: lumaBias, w: 0), forKey: "inputBiasVector")
+
+        guard let outputCI = matrixFilter.outputImage,
+              let outCG = srgbContext.createCGImage(outputCI, from: grayCI.extent) else {
+            return bounded
+        }
+        return UIImage(cgImage: outCG)
+    }
+
+    private func estimateAverageLuminance(of image: UIImage) -> CGFloat {
+        guard let cgImg = image.cgImage else { return 0.85 }
+        let sampleSize = 8
+        var pixels = [UInt8](repeating: 0, count: sampleSize * sampleSize)
+        guard let ctx = CGContext(
+            data: &pixels,
+            width: sampleSize,
+            height: sampleSize,
+            bitsPerComponent: 8,
+            bytesPerRow: sampleSize,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else {
+            return 0.85
+        }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+        let total = pixels.reduce(0) { $0 + Int($1) }
+        return CGFloat(total) / CGFloat(pixels.count * 255)
     }
 
     private static func buildSeamlessMirroredTile(from image: UIImage) -> UIImage {
@@ -183,7 +305,9 @@ public class ReaderBackgroundContainerView: UIView {
     public let baseColorView = UIView()
     /// Layer 1: 沉浸式动态高斯模糊背景层 (用于 immersive 模式)
     public let immersiveBackgroundView = UIImageView()
-    /// Layer 2: 真实纸质纹理图层 (使用 multiplyBlendMode 正片叠底)
+    /// Layer 2: 真实纸质纹理复合容器 (使用 multiplyBlendMode 正片叠底，支持着色与去色肌理无缝混合)
+    public let textureCompositeView = UIView()
+    public let neutralTextureOverlayView = UIImageView()
     public let textureOverlayView = UIImageView()
     /// Layer 3: 书脊中缝立体渐变阴影层 (CAGradientLayer)
     public let spineGradientLayer = CAGradientLayer()
@@ -205,13 +329,14 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     public var textureOpacity: CGFloat = 0.4 {
-        didSet { textureOverlayView.alpha = textureOpacity }
+        didSet { textureCompositeView.alpha = textureOpacity }
     }
 
     public var textureTintOpacity: CGFloat = 1.0 {
         didSet {
             if currentBackground == .texture {
                 baseColorView.backgroundColor = blendedPaperColor()
+                updateTextureImage()
             }
         }
     }
@@ -255,14 +380,26 @@ public class ReaderBackgroundContainerView: UIView {
         immersiveBackgroundView.isHidden = true
         addSubview(immersiveBackgroundView)
 
-        // 3. 纹理叠加层 (使用 multiplyBlendMode 正片叠底)
-        textureOverlayView.frame = bounds
+        // 3. 纹理叠加复合容器 (使用 multiplyBlendMode 正片叠底)
+        textureCompositeView.frame = bounds
+        textureCompositeView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        textureCompositeView.clipsToBounds = true
+        textureCompositeView.backgroundColor = .clear
+        textureCompositeView.alpha = textureOpacity
+        textureCompositeView.layer.compositingFilter = "multiplyBlendMode"
+        textureCompositeView.isHidden = true
+        addSubview(textureCompositeView)
+
+        neutralTextureOverlayView.frame = textureCompositeView.bounds
+        neutralTextureOverlayView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        neutralTextureOverlayView.contentMode = .scaleAspectFill
+        neutralTextureOverlayView.isHidden = true
+        textureCompositeView.addSubview(neutralTextureOverlayView)
+
+        textureOverlayView.frame = textureCompositeView.bounds
         textureOverlayView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         textureOverlayView.contentMode = .scaleAspectFill
-        textureOverlayView.alpha = textureOpacity
-        textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
-        textureOverlayView.isHidden = true
-        addSubview(textureOverlayView)
+        textureCompositeView.addSubview(textureOverlayView)
 
         // 4. 书脊立体阴影
         setupSpineGradient()
@@ -311,27 +448,27 @@ public class ReaderBackgroundContainerView: UIView {
         switch currentBackground {
         case .followSystem:
             immersiveBackgroundView.isHidden = true
-            textureOverlayView.isHidden = true
+            textureCompositeView.isHidden = true
             baseColorView.backgroundColor = .systemBackground
 
         case .light:
             immersiveBackgroundView.isHidden = true
-            textureOverlayView.isHidden = true
+            textureCompositeView.isHidden = true
             baseColorView.backgroundColor = .white
 
         case .dark:
             immersiveBackgroundView.isHidden = true
-            textureOverlayView.isHidden = true
+            textureCompositeView.isHidden = true
             baseColorView.backgroundColor = .black
 
         case .immersive:
             immersiveBackgroundView.isHidden = false
-            textureOverlayView.isHidden = true
+            textureCompositeView.isHidden = true
             baseColorView.backgroundColor = .black
 
         case .texture:
             immersiveBackgroundView.isHidden = true
-            textureOverlayView.isHidden = false
+            textureCompositeView.isHidden = false
             baseColorView.backgroundColor = blendedPaperColor()
             updateTextureImage()
         }
@@ -353,12 +490,32 @@ public class ReaderBackgroundContainerView: UIView {
     }
 
     private func updateTextureImage() {
+        let t = min(max(textureTintOpacity, 0.0), 1.0)
+        textureCompositeView.alpha = textureOpacity
+
         if let img = ReaderTextureCache.shared.textureImage(for: currentTexture) {
-            textureOverlayView.contentMode = .scaleAspectFill
-            textureOverlayView.image = img
-            textureOverlayView.layer.compositingFilter = "multiplyBlendMode"
-            textureOverlayView.alpha = textureOpacity
+            let neutralImg = t < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: currentTexture) : nil
+            if let neutralImg, t < 0.999 {
+                neutralTextureOverlayView.isHidden = false
+                neutralTextureOverlayView.contentMode = .scaleAspectFill
+                neutralTextureOverlayView.image = neutralImg
+                neutralTextureOverlayView.alpha = 1.0
+            } else {
+                neutralTextureOverlayView.isHidden = true
+                neutralTextureOverlayView.image = nil
+            }
+
+            if t > 0.001 || neutralImg == nil {
+                textureOverlayView.isHidden = false
+                textureOverlayView.contentMode = .scaleAspectFill
+                textureOverlayView.image = img
+                textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : t
+            } else {
+                textureOverlayView.isHidden = true
+                textureOverlayView.alpha = 0.0
+            }
         } else {
+            neutralTextureOverlayView.image = nil
             textureOverlayView.image = nil
         }
     }
@@ -429,17 +586,20 @@ public enum TexturePhaseAnchor: Equatable, Sendable {
 public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
     public let opacity: Double
+    public let tintOpacity: Double
     public let phaseAnchor: TexturePhaseAnchor
     public let referenceSize: CGSize?
 
     public init(
         texture: ReaderTextureType,
         opacity: Double = 0.4,
+        tintOpacity: Double = 1.0,
         phaseAnchor: TexturePhaseAnchor = .local,
         referenceSize: CGSize? = nil
     ) {
         self.texture = texture
         self.opacity = opacity
+        self.tintOpacity = tintOpacity
         self.phaseAnchor = phaseAnchor
         self.referenceSize = referenceSize
     }
@@ -447,19 +607,25 @@ public struct PaperTextureOverlayView: View {
     public var body: some View {
         if let img = ReaderTextureCache.shared.textureImage(for: texture) {
             let effectiveOpacity = opacity
+            let clampedTint = min(max(tintOpacity, 0.0), 1.0)
 
             switch phaseAnchor {
             case .local:
+                let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
                 // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
                 // 避免高分原图 1:1 平铺导致背景纹理颗粒过大及边缘接缝错位
                 GeometryReader { proxy in
                     let targetSize = validReferenceSize() ?? proxy.size
-                    Image(uiImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: targetSize.width, height: targetSize.height)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
+                    ZStack {
+                        if let neutralImg, clampedTint < 0.999 {
+                            aspectFilledTexture(neutralImg, targetSize: targetSize, containerSize: proxy.size)
+                        }
+                        if clampedTint > 0.001 || neutralImg == nil {
+                            aspectFilledTexture(img, targetSize: targetSize, containerSize: proxy.size)
+                                .opacity(neutralImg == nil ? 1.0 : clampedTint)
+                        }
+                    }
+                    .compositingGroup()
                 }
                 .blendMode(.multiply)
                 .opacity(effectiveOpacity)
@@ -467,6 +633,7 @@ public struct PaperTextureOverlayView: View {
 
             case .namedSpace(let spaceName):
                 let tileImg = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
+                let neutralTileImg = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralTileImage(for: texture) : nil
                 let refSize = validReferenceSize() ?? fallbackScreenSize()
                 let singleSize = Self.scaledTileSize(for: img, fitting: refSize)
                 let screenScale = max(UIScreen.main.scale, 1.0)
@@ -487,17 +654,16 @@ public struct PaperTextureOverlayView: View {
                         Color.clear
                             .frame(width: viewW, height: viewH)
                             .overlay(alignment: .topLeading) {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    ForEach(0..<rows, id: \.self) { _ in
-                                        HStack(spacing: 0) {
-                                            ForEach(0..<cols, id: \.self) { _ in
-                                                Image(uiImage: tileImg)
-                                                    .resizable()
-                                                    .frame(width: tileW, height: tileH)
-                                            }
-                                        }
+                                ZStack {
+                                    if let neutralTileImg, clampedTint < 0.999 {
+                                        tileGridView(tileImg: neutralTileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                    }
+                                    if clampedTint > 0.001 || neutralTileImg == nil {
+                                        tileGridView(tileImg: tileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                            .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
                                     }
                                 }
+                                .compositingGroup()
                                 .offset(x: -phaseX, y: -phaseY)
                             }
                             .clipped()
@@ -506,6 +672,29 @@ public struct PaperTextureOverlayView: View {
                 .blendMode(.multiply)
                 .opacity(effectiveOpacity)
                 .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func aspectFilledTexture(_ image: UIImage, targetSize: CGSize, containerSize: CGSize) -> some View {
+        Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: targetSize.width, height: targetSize.height)
+            .frame(width: containerSize.width, height: containerSize.height)
+            .clipped()
+    }
+
+    private func tileGridView(tileImg: UIImage, rows: Int, cols: Int, tileW: CGFloat, tileH: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<rows, id: \.self) { _ in
+                HStack(spacing: 0) {
+                    ForEach(0..<cols, id: \.self) { _ in
+                        Image(uiImage: tileImg)
+                            .resizable()
+                            .frame(width: tileW, height: tileH)
+                    }
+                }
             }
         }
     }
