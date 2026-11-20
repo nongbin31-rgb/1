@@ -136,7 +136,7 @@ private struct DiscoverEditorialListView: View {
                                         .padding(.trailing, 30)
                                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                                    // 作者 + 连载状态副信息行
+                                    // 作者 + 连载状态副信息行（状态固定宽度保护，避免被长作者名挤压隐藏）
                                     HStack(spacing: 5) {
                                         if !manga.author.isEmpty {
                                             Text(manga.displayAuthor)
@@ -153,6 +153,8 @@ private struct DiscoverEditorialListView: View {
 
                                         if !manga.statusText.isEmpty {
                                             DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                                .fixedSize(horizontal: true, vertical: false)
+                                                .layoutPriority(1)
                                         }
                                     }
 
@@ -248,10 +250,24 @@ private struct DiscoverImmersiveWallView: View {
                     )
                     .frame(maxWidth: .infinity)
                     .aspectRatio(2.0 / 3.1, contentMode: .fit)
-                    // 左上角毛玻璃微标签 + 右上角进度/收藏角标（严格叠加于封面内，不改变卡片尺寸）
+                    // 左上角优先展示连载/完结状态微胶囊，右上角展示进度或主标签/收藏
                     .overlay(alignment: .top) {
                         HStack(spacing: 6) {
-                            if let topTag = tags.first ?? (!manga.statusText.isEmpty ? manga.statusText : nil) {
+                            if !manga.statusText.isEmpty {
+                                DiscoverStatusBadgeLabel(
+                                    statusText: manga.statusText,
+                                    compact: true,
+                                    isOnDarkBackground: true
+                                )
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(.black.opacity(0.48), in: Capsule())
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+                                )
+                            } else if let topTag = tags.first {
                                 Text(topTag)
                                     .font(.system(size: 9.5, weight: .semibold))
                                     .foregroundStyle(.white.opacity(0.95))
@@ -290,6 +306,19 @@ private struct DiscoverImmersiveWallView: View {
                                     .overlay(
                                         Capsule()
                                             .strokeBorder(Color.white.opacity(0.24), lineWidth: 0.5)
+                                    )
+                            } else if !manga.statusText.isEmpty, let topTag = tags.first {
+                                Text(topTag)
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.92))
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .environment(\.colorScheme, .dark)
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
                                     )
                             }
                         }
@@ -454,6 +483,8 @@ private struct DiscoverEditorialGalleryView: View {
                             HStack(spacing: 5) {
                                 if !manga.statusText.isEmpty {
                                     DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .layoutPriority(1)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
                                         .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
@@ -575,10 +606,8 @@ private struct DiscoverTactileBookshelfView: View {
 
                                     HStack(spacing: 4) {
                                         if !manga.statusText.isEmpty {
-                                            Text(manga.statusText)
-                                                .font(.system(size: 10))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
+                                            DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                                .fixedSize(horizontal: true, vertical: false)
                                         }
                                         ReadingProgressRingView(
                                             hasProgress: progress != nil,
@@ -972,10 +1001,12 @@ private struct DiscoverMagazineTodayView: View {
                     HStack(spacing: 8) {
                         HStack(spacing: 5) {
                             if !manga.statusText.isEmpty {
-                                Text(manga.statusText)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.82))
-                                    .lineLimit(1)
+                                DiscoverStatusBadgeLabel(
+                                    statusText: manga.statusText,
+                                    compact: true,
+                                    isOnDarkBackground: true
+                                )
+                                .fixedSize(horizontal: true, vertical: false)
                             }
                             ReadingProgressRingView(
                                 hasProgress: progress != nil,
@@ -1079,12 +1110,17 @@ private struct DiscoverMagazineTodayView: View {
                                 .lineLimit(1)
 
                             HStack(spacing: 4) {
-                                let info = meta.groupName ?? (!manga.author.isEmpty ? manga.displayAuthor : manga.statusText)
-                                if !info.isEmpty {
-                                    Text(info)
-                                        .font(.system(size: 10.5))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                                if !manga.statusText.isEmpty {
+                                    DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                } else {
+                                    let info = meta.groupName ?? (!manga.author.isEmpty ? manga.displayAuthor : "")
+                                    if !info.isEmpty {
+                                        Text(info)
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
                                 }
                                 Spacer(minLength: 2)
                                 ReadingProgressRingView(
@@ -1133,19 +1169,20 @@ private struct DiscoverMagazineTodayView: View {
                     Spacer(minLength: 0)
 
                     HStack(spacing: 4) {
-                        if let progress {
-                            Text("P\(progress.pageIndex + 1)")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Color.accentColor)
-                        } else if !manga.statusText.isEmpty {
-                            Text(manga.statusText)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                        if !manga.statusText.isEmpty {
+                            DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                .fixedSize(horizontal: true, vertical: false)
                         } else if let group = meta.groupName {
                             Text(group)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        if let progress {
+                            Text("P\(progress.pageIndex + 1)")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
                                 .lineLimit(1)
                         }
 
@@ -1185,21 +1222,22 @@ private struct DiscoverMagazineTodayView: View {
 private struct DiscoverStatusBadgeLabel: View {
     let statusText: String
     var compact: Bool = false
+    var isOnDarkBackground: Bool = false
 
     var body: some View {
         HStack(spacing: 3) {
             if MangaSerialStatusHelper.isOngoingStatus(statusText) {
                 Circle()
                     .fill(Color.green)
-                    .frame(width: 4, height: 4)
+                    .frame(width: 4.5, height: 4.5)
             } else if MangaSerialStatusHelper.isCompletedStatus(statusText) {
                 Circle()
                     .fill(Color.orange)
-                    .frame(width: 4, height: 4)
+                    .frame(width: 4.5, height: 4.5)
             }
             Text(statusText)
                 .font(compact ? .system(size: 10, weight: .medium) : .caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isOnDarkBackground ? Color.white.opacity(0.92) : Color.secondary)
                 .lineLimit(1)
         }
     }

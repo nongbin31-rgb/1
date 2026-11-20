@@ -126,7 +126,8 @@ public enum WnacgParser {
 
             let statusText = MangaSerialStatusHelper.inferStatusText(
                 title: title,
-                latestChapter: infoCol
+                latestChapter: infoCol,
+                tags: [category]
             )
 
             items.append(
