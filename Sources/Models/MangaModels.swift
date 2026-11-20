@@ -844,6 +844,11 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
 
     public var id: String { rawValue }
 
+    /// 是否采用程序化高密 256pt 无缝浮雕微粒平铺（经典纸张：复刻 MangaPrism 立体微粒纸感引擎）
+    public var usesFineTilePattern: Bool {
+        self == .classic
+    }
+
     public var displayName: String {
         switch self {
         case .classic:      return "经典"

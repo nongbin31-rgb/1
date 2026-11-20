@@ -220,27 +220,43 @@ public struct ZoomableImageView: UIViewRepresentable {
 
                 if let texImg = ReaderTextureCache.shared.textureImage(for: texture) {
                     imageView.textureClipContainer.isHidden = false
-                    imageView.textureClipContainer.alpha = CGFloat(opacity)
+                    let effectiveAlpha = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
+                    imageView.textureClipContainer.alpha = CGFloat(effectiveAlpha)
 
-                    let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
-                    if let neutralImg, clampedTint < 0.999 {
-                        imageView.neutralTextureOverlayView.isHidden = false
-                        imageView.neutralTextureOverlayView.contentMode = .scaleAspectFill
-                        imageView.neutralTextureOverlayView.image = neutralImg
-                        imageView.neutralTextureOverlayView.alpha = 1.0
-                    } else {
+                    if texture.usesFineTilePattern {
+                        // 程序化 256×256pt 高密无缝立体浮雕纸纹：1:1 逻辑像素重复平铺，不拉伸不糊化
                         imageView.neutralTextureOverlayView.isHidden = true
                         imageView.neutralTextureOverlayView.image = nil
-                    }
+                        imageView.neutralTextureOverlayView.backgroundColor = .clear
 
-                    if clampedTint > 0.001 || neutralImg == nil {
                         imageView.textureOverlayView.isHidden = false
-                        imageView.textureOverlayView.contentMode = .scaleAspectFill
-                        imageView.textureOverlayView.image = texImg
-                        imageView.textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : CGFloat(clampedTint)
+                        imageView.textureOverlayView.image = nil
+                        imageView.textureOverlayView.backgroundColor = ReaderTextureCache.shared.patternColor(for: texture)
+                        imageView.textureOverlayView.alpha = 1.0
                     } else {
-                        imageView.textureOverlayView.isHidden = true
-                        imageView.textureOverlayView.alpha = 0.0
+                        imageView.neutralTextureOverlayView.backgroundColor = .clear
+                        imageView.textureOverlayView.backgroundColor = .clear
+
+                        let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
+                        if let neutralImg, clampedTint < 0.999 {
+                            imageView.neutralTextureOverlayView.isHidden = false
+                            imageView.neutralTextureOverlayView.contentMode = .scaleAspectFill
+                            imageView.neutralTextureOverlayView.image = neutralImg
+                            imageView.neutralTextureOverlayView.alpha = 1.0
+                        } else {
+                            imageView.neutralTextureOverlayView.isHidden = true
+                            imageView.neutralTextureOverlayView.image = nil
+                        }
+
+                        if clampedTint > 0.001 || neutralImg == nil {
+                            imageView.textureOverlayView.isHidden = false
+                            imageView.textureOverlayView.contentMode = .scaleAspectFill
+                            imageView.textureOverlayView.image = texImg
+                            imageView.textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : CGFloat(clampedTint)
+                        } else {
+                            imageView.textureOverlayView.isHidden = true
+                            imageView.textureOverlayView.alpha = 0.0
+                        }
                     }
                 } else {
                     imageView.textureClipContainer.isHidden = true

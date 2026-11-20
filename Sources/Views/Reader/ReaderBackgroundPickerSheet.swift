@@ -144,26 +144,35 @@ public struct ReaderBackgroundPickerSheet: View {
                     }
 
                     if let img = ReaderTextureCache.shared.textureImage(for: item) {
-                        let clampedTint = min(max(store.readerTextureTintOpacity, 0.0), 1.0)
-                        let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: item) : nil
-                        ZStack {
-                            if let neutralImg, clampedTint < 0.999 {
-                                Image(uiImage: neutralImg)
-                                    .resizable(resizingMode: .stretch)
-                                    .scaledToFill()
+                        if item.usesFineTilePattern {
+                            Image(uiImage: img)
+                                .resizable(resizingMode: .tile)
+                                .frame(minWidth: 0, maxWidth: .infinity)
+                                .frame(height: 72)
+                                .clipped()
+                                .blendMode(.multiply)
+                        } else {
+                            let clampedTint = min(max(store.readerTextureTintOpacity, 0.0), 1.0)
+                            let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: item) : nil
+                            ZStack {
+                                if let neutralImg, clampedTint < 0.999 {
+                                    Image(uiImage: neutralImg)
+                                        .resizable(resizingMode: .stretch)
+                                        .scaledToFill()
+                                }
+                                if clampedTint > 0.001 || neutralImg == nil {
+                                    Image(uiImage: img)
+                                        .resizable(resizingMode: .stretch)
+                                        .scaledToFill()
+                                        .opacity(neutralImg == nil ? 1.0 : clampedTint)
+                                }
                             }
-                            if clampedTint > 0.001 || neutralImg == nil {
-                                Image(uiImage: img)
-                                    .resizable(resizingMode: .stretch)
-                                    .scaledToFill()
-                                    .opacity(neutralImg == nil ? 1.0 : clampedTint)
-                            }
+                            .compositingGroup()
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .frame(height: 72)
+                            .clipped()
+                            .blendMode(.multiply)
                         }
-                        .compositingGroup()
-                        .frame(minWidth: 0, maxWidth: .infinity)
-                        .frame(height: 72)
-                        .clipped()
-                        .blendMode(.multiply)
                     } else {
                         Color(uiColor: .secondarySystemBackground)
                             .frame(minWidth: 0, maxWidth: .infinity)
