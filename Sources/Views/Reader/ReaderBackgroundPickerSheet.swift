@@ -155,15 +155,6 @@ public struct ReaderBackgroundPickerSheet: View {
                                 .frame(height: 72)
                                 .clipped()
                                 .blendMode(.multiply)
-
-                            Image(uiImage: img)
-                                .interpolation(.none)
-                                .resizable(resizingMode: .tile)
-                                .frame(minWidth: 0, maxWidth: .infinity)
-                                .frame(height: 72)
-                                .clipped()
-                                .opacity(0.24)
-                                .blendMode(.overlay)
                         } else {
                             let clampedTint = min(max(store.readerTextureTintOpacity, 0.0), 1.0)
                             let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: item) : nil
