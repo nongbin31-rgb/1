@@ -50,7 +50,7 @@ final class ComicContainerImageView: UIImageView {
         textureClipContainer.isHidden = true
         addSubview(textureClipContainer)
 
-        textureOverlayView.contentMode = .scaleToFill
+        textureOverlayView.contentMode = .scaleAspectFill
         textureOverlayView.clipsToBounds = true
         textureOverlayView.isUserInteractionEnabled = false
         textureClipContainer.addSubview(textureOverlayView)
