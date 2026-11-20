@@ -59,6 +59,69 @@ public enum DiscoverPaginationMode: String, Codable, CaseIterable, Identifiable,
     }
 }
 
+/// 发现页视图排布样式（保留经典三列网格为默认，新增 5 套高阶视图）
+public enum DiscoverLayoutStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    case classicGrid = "classic_grid"             // 经典三列网格（保留默认）
+    case editorialList = "editorial_list"         // 详情信息流（Apple Books 经典列表）
+    case immersiveWall = "immersive_wall"         // 沉浸海报墙（2 列全画幅）
+    case editorialGallery = "editorial_gallery"   // 双列呼吸画廊（2 列大卡 + 环境光投影）
+    case tactileBookshelf = "tactile_bookshelf"   // 拟物精装书架（3 列书脊 + 悬浮层板）
+    case magazineToday = "magazine_today"         // 焦点杂志流（App Store Today 风格）
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .classicGrid:
+            return "经典三列网格"
+        case .editorialList:
+            return "详情信息流"
+        case .immersiveWall:
+            return "沉浸海报墙"
+        case .editorialGallery:
+            return "双列呼吸画廊"
+        case .tactileBookshelf:
+            return "拟物精装书架"
+        case .magazineToday:
+            return "焦点杂志流"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .classicGrid:
+            return "默认紧凑三列"
+        case .editorialList:
+            return "Apple Books 经典列表"
+        case .immersiveWall:
+            return "视觉纯粹流 · 全画幅"
+        case .editorialGallery:
+            return "高级留白流 · 平衡美学"
+        case .tactileBookshelf:
+            return "Apple Books 实体书感"
+        case .magazineToday:
+            return "App Store Today 风格"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .classicGrid:
+            return "square.grid.3x2"
+        case .editorialList:
+            return "rectangle.grid.1x2"
+        case .immersiveWall:
+            return "rectangle.grid.2x2"
+        case .editorialGallery:
+            return "square.grid.2x2"
+        case .tactileBookshelf:
+            return "books.vertical"
+        case .magazineToday:
+            return "newspaper"
+        }
+    }
+}
+
 /// 在线图源分类筛选选项
 public struct MangaCategoryOption: Identifiable, Hashable, Sendable {
     public let id: String
@@ -305,6 +368,151 @@ public enum MangaAuthorFormatter {
                 continue
             }
             return content
+        }
+        return nil
+    }
+}
+
+/// 从原始漫画标题剥离前后括号标签后的结构化展示信息（用于高阶发现视图）
+public struct MangaTitleMetadata: Sendable, Equatable {
+    public let cleanTitle: String
+    public let groupName: String?
+    public let extractedBadges: [String]
+
+    public init(cleanTitle: String, groupName: String?, extractedBadges: [String]) {
+        self.cleanTitle = cleanTitle
+        self.groupName = groupName
+        self.extractedBadges = extractedBadges
+    }
+}
+
+/// 标题前后缀元数据清洗器：剥离 `[汉化组]` / `【翻译】` / `(C104)` 等头尾括号标签，保留清爽书名
+public enum MangaTitleMetadataParser {
+    private static let leadingBracketRegex = try! NSRegularExpression(
+        pattern: #"^\s*(?:\[([^\[\]]{1,28})\]|【([^【】]{1,28})】|\(([^()]{1,24})\)|（([^（）]{1,24})）)\s*"#,
+        options: []
+    )
+    private static let trailingBracketRegex = try! NSRegularExpression(
+        pattern: #"\s*(?:\[([^\[\]]{1,28})\]|【([^【】]{1,28})】|\(([^()]{1,24})\)|（([^（）]{1,24})）)\s*$"#,
+        options: []
+    )
+
+    private static let groupKeywords: [String] = [
+        "汉化", "漢化", "翻译", "翻譯", "字幕", "嵌字", "修图", "修圖", "个人", "個人", "社", "组", "組", "屋"
+    ]
+
+    public static func parse(title: String, author: String = "") -> MangaTitleMetadata {
+        let original = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !original.isEmpty else {
+            return MangaTitleMetadata(cleanTitle: title, groupName: nil, extractedBadges: [])
+        }
+
+        var working = original
+        var badges: [String] = []
+        var seenLower: Set<String> = []
+
+        func appendBadge(_ raw: String) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 20 else { return }
+            let lower = trimmed.lowercased()
+            guard !seenLower.contains(lower) else { return }
+            seenLower.insert(lower)
+            badges.append(trimmed)
+        }
+
+        // 最多剥离 4 个头部括号块
+        for _ in 0..<4 {
+            let ns = working as NSString
+            guard let match = leadingBracketRegex.firstMatch(in: working, range: NSRange(location: 0, length: ns.length)) else {
+                break
+            }
+            if let captured = firstNonEmptyCapture(in: ns, match: match) {
+                appendBadge(captured)
+            }
+            let remainder = ns.substring(from: match.range.location + match.range.length)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if remainder.isEmpty { break }
+            working = remainder
+        }
+
+        // 最多剥离 3 个尾部括号块
+        for _ in 0..<3 {
+            let ns = working as NSString
+            guard let match = trailingBracketRegex.firstMatch(in: working, range: NSRange(location: 0, length: ns.length)) else {
+                break
+            }
+            if let captured = firstNonEmptyCapture(in: ns, match: match) {
+                appendBadge(captured)
+            }
+            let remainder = ns.substring(to: match.range.location)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if remainder.isEmpty { break }
+            working = remainder
+        }
+
+        let cleanTitle = working.isEmpty ? original : working
+        let normalizedAuthor = author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // 优先匹配汉化组/社团关键词
+        let groupName = badges.first(where: { badge in
+            groupKeywords.contains(where: { badge.contains($0) })
+        }) ?? badges.first(where: { badge in
+            let lower = badge.lowercased()
+            return lower != normalizedAuthor
+                && !badge.contains("中国")
+                && !badge.contains("中文")
+                && !badge.contains("無修正")
+                && !badge.contains("无修正")
+                && !badge.contains("DL版")
+        })
+
+        return MangaTitleMetadata(
+            cleanTitle: cleanTitle,
+            groupName: groupName,
+            extractedBadges: badges
+        )
+    }
+
+    public static func displayTags(for manga: Manga, metadata: MangaTitleMetadata? = nil, limit: Int = 3) -> [String] {
+        guard limit > 0 else { return [] }
+        var result: [String] = []
+        var seen: Set<String> = []
+
+        func appendIfValid(_ raw: String) {
+            let tag = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tag.isEmpty,
+                  tag.count <= 14,
+                  !MangaSerialStatusHelper.isStatusTag(tag),
+                  tag != "绅士漫画",
+                  tag != "禁漫单行本" else {
+                return
+            }
+            let key = tag.lowercased()
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            result.append(tag)
+        }
+
+        for tag in manga.tags {
+            appendIfValid(tag)
+            if result.count >= limit { return result }
+        }
+
+        let meta = metadata ?? parse(title: manga.title, author: manga.displayAuthor)
+        for badge in meta.extractedBadges where badge != meta.groupName {
+            appendIfValid(badge)
+            if result.count >= limit { return result }
+        }
+        return result
+    }
+
+    private static func firstNonEmptyCapture(in ns: NSString, match: NSTextCheckingResult) -> String? {
+        for idx in 1..<match.numberOfRanges {
+            let range = match.range(at: idx)
+            if range.location != NSNotFound, range.length > 0 {
+                let text = ns.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { return text }
+            }
         }
         return nil
     }

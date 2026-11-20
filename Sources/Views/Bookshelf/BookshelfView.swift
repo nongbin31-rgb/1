@@ -276,28 +276,38 @@ struct MangaGridCard: View {
 }
 
 /// 封面卡片底部微缩圆环阅读进度条
-private struct ReadingProgressRingView: View {
+struct ReadingProgressRingView: View {
     let hasProgress: Bool
     let progress: Double?
     let isExact: Bool
+    var size: CGFloat = 12
+    var isOnDarkBackground: Bool = false
 
     var body: some View {
+        let trackColor = isOnDarkBackground
+            ? Color.white.opacity(0.32)
+            : Color.secondary.opacity(0.26)
+        let activeColor: Color = isOnDarkBackground
+            ? (isExact ? Color.white.opacity(0.95) : Color.white.opacity(0.75))
+            : (isExact ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.55))
+        let strokeWidth: CGFloat = size <= 10 ? 1.4 : 1.6
+
         ZStack {
             Circle()
-                .stroke(Color.secondary.opacity(0.26), lineWidth: 1.6)
+                .stroke(trackColor, lineWidth: strokeWidth)
 
             if hasProgress {
                 let ratio = min(1.0, max(0.05, progress ?? 0.05))
                 Circle()
                     .trim(from: 0, to: ratio)
                     .stroke(
-                        isExact ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.55),
-                        style: StrokeStyle(lineWidth: 1.6, lineCap: .round)
+                        activeColor,
+                        style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
             }
         }
-        .frame(width: 12, height: 12)
+        .frame(width: size, height: size)
         .accessibilityLabel(accessibilityText)
     }
 
