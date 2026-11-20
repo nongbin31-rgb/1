@@ -253,24 +253,60 @@ struct MangaGridCard: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 
-            if !manga.statusText.isEmpty {
+            if !manga.statusText.isEmpty || progress != nil {
                 HStack(spacing: 3) {
-                    if MangaSerialStatusHelper.isOngoingStatus(manga.statusText) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 4, height: 4)
-                    } else if MangaSerialStatusHelper.isCompletedStatus(manga.statusText) {
-                        Circle()
-                            .fill(Color.orange)
-                            .frame(width: 4, height: 4)
+                    if !manga.statusText.isEmpty {
+                        if MangaSerialStatusHelper.isOngoingStatus(manga.statusText) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 4, height: 4)
+                        } else if MangaSerialStatusHelper.isCompletedStatus(manga.statusText) {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 4, height: 4)
+                        }
+                        Text(manga.statusText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
-                    Text(manga.statusText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    if let progress {
+                        ReadingProgressRingView(
+                            progress: progress.progressRatio,
+                            isExact: progress.totalPages != nil
+                        )
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// 封面卡片底部微缩圆环阅读进度条
+private struct ReadingProgressRingView: View {
+    let progress: Double?
+    let isExact: Bool
+
+    var body: some View {
+        let ratio = min(1.0, max(0.05, progress ?? 0.05))
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.26), lineWidth: 1.6)
+
+            Circle()
+                .trim(from: 0, to: ratio)
+                .stroke(
+                    isExact ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.55),
+                    style: StrokeStyle(lineWidth: 1.6, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 12, height: 12)
+        .accessibilityLabel(isExact ? "阅读进度 \(Int(((progress ?? 0) * 100).rounded()))%" : "已有阅读记录")
     }
 }
