@@ -284,7 +284,14 @@ public struct ReaderView: View {
         }
         .onDisappear {
             if !pages.isEmpty {
-                store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: currentPageIndex)
+                store.updateProgress(
+                    manga: manga,
+                    chapter: currentChapter,
+                    pageIndex: currentPageIndex,
+                    totalPages: pages.count,
+                    chapterIndex: currentChapterArrayIndex,
+                    totalChapters: chapters.count
+                )
             }
         }
         .onChange(of: currentPageIndex) { newIndex in
@@ -293,7 +300,14 @@ public struct ReaderView: View {
                 capturedPreviewImage = cached
             }
             guard !isRestoringInitialPage, !pages.isEmpty else { return }
-            store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: newIndex)
+            store.updateProgress(
+                manga: manga,
+                chapter: currentChapter,
+                pageIndex: newIndex,
+                totalPages: pages.count,
+                chapterIndex: currentChapterArrayIndex,
+                totalChapters: chapters.count
+            )
         }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
@@ -847,7 +861,14 @@ public struct ReaderView: View {
         let targetIndex = currentIndex + delta
         guard chapters.indices.contains(targetIndex) else { return }
         let nextChapter = chapters[targetIndex]
-        store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: currentPageIndex)
+        store.updateProgress(
+            manga: manga,
+            chapter: currentChapter,
+            pageIndex: currentPageIndex,
+            totalPages: pages.count > 0 ? pages.count : nil,
+            chapterIndex: currentIndex,
+            totalChapters: chapters.count
+        )
         currentChapter = nextChapter
     }
 
@@ -878,6 +899,16 @@ public struct ReaderView: View {
             self.currentPageIndex = resolvedIndex
             if resolvedIndex > 0 {
                 self.isRestoringInitialPage = true
+            }
+            if !loadedPages.isEmpty {
+                store.updateProgress(
+                    manga: manga,
+                    chapter: currentChapter,
+                    pageIndex: resolvedIndex,
+                    totalPages: loadedPages.count,
+                    chapterIndex: currentChapterArrayIndex,
+                    totalChapters: chapters.count
+                )
             }
         } catch {
             self.chapterError = error.localizedDescription

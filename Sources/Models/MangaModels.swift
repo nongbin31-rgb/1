@@ -484,6 +484,9 @@ public struct ReadingProgress: Codable, Equatable, Sendable {
     public var chapterID: String
     public var chapterTitle: String
     public var pageIndex: Int
+    public var totalPages: Int?
+    public var chapterIndex: Int?
+    public var totalChapters: Int?
     public var updatedAt: Date
 
     public init(
@@ -491,13 +494,30 @@ public struct ReadingProgress: Codable, Equatable, Sendable {
         chapterID: String,
         chapterTitle: String,
         pageIndex: Int,
+        totalPages: Int? = nil,
+        chapterIndex: Int? = nil,
+        totalChapters: Int? = nil,
         updatedAt: Date = Date()
     ) {
         self.mangaKey = mangaKey
         self.chapterID = chapterID
         self.chapterTitle = chapterTitle
         self.pageIndex = pageIndex
+        self.totalPages = totalPages
+        self.chapterIndex = chapterIndex
+        self.totalChapters = totalChapters
         self.updatedAt = updatedAt
+    }
+
+    /// 综合阅读进度比例（0.0 ~ 1.0）：单话按页码占比计算，多话结合当前话序数与页码综合计算
+    public var progressRatio: Double? {
+        guard let totalPages, totalPages > 0 else { return nil }
+        let pageFraction = min(1.0, max(0.0, Double(pageIndex + 1) / Double(totalPages)))
+        if let totalChapters, totalChapters > 1, let chapterIndex, chapterIndex >= 0 {
+            let clampedChapter = min(chapterIndex, totalChapters - 1)
+            return min(1.0, max(0.0, (Double(clampedChapter) + pageFraction) / Double(totalChapters)))
+        }
+        return pageFraction
     }
 }
 

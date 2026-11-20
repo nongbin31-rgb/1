@@ -189,12 +189,32 @@ public final class AppStore: ObservableObject {
         }
     }
 
-    public func updateProgress(manga: Manga, chapter: MangaChapter, pageIndex: Int) {
+    public func updateProgress(
+        manga: Manga,
+        chapter: MangaChapter,
+        pageIndex: Int,
+        totalPages: Int? = nil,
+        chapterIndex: Int? = nil,
+        totalChapters: Int? = nil
+    ) {
+        let existing = progressMap[manga.compositeKey]
+        let resolvedTotalPages: Int?
+        if let totalPages, totalPages > 0 {
+            resolvedTotalPages = totalPages
+        } else if existing?.chapterID == chapter.id {
+            resolvedTotalPages = existing?.totalPages
+        } else {
+            resolvedTotalPages = nil
+        }
+
         progressMap[manga.compositeKey] = ReadingProgress(
             mangaKey: manga.compositeKey,
             chapterID: chapter.id,
             chapterTitle: chapter.title,
             pageIndex: pageIndex,
+            totalPages: resolvedTotalPages,
+            chapterIndex: chapterIndex ?? existing?.chapterIndex,
+            totalChapters: totalChapters ?? existing?.totalChapters,
             updatedAt: Date()
         )
     }
