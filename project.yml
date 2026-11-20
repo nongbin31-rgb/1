@@ -50,6 +50,7 @@ targets:
           NSAllowsArbitraryLoads: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        UIDesignRequiresCompatibility: true
         UILaunchStoryboardName: LaunchScreen
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
