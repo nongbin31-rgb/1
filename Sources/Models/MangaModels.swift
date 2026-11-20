@@ -536,6 +536,13 @@ public enum MangaSerialStatusHelper {
         pattern: "(?:第\\s*\\d+\\s*[话話卷]|\\b(?:ch|ep|vol)[\\.\\s]*\\d+|\\[\\d+[\\]话話]|\\b\\d+\\s*話|\\b\\d+\\s*话)",
         options: [.caseInsensitive]
     )
+    private static let singleVolumeCategoryKeywords: [String] = [
+        "单本", "單本", "单行本", "單行本", "同人", "短篇", "杂志", "雜誌",
+        "画集", "畫集", "cg", "cosplay", "写真", "寫真", "禁漫单行本", "绅士漫画", "紳士漫畫"
+    ]
+    private static let ongoingCategoryKeywords: [String] = [
+        "韩漫", "韓漫", "连载", "連載"
+    ]
 
     public static func isOngoingStatus(_ status: String) -> Bool {
         let s = status.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -643,6 +650,27 @@ public enum MangaSerialStatusHelper {
 
         if chapterCount == 1 {
             return "已完结"
+        }
+
+        // 列表页无 chapterCount 时，对典型单本/同人/短篇品类（且无连载章节标识、非韩漫连载）推导为「已完结」
+        let cleanedLatest = latestChapter?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let latestLooksLikePageMeta = cleanedLatest.isEmpty
+            || cleanedLatest.contains("張圖片")
+            || cleanedLatest.contains("张图片")
+            || cleanedLatest.contains(" P")
+        if latestLooksLikePageMeta, !tags.isEmpty {
+            let loweredTags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            let isOngoingCategory = loweredTags.contains { tag in
+                ongoingCategoryKeywords.contains(where: { tag.contains($0) })
+            }
+            if !isOngoingCategory {
+                let isSingleVolumeCategory = loweredTags.contains { tag in
+                    singleVolumeCategoryKeywords.contains(where: { tag.contains($0) })
+                }
+                if isSingleVolumeCategory {
+                    return "已完结"
+                }
+            }
         }
 
         return ""
