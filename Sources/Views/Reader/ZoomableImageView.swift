@@ -13,6 +13,9 @@ final class ComicContainerImageView: UIImageView {
     let neutralTextureOverlayView = UIImageView()
     /// Layer 2b: 真实纸张材质原彩纹理覆盖层 (随 tintOpacity 变化混合，100% 时完全呈现原材质色调)
     let textureOverlayView = UIImageView()
+    /// Layer 3 裁剪容器：经典透明底浮雕纸纹的辅助高光层 (overlayBlendMode)，激活凸粒受光面且黑线零泛白
+    let highlightClipContainer = UIView()
+    let highlightOverlayView = UIImageView()
 
     override init(image: UIImage?) {
         super.init(image: image)
@@ -62,6 +65,20 @@ final class ComicContainerImageView: UIImageView {
         textureOverlayView.clipsToBounds = true
         textureOverlayView.isUserInteractionEnabled = false
         textureClipContainer.addSubview(textureOverlayView)
+
+        highlightClipContainer.clipsToBounds = true
+        highlightClipContainer.isUserInteractionEnabled = false
+        highlightClipContainer.backgroundColor = .clear
+        highlightClipContainer.layer.compositingFilter = "overlayBlendMode"
+        highlightClipContainer.isHidden = true
+        addSubview(highlightClipContainer)
+
+        highlightOverlayView.contentMode = .scaleToFill
+        highlightOverlayView.clipsToBounds = true
+        highlightOverlayView.isUserInteractionEnabled = false
+        highlightOverlayView.layer.magnificationFilter = .nearest
+        highlightOverlayView.layer.minificationFilter = .nearest
+        highlightClipContainer.addSubview(highlightOverlayView)
     }
 
     override func layoutSubviews() {
@@ -78,6 +95,7 @@ final class ComicContainerImageView: UIImageView {
         paperTintOverlayView.frame = targetRect
         softLightOverlayView.frame = targetRect
         textureClipContainer.frame = targetRect
+        highlightClipContainer.frame = targetRect
         // 反向定位使平铺原点对齐整页 (0, 0)，与页面四周留白纸张纹理相位 100% 无缝衔接
         let alignedFrame = CGRect(
             x: -targetRect.minX,
@@ -87,6 +105,7 @@ final class ComicContainerImageView: UIImageView {
         )
         neutralTextureOverlayView.frame = alignedFrame
         textureOverlayView.frame = alignedFrame
+        highlightOverlayView.frame = alignedFrame
     }
 }
 
@@ -224,18 +243,34 @@ public struct ZoomableImageView: UIViewRepresentable {
                     imageView.textureClipContainer.alpha = CGFloat(effectiveAlpha)
 
                     if texture.usesFineTilePattern {
-                        // 程序化 256×256pt 高密无缝立体浮雕纸纹：1:1 逻辑像素重复平铺，不拉伸不糊化
+                        // 程序化 128×128pt 原生像素透明底浮雕纸纹：GPU 原生无缝平铺 + nearest 最近邻锐利采样 + Overlay 凸粒高光
+                        let tiled = ReaderTextureCache.shared.tiledTextureImage(for: texture) ?? texImg
+                        let highlightAlpha = ReaderTextureCache.highlightOverlayOpacity(for: texture, rawOpacity: opacity)
+
                         imageView.neutralTextureOverlayView.isHidden = true
                         imageView.neutralTextureOverlayView.image = nil
                         imageView.neutralTextureOverlayView.backgroundColor = .clear
 
                         imageView.textureOverlayView.isHidden = false
-                        imageView.textureOverlayView.image = nil
-                        imageView.textureOverlayView.backgroundColor = ReaderTextureCache.shared.patternColor(for: texture)
+                        imageView.textureOverlayView.backgroundColor = .clear
+                        imageView.textureOverlayView.contentMode = .scaleToFill
+                        imageView.textureOverlayView.layer.magnificationFilter = .nearest
+                        imageView.textureOverlayView.layer.minificationFilter = .nearest
+                        imageView.textureOverlayView.image = tiled
                         imageView.textureOverlayView.alpha = 1.0
+
+                        imageView.highlightClipContainer.isHidden = highlightAlpha <= 0.001
+                        imageView.highlightClipContainer.alpha = CGFloat(highlightAlpha)
+                        imageView.highlightOverlayView.image = tiled
                     } else {
                         imageView.neutralTextureOverlayView.backgroundColor = .clear
                         imageView.textureOverlayView.backgroundColor = .clear
+                        imageView.textureOverlayView.layer.magnificationFilter = .linear
+                        imageView.textureOverlayView.layer.minificationFilter = .linear
+
+                        imageView.highlightClipContainer.isHidden = true
+                        imageView.highlightClipContainer.alpha = 0.0
+                        imageView.highlightOverlayView.image = nil
 
                         let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
                         if let neutralImg, clampedTint < 0.999 {
@@ -260,12 +295,14 @@ public struct ZoomableImageView: UIViewRepresentable {
                     }
                 } else {
                     imageView.textureClipContainer.isHidden = true
+                    imageView.highlightClipContainer.isHidden = true
                 }
             } else {
                 imageView.paperTintOverlayView.isHidden = true
                 imageView.softLightOverlayView.isHidden = true
                 imageView.textureClipContainer.isHidden = true
                 imageView.neutralTextureOverlayView.isHidden = true
+                imageView.highlightClipContainer.isHidden = true
             }
         }
 
