@@ -371,33 +371,43 @@ public struct PaperTextureOverlayView: View {
 
             case .namedSpace(let spaceName):
                 let refSize = validReferenceSize() ?? fallbackScreenSize()
-                let tileImg = Self.scaledTileImage(img, fitting: refSize)
+                let tileSize = Self.scaledTileSize(for: img, fitting: refSize)
                 GeometryReader { proxy in
-                    let tileW = max(tileImg.size.width, 64.0)
-                    let tileH = max(tileImg.size.height, 64.0)
-                    let contentFrame = proxy.frame(in: .named(spaceName))
+                    let viewW = proxy.size.width
+                    let viewH = proxy.size.height
+                    if viewW > 0, viewH > 0 {
+                        let tileW = tileSize.width
+                        let tileH = tileSize.height
+                        let contentFrame = proxy.frame(in: .named(spaceName))
 
-                    let rawX = contentFrame.minX.truncatingRemainder(dividingBy: tileW)
-                    let phaseX = rawX >= 0 ? rawX : rawX + tileW
+                        let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
+                        let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
 
-                    let rawY = contentFrame.minY.truncatingRemainder(dividingBy: tileH)
-                    let phaseY = rawY >= 0 ? rawY : rawY + tileH
+                        let cols = min(max(1, Int(ceil((viewW + phaseX) / tileW))), 64)
+                        let rows = min(max(1, Int(ceil((viewH + phaseY) / tileH))), 64)
 
-                    ZStack(alignment: .topLeading) {
-                        Image(uiImage: tileImg)
-                            .resizable(resizingMode: .tile)
-                            .frame(
-                                width: proxy.size.width + tileW,
-                                height: proxy.size.height + tileH
-                            )
-                            .offset(x: -phaseX, y: -phaseY)
-                            .blendMode(.multiply)
-                            .opacity(effectiveOpacity)
+                        Color.clear
+                            .frame(width: viewW, height: viewH)
+                            .overlay(alignment: .topLeading) {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(0..<rows, id: \.self) { _ in
+                                        HStack(spacing: 0) {
+                                            ForEach(0..<cols, id: \.self) { _ in
+                                                Image(uiImage: img)
+                                                    .resizable()
+                                                    .frame(width: tileW, height: tileH)
+                                            }
+                                        }
+                                    }
+                                }
+                                .offset(x: -phaseX, y: -phaseY)
+                            }
+                            .clipped()
                     }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-                    .allowsHitTesting(false)
                 }
+                .blendMode(.multiply)
+                .opacity(effectiveOpacity)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -417,20 +427,25 @@ public struct PaperTextureOverlayView: View {
         return CGSize(width: 390, height: 844)
     }
 
-    /// 零拷贝调整 UIImage.scale，使条漫平铺单块与全屏 AspectFill 的纹理颗粒尺寸完全一致
-    private static func scaledTileImage(_ img: UIImage, fitting refSize: CGSize) -> UIImage {
+    private static func positiveModulo(_ value: CGFloat, divisor: CGFloat) -> CGFloat {
+        guard value.isFinite, divisor > 0 else { return 0 }
+        let raw = value.truncatingRemainder(dividingBy: divisor)
+        let mod = raw >= 0 ? raw : raw + divisor
+        return mod >= divisor ? 0 : mod
+    }
+
+    /// 计算与全屏 AspectFill 纹理颗粒大小完全一致的平铺单元尺寸
+    private static func scaledTileSize(for img: UIImage, fitting refSize: CGSize) -> CGSize {
         let imgW = img.size.width
         let imgH = img.size.height
-        guard imgW > 0, imgH > 0, refSize.width > 0, refSize.height > 0,
-              let cgImg = img.cgImage else {
-            return img
+        guard imgW > 0, imgH > 0, refSize.width > 0, refSize.height > 0 else {
+            return CGSize(width: max(imgW, 64.0), height: max(imgH, 64.0))
         }
         let fillScale = max(refSize.width / imgW, refSize.height / imgH)
-        guard fillScale > 0, abs(fillScale - 1.0) > 0.001 else {
-            return img
-        }
-        let targetScale = max(img.scale / fillScale, 0.1)
-        return UIImage(cgImage: cgImg, scale: targetScale, orientation: img.imageOrientation)
+        return CGSize(
+            width: max(imgW * fillScale, 64.0),
+            height: max(imgH * fillScale, 64.0)
+        )
     }
 }
 
