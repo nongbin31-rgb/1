@@ -11,6 +11,9 @@ public struct ReaderImageUpscalerConfigView: View {
     // MARK: - 内部状态（完全对齐原版字段）
 
     @State private var isEnhancing: Bool = false
+    @State private var enhanceProgressText: String = ""
+    @State private var previewTask: Task<Void, Never>? = nil
+    @State private var previewGeneration: UInt64 = 0
     @State private var isConfigPanelHided: Bool = false
     @State private var upscaledImage: UIImage? = nil
     @State private var upscaleError: String? = nil
@@ -100,7 +103,7 @@ public struct ReaderImageUpscalerConfigView: View {
                                     ProgressView()
                                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                         .scaleEffect(1.4)
-                                    Text("AI 超分渲染中...")
+                                    Text(enhanceProgressText.isEmpty ? "AI 超分渲染中..." : "AI 超分渲染中... \(enhanceProgressText)")
                                         .font(.subheadline)
                                         .foregroundColor(.white)
                                 }
@@ -136,19 +139,22 @@ public struct ReaderImageUpscalerConfigView: View {
 
                 // 2. 顶部/底部悬浮提示与配置面板
                 VStack(spacing: 0) {
-                    // 性能耗时浮层
+                    // 性能耗时 / 报错浮层（支持多行完整展示，避免底层报错被截断）
                     if let perf = performanceResult, !isConfigPanelHided {
-                        HStack {
-                            Image(systemName: "timer")
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: upscaleError == nil ? "timer" : "exclamationmark.triangle.fill")
+                                .foregroundColor(upscaleError == nil ? .white.opacity(0.9) : .orange)
                             Text(perf)
                                 .font(.caption)
-                                .lineLimit(1)
+                                .lineLimit(3)
+                                .multilineTextAlignment(.leading)
                         }
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(.white.opacity(0.95))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.75))
-                        .cornerRadius(20)
+                        .background(upscaleError == nil ? Color.black.opacity(0.75) : Color.red.opacity(0.78))
+                        .cornerRadius(16)
+                        .padding(.horizontal, 16)
                         .padding(.top, 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -196,7 +202,11 @@ public struct ReaderImageUpscalerConfigView: View {
             }
             .task {
                 // 首次进入时自动运行一次预览
-                await runPreviewEnhance()
+                triggerPreviewEnhance()
+            }
+            .onDisappear {
+                previewTask?.cancel()
+                previewTask = nil
             }
         }
         .navigationViewStyle(.stack)
@@ -250,13 +260,13 @@ public struct ReaderImageUpscalerConfigView: View {
                 .foregroundColor(.white.opacity(0.9))
                 .tint(.orange)
 
-            // 重新预览效果按钮
+            // 重新预览效果按钮（点击时自动取消上一次未完成的推理，立刻按新参数重算）
             Button {
-                Task { await runPreviewEnhance() }
+                triggerPreviewEnhance()
             } label: {
                 HStack {
                     Image(systemName: "sparkles")
-                    Text("预览效果")
+                    Text(isEnhancing ? "重新预览" : "预览效果")
                         .font(.body.weight(.semibold))
                 }
                 .foregroundColor(.white)
@@ -265,7 +275,6 @@ public struct ReaderImageUpscalerConfigView: View {
                 .background(Color.blue)
                 .cornerRadius(10)
             }
-            .disabled(isEnhancing)
         }
         .padding(16)
         .background(
@@ -355,19 +364,33 @@ public struct ReaderImageUpscalerConfigView: View {
 
     // MARK: - 执行单次超分并更新状态
 
-    private func runPreviewEnhance() async {
-        guard !isEnhancing else { return }
+    private func triggerPreviewEnhance() {
+        previewTask?.cancel()
+        previewGeneration &+= 1
+        let gen = previewGeneration
+        previewTask = Task {
+            await runPreviewEnhance(generation: gen)
+        }
+    }
+
+    private func runPreviewEnhance(generation: UInt64) async {
         let target = activeImage
         guard target.size.width > 0, target.cgImage != nil || target.ciImage != nil else {
             await MainActor.run {
+                guard self.previewGeneration == generation else { return }
+                self.isEnhancing = false
                 self.upscaleError = "当前页面图片尚未加载完成，请稍候再试"
                 self.performanceResult = "超分等待中: 正在加载原图"
             }
             return
         }
 
-        isEnhancing = true
-        upscaleError = nil
+        await MainActor.run {
+            guard self.previewGeneration == generation else { return }
+            self.isEnhancing = true
+            self.enhanceProgressText = ""
+            self.upscaleError = nil
+        }
 
         let start = CFAbsoluteTimeGetCurrent()
         do {
@@ -383,20 +406,38 @@ public struct ReaderImageUpscalerConfigView: View {
                 result = try await Waifu2xService.shared.enhance(
                     image: target,
                     model: store.upscalerConfig.waifu2x,
-                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit
+                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit,
+                    progress: { pct in
+                        DispatchQueue.main.async {
+                            guard self.previewGeneration == generation else { return }
+                            self.enhanceProgressText = pct
+                        }
+                    }
                 )
             }
 
+            guard !Task.isCancelled else { return }
             let elapsed = CFAbsoluteTimeGetCurrent() - start
             await MainActor.run {
+                guard self.previewGeneration == generation else { return }
                 self.upscaledImage = result
                 self.isEnhancing = false
+                self.enhanceProgressText = ""
                 let secStr = String(format: "%.3f", elapsed)
                 self.performanceResult = "运行时长：\(secStr)s，可放大查看细节，单击图像隐藏面板"
             }
-        } catch {
+        } catch is CancellationError {
             await MainActor.run {
+                guard self.previewGeneration == generation else { return }
                 self.isEnhancing = false
+                self.enhanceProgressText = ""
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.previewGeneration == generation else { return }
+                self.isEnhancing = false
+                self.enhanceProgressText = ""
                 self.upscaleError = error.localizedDescription
                 self.performanceResult = "超分失败: \(error.localizedDescription)"
             }

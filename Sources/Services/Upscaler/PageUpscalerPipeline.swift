@@ -58,7 +58,8 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
         image: UIImage,
         pageKey: String,
         config: ImageUpscalerConfig,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        progress: (@Sendable (String) -> Void)? = nil
     ) async -> ProcessedPageImage {
         let origSize = pixelSize(of: image)
 
@@ -118,7 +119,8 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
                 enhanced = try await Waifu2xService.shared.enhance(
                     image: image,
                     model: config.waifu2x,
-                    bypassSizeLimit: config.bypassSizeLimit
+                    bypassSizeLimit: config.bypassSizeLimit,
+                    progress: progress
                 )
             }
 
@@ -135,6 +137,16 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
                 outputSize: outSize,
                 elapsedMs: elapsedMs,
                 appliedModel: config.model
+            )
+        } catch is CancellationError {
+            let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+            return ProcessedPageImage(
+                image: image,
+                originalSize: origSize,
+                outputSize: origSize,
+                elapsedMs: elapsedMs,
+                appliedModel: nil,
+                notice: nil
             )
         } catch {
             let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)

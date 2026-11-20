@@ -32,7 +32,25 @@ public enum Waifu2xServiceError: LocalizedError {
     }
 }
 
-/// Waifu2x 端侧 CoreML 深度超分服务（基于 Apple Neural Engine / Metal GPU）
+/// 线程安全取消令牌（用于及时中止排队中或分块循环中的过期 Waifu2x 推理任务）
+private final class Waifu2xCancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+
+/// Waifu2x 端侧 CoreML 深度超分服务（基于 Apple Neural Engine / Metal GPU / BNNS）
 /// 严格对齐官方 waifu2x 算法规范：
 /// 块大小 142px、边缘扩展 7px (输入 156px)、反卷积输出 284px (2x 超分重建)
 public final class Waifu2xService: @unchecked Sendable {
@@ -42,7 +60,7 @@ public final class Waifu2xService: @unchecked Sendable {
     /// 默认最大允许总像素（1200 万像素，兼容 800×8000 等模糊条漫长图）
     public static let maxPixelCount: Int = ImageUpscalerConfig.maxPixelCountThreshold
 
-    /// 严格串行调度队列，避免多页并发导致显存瞬间挤爆
+    /// 严格串行调度队列，避免多页并发导致内存瞬间挤爆
     private let serialQueue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.waifu2x.serial", qos: .userInitiated)
 
     /// 缓存已编译加载的 MLModel 实例
@@ -64,6 +82,8 @@ public final class Waifu2xService: @unchecked Sendable {
         bypassSizeLimit: Bool = false,
         progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> UIImage {
+        try Task.checkCancellation()
+
         // 1. 先检查像素尺寸（避免超限图先做位图解码浪费内存）
         let (width, height) = Self.pixelDimensions(of: image)
         guard width >= Self.minDimension && height >= Self.minDimension else {
@@ -91,18 +111,34 @@ public final class Waifu2xService: @unchecked Sendable {
             preparedImage = decoded
         }
 
-        // 3. 在专用串行队列中排队执行 CoreML 原生分块推理
-        return try await withCheckedThrowingContinuation { continuation in
-            serialQueue.async {
-                autoreleasepool {
-                    do {
-                        let result = try self.runCoreMLTiledInference(image: preparedImage, model: model, progress: progress)
-                        continuation.resume(returning: result)
-                    } catch {
-                        continuation.resume(throwing: error)
+        try Task.checkCancellation()
+
+        // 3. 在专用串行队列中排队执行 CoreML 原生分块推理，支持 Swift Task 协作式即时取消
+        let cancelFlag = Waifu2xCancellationFlag()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                serialQueue.async {
+                    if cancelFlag.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    autoreleasepool {
+                        do {
+                            let result = try self.runCoreMLTiledInference(
+                                image: preparedImage,
+                                model: model,
+                                cancelFlag: cancelFlag,
+                                progress: progress
+                            )
+                            continuation.resume(returning: result)
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
                     }
                 }
             }
+        } onCancel: {
+            cancelFlag.cancel()
         }
     }
 
@@ -111,8 +147,13 @@ public final class Waifu2xService: @unchecked Sendable {
     private func runCoreMLTiledInference(
         image: UIImage,
         model: Waifu2xModel,
+        cancelFlag: Waifu2xCancellationFlag,
         progress: (@Sendable (String) -> Void)?
     ) throws -> UIImage {
+        if cancelFlag.isCancelled {
+            throw CancellationError()
+        }
+
         guard let cgImage = image.cgImage else {
             throw Waifu2xServiceError.decodeFailed
         }
@@ -178,43 +219,53 @@ public final class Waifu2xService: @unchecked Sendable {
             throw Waifu2xServiceError.inferenceFailed("分块切片失败")
         }
 
-        // 4. 加载 CoreML 模型
+        if cancelFlag.isCancelled {
+            throw CancellationError()
+        }
+
+        // 4. 加载 CoreML 模型（iOS 15 自动走稳定 CPU/BNNS 后端，杜绝 ANE 与 MPSCNN 挂死）
         guard let modelURL = Self.locateModelURL(for: model) else {
             throw Waifu2xServiceError.modelNotFound(model.modelBundleName)
         }
         let mlModel = try getOrLoadMLModel(at: modelURL)
 
-        // 5. 准备可复用的输入 MLMultiArray [3, 156, 156]（Double 类型）
+        // 5. 准备可复用的输入 MLMultiArray [3, 156, 156]（Double 类型，严格按 strides 写入）
         let inputShape: [NSNumber] = [3, NSNumber(value: inputTileSize), NSNumber(value: inputTileSize)]
         let inputMultiArray = try MLMultiArray(shape: inputShape, dataType: .double)
-        let inputPtr = inputMultiArray.dataPointer.bindMemory(to: Double.self, capacity: 3 * inputTileSize * inputTileSize)
+        let inStrides = Self.extractChannelStrides(from: inputMultiArray, tileSize: inputTileSize)
+        let inputCapacity = max(inputMultiArray.count, inStrides.minRequiredCount)
+        let inputPtr = inputMultiArray.dataPointer.bindMemory(to: Double.self, capacity: inputCapacity)
         let featureProvider = Waifu2xMLFeatureProvider(input: inputMultiArray)
 
-        let inputPlaneSize = inputTileSize * inputTileSize
+        let inv255 = 1.0 / 255.0
 
-        // 6. 逐块执行推理并填充目标缓冲区
+        // 6. 逐块执行推理并填充目标缓冲区（每块前检查取消标志，翻页/切配置即时释放队列）
         for (tileIndex, rect) in rects.enumerated() {
+            if cancelFlag.isCancelled {
+                throw CancellationError()
+            }
+
             let originX = Int(rect.origin.x)
             let originY = Int(rect.origin.y)
 
-            // 采样原图像素至 [3, 156, 156]，边界处采用镜像/边缘复制 (Edge Clamping)
+            // 采样原图像素至 [3, 156, 156]，边界处采用边缘复制 (Edge Clamping)
             for py in 0..<inputTileSize {
                 let sampleY = min(max(originY - shrinkSize + py, 0), height - 1)
                 let rowOffset = sampleY * width
-                let planeRow = py * inputTileSize
+                let planeRow = py * inStrides.yStride
 
                 for px in 0..<inputTileSize {
                     let sampleX = min(max(originX - shrinkSize + px, 0), width - 1)
                     let pixelIdx = (rowOffset + sampleX) * 4
 
-                    let r = Double(srcPtr[pixelIdx]) / 255.0
-                    let g = Double(srcPtr[pixelIdx + 1]) / 255.0
-                    let b = Double(srcPtr[pixelIdx + 2]) / 255.0
+                    let r = Double(srcPtr[pixelIdx]) * inv255
+                    let g = Double(srcPtr[pixelIdx + 1]) * inv255
+                    let b = Double(srcPtr[pixelIdx + 2]) * inv255
 
-                    let offsetInPlane = planeRow + px
+                    let offsetInPlane = planeRow + px * inStrides.xStride
                     inputPtr[offsetInPlane] = r
-                    inputPtr[inputPlaneSize + offsetInPlane] = g
-                    inputPtr[inputPlaneSize * 2 + offsetInPlane] = b
+                    inputPtr[inStrides.cStride + offsetInPlane] = g
+                    inputPtr[inStrides.cStride * 2 + offsetInPlane] = b
                 }
             }
 
@@ -313,10 +364,51 @@ public final class Waifu2xService: @unchecked Sendable {
         return rects
     }
 
-    /// 将平面 RGB 缓冲区的单个分块快速写入目标 RGBA 位图指针
+    private struct TensorChannelStrides {
+        let cStride: Int
+        let yStride: Int
+        let xStride: Int
+        let minRequiredCount: Int
+    }
+
+    /// 提取最后三维 [C, H, W] 的真实内存步长（兼容带行对齐 padding 的 MLMultiArray）
+    private static func extractChannelStrides(from array: MLMultiArray, tileSize: Int) -> TensorChannelStrides {
+        let rawStrides = array.strides.map { $0.intValue }
+        let cStride: Int
+        let yStride: Int
+        let xStride: Int
+        if rawStrides.count >= 3 {
+            let n = rawStrides.count
+            cStride = max(1, rawStrides[n - 3])
+            yStride = max(1, rawStrides[n - 2])
+            xStride = max(1, rawStrides[n - 1])
+        } else {
+            cStride = tileSize * tileSize
+            yStride = tileSize
+            xStride = 1
+        }
+        let maxIdx = 2 * cStride + (tileSize - 1) * yStride + (tileSize - 1) * xStride
+        return TensorChannelStrides(
+            cStride: cStride,
+            yStride: yStride,
+            xStride: xStride,
+            minRequiredCount: maxIdx + 1
+        )
+    }
+
+    @inline(__always)
+    private static func clampToByte(_ value: Double) -> UInt8 {
+        guard value.isFinite else { return 0 }
+        let scaled = value * 255.0
+        if scaled <= 0.0 { return 0 }
+        if scaled >= 255.0 { return 255 }
+        return UInt8(scaled)
+    }
+
+    /// 将平面 RGB 缓冲区的单个分块快速写入目标 RGBA 位图指针（严格按真实 strides 读取，防对齐错位与 NaN 崩溃）
     private static func copyChannelPlanes<T>(
         _ ptr: UnsafePointer<T>,
-        planeSize: Int,
+        strides: TensorChannelStrides,
         outputTileSize: Int,
         destOriginX: Int,
         destOriginY: Int,
@@ -326,35 +418,33 @@ public final class Waifu2xService: @unchecked Sendable {
         toDouble: (T) -> Double
     ) {
         let rPtr = ptr
-        let gPtr = ptr.advanced(by: planeSize)
-        let bPtr = ptr.advanced(by: planeSize * 2)
+        let gPtr = ptr.advanced(by: strides.cStride)
+        let bPtr = ptr.advanced(by: strides.cStride * 2)
+        let yStride = strides.yStride
+        let xStride = strides.xStride
 
         for sy in 0..<outputTileSize {
             let dy = destOriginY + sy
             guard dy >= 0 && dy < targetHeight else { continue }
             let dstRow = dy * targetWidth
-            let srcRow = sy * outputTileSize
+            let srcRow = sy * yStride
 
             for sx in 0..<outputTileSize {
                 let dx = destOriginX + sx
                 guard dx >= 0 && dx < targetWidth else { continue }
 
-                let srcIdx = srcRow + sx
+                let srcIdx = srcRow + sx * xStride
                 let dstIdx = (dstRow + dx) * 4
 
-                let r = toDouble(rPtr[srcIdx]) * 255.0
-                let g = toDouble(gPtr[srcIdx]) * 255.0
-                let b = toDouble(bPtr[srcIdx]) * 255.0
-
-                dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
-                dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
-                dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
+                dstPixels[dstIdx]     = clampToByte(toDouble(rPtr[srcIdx]))
+                dstPixels[dstIdx + 1] = clampToByte(toDouble(gPtr[srcIdx]))
+                dstPixels[dstIdx + 2] = clampToByte(toDouble(bPtr[srcIdx]))
                 dstPixels[dstIdx + 3] = 255
             }
         }
     }
 
-    /// 安全读取 conv7 [3, 284, 284] 输出并直接写入目标像素指针（零拷贝，支持 Double、Float32、Float16 任意精度）
+    /// 安全读取 conv7 [3, 284, 284] 输出并直接写入目标像素指针（零拷贝，支持 Double、Float32、Float16 任意精度与对齐步长）
     private static func writeOutputTile(
         outputArray: MLMultiArray,
         outputTileSize: Int, // 284
@@ -364,14 +454,15 @@ public final class Waifu2xService: @unchecked Sendable {
         targetHeight: Int,
         dstPixels: UnsafeMutablePointer<UInt8>
     ) {
-        let planeSize = outputTileSize * outputTileSize
+        let strides = extractChannelStrides(from: outputArray, tileSize: outputTileSize)
+        let capacity = max(outputArray.count, strides.minRequiredCount)
         let dataType = outputArray.dataType
 
         if dataType == .double {
-            let ptr = outputArray.dataPointer.bindMemory(to: Double.self, capacity: 3 * planeSize)
+            let ptr = outputArray.dataPointer.bindMemory(to: Double.self, capacity: capacity)
             copyChannelPlanes(
                 ptr,
-                planeSize: planeSize,
+                strides: strides,
                 outputTileSize: outputTileSize,
                 destOriginX: destOriginX,
                 destOriginY: destOriginY,
@@ -383,10 +474,10 @@ public final class Waifu2xService: @unchecked Sendable {
         }
 
         if dataType == .float32 {
-            let ptr = outputArray.dataPointer.bindMemory(to: Float.self, capacity: 3 * planeSize)
+            let ptr = outputArray.dataPointer.bindMemory(to: Float.self, capacity: capacity)
             copyChannelPlanes(
                 ptr,
-                planeSize: planeSize,
+                strides: strides,
                 outputTileSize: outputTileSize,
                 destOriginX: destOriginX,
                 destOriginY: destOriginY,
@@ -398,12 +489,12 @@ public final class Waifu2xService: @unchecked Sendable {
         }
 
         #if arch(arm64)
-        // 0x10010 (65552) 为 MLMultiArrayDataType.float16.rawValue；该枚举 case 仅在 iOS 16+ 公开，直接按 rawValue 判断以兼顾 iOS 15 真机命中率
+        // 0x10010 (65552) 为 MLMultiArrayDataType.float16.rawValue；该枚举 case 仅在 iOS 16+ 公开，直接按 rawValue 判断以兼容 iOS 15 编译
         if #available(iOS 14.0, *), dataType.rawValue == 0x10010 {
-            let ptr = outputArray.dataPointer.bindMemory(to: Float16.self, capacity: 3 * planeSize)
+            let ptr = outputArray.dataPointer.bindMemory(to: Float16.self, capacity: capacity)
             copyChannelPlanes(
                 ptr,
-                planeSize: planeSize,
+                strides: strides,
                 outputTileSize: outputTileSize,
                 destOriginX: destOriginX,
                 destOriginY: destOriginY,
@@ -420,22 +511,18 @@ public final class Waifu2xService: @unchecked Sendable {
             let dy = destOriginY + sy
             guard dy >= 0 && dy < targetHeight else { continue }
             let dstRow = dy * targetWidth
-            let srcRow = sy * outputTileSize
+            let srcRow = sy * strides.yStride
 
             for sx in 0..<outputTileSize {
                 let dx = destOriginX + sx
                 guard dx >= 0 && dx < targetWidth else { continue }
 
-                let srcIdx = srcRow + sx
+                let srcIdx = srcRow + sx * strides.xStride
                 let dstIdx = (dstRow + dx) * 4
 
-                let r = outputArray[srcIdx].doubleValue * 255.0
-                let g = outputArray[planeSize + srcIdx].doubleValue * 255.0
-                let b = outputArray[planeSize * 2 + srcIdx].doubleValue * 255.0
-
-                dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
-                dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
-                dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
+                dstPixels[dstIdx]     = clampToByte(outputArray[srcIdx].doubleValue)
+                dstPixels[dstIdx + 1] = clampToByte(outputArray[strides.cStride + srcIdx].doubleValue)
+                dstPixels[dstIdx + 2] = clampToByte(outputArray[strides.cStride * 2 + srcIdx].doubleValue)
                 dstPixels[dstIdx + 3] = 255
             }
         }
@@ -450,9 +537,35 @@ public final class Waifu2xService: @unchecked Sendable {
             return cached
         }
 
+        // 限制模型缓存上限，避免连续切换模型后常驻过多权重内存
+        if mlModelCache.count >= 2 {
+            mlModelCache.removeAll()
+        }
+
+        let primaryUnits: MLComputeUnits
+        if #available(iOS 16.0, *) {
+            primaryUnits = .all // iOS 16+ 优先 ANE（Apple Neural Engine）与 GPU
+        } else {
+            // iOS 15 下旧版 Espresso 的 ANE 与 MPSCNN GPU 后端对高版本预编译反卷积模型均存在挂死/死等风险，
+            // 使用 Accelerate/BNNS 纯 CPU 后端可 100% 稳定完成推理且不卡死队列
+            primaryUnits = .cpuOnly
+        }
+
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU // 使用 CPU+GPU 混合计算，杜绝 iOS 15 下 ANE 对经典 Espresso 模型转译导致的挂死死锁
-        let model = try MLModel(contentsOf: url, configuration: config)
+        config.computeUnits = primaryUnits
+
+        let model: MLModel
+        do {
+            model = try MLModel(contentsOf: url, configuration: config)
+        } catch {
+            guard primaryUnits != .cpuOnly else {
+                throw error
+            }
+            let fallbackConfig = MLModelConfiguration()
+            fallbackConfig.computeUnits = .cpuOnly
+            model = try MLModel(contentsOf: url, configuration: fallbackConfig)
+        }
+
         mlModelCache[key] = model
         return model
     }
