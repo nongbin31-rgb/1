@@ -334,15 +334,18 @@ public struct PaperTextureOverlayView: View {
     public let texture: ReaderTextureType
     public let opacity: Double
     public let phaseAnchor: TexturePhaseAnchor
+    public let referenceSize: CGSize?
 
     public init(
         texture: ReaderTextureType,
         opacity: Double = 0.4,
-        phaseAnchor: TexturePhaseAnchor = .local
+        phaseAnchor: TexturePhaseAnchor = .local,
+        referenceSize: CGSize? = nil
     ) {
         self.texture = texture
         self.opacity = opacity
         self.phaseAnchor = phaseAnchor
+        self.referenceSize = referenceSize
     }
 
     public var body: some View {
@@ -351,18 +354,27 @@ public struct PaperTextureOverlayView: View {
 
             switch phaseAnchor {
             case .local:
-                Image(uiImage: img)
-                    .resizable(resizingMode: .tile)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .blendMode(.multiply)
-                    .opacity(effectiveOpacity)
-                    .clipped()
-                    .allowsHitTesting(false)
+                // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
+                // 避免高分原图 1:1 平铺导致背景纹理颗粒过大及边缘接缝错位
+                GeometryReader { proxy in
+                    let targetSize = validReferenceSize() ?? proxy.size
+                    Image(uiImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: targetSize.width, height: targetSize.height)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                }
+                .blendMode(.multiply)
+                .opacity(effectiveOpacity)
+                .allowsHitTesting(false)
 
             case .namedSpace(let spaceName):
+                let refSize = validReferenceSize() ?? fallbackScreenSize()
+                let tileImg = Self.scaledTileImage(img, fitting: refSize)
                 GeometryReader { proxy in
-                    let tileW = max(img.size.width, 64.0)
-                    let tileH = max(img.size.height, 64.0)
+                    let tileW = max(tileImg.size.width, 64.0)
+                    let tileH = max(tileImg.size.height, 64.0)
                     let contentFrame = proxy.frame(in: .named(spaceName))
 
                     let rawX = contentFrame.minX.truncatingRemainder(dividingBy: tileW)
@@ -372,7 +384,7 @@ public struct PaperTextureOverlayView: View {
                     let phaseY = rawY >= 0 ? rawY : rawY + tileH
 
                     ZStack(alignment: .topLeading) {
-                        Image(uiImage: img)
+                        Image(uiImage: tileImg)
                             .resizable(resizingMode: .tile)
                             .frame(
                                 width: proxy.size.width + tileW,
@@ -388,6 +400,37 @@ public struct PaperTextureOverlayView: View {
                 }
             }
         }
+    }
+
+    private func validReferenceSize() -> CGSize? {
+        guard let ref = referenceSize, ref.width > 0, ref.height > 0 else {
+            return nil
+        }
+        return ref
+    }
+
+    private func fallbackScreenSize() -> CGSize {
+        let screenSize = UIScreen.main.bounds.size
+        if screenSize.width > 0, screenSize.height > 0 {
+            return screenSize
+        }
+        return CGSize(width: 390, height: 844)
+    }
+
+    /// 零拷贝调整 UIImage.scale，使条漫平铺单块与全屏 AspectFill 的纹理颗粒尺寸完全一致
+    private static func scaledTileImage(_ img: UIImage, fitting refSize: CGSize) -> UIImage {
+        let imgW = img.size.width
+        let imgH = img.size.height
+        guard imgW > 0, imgH > 0, refSize.width > 0, refSize.height > 0,
+              let cgImg = img.cgImage else {
+            return img
+        }
+        let fillScale = max(refSize.width / imgW, refSize.height / imgH)
+        guard fillScale > 0, abs(fillScale - 1.0) > 0.001 else {
+            return img
+        }
+        let targetScale = max(img.scale / fillScale, 0.1)
+        return UIImage(cgImage: cgImg, scale: targetScale, orientation: img.imageOrientation)
     }
 }
 

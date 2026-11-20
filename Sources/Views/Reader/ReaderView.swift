@@ -403,6 +403,7 @@ public struct ReaderView: View {
                                         textureOpacity: store.readerTextureOpacity,
                                         textureTarget: store.readerTextureTarget,
                                         texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
+                                        textureReferenceSize: geo.size,
                                         onStatusUpdate: { text in
                                             if page.index == currentPageIndex {
                                                 currentHUDText = text
@@ -880,6 +881,7 @@ private struct VerticalMangaPageCell: View {
     var textureOpacity: Double = 0.4
     var textureTarget: ReaderTextureTarget = .both
     var texturePhaseAnchor: TexturePhaseAnchor = .local
+    var textureReferenceSize: CGSize? = nil
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
 
@@ -929,7 +931,8 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
-                            phaseAnchor: texturePhaseAnchor
+                            phaseAnchor: texturePhaseAnchor,
+                            referenceSize: textureReferenceSize
                         )
                         .frame(width: contentWidth, height: alignedHeight)
                         .clipped()
@@ -951,7 +954,8 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
-                            phaseAnchor: texturePhaseAnchor
+                            phaseAnchor: texturePhaseAnchor,
+                            referenceSize: textureReferenceSize
                         )
                         .clipped()
                     }
@@ -976,7 +980,8 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
-                            phaseAnchor: texturePhaseAnchor
+                            phaseAnchor: texturePhaseAnchor,
+                            referenceSize: textureReferenceSize
                         )
                     } else {
                         Color.white.opacity(0.06)
@@ -1004,7 +1009,8 @@ private struct VerticalMangaPageCell: View {
                         PaperTextureOverlayView(
                             texture: texture,
                             opacity: textureOpacity,
-                            phaseAnchor: texturePhaseAnchor
+                            phaseAnchor: texturePhaseAnchor,
+                            referenceSize: textureReferenceSize
                         )
                     } else {
                         Color.white.opacity(0.05)
