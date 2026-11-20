@@ -25,10 +25,6 @@ public struct DiscoverView: View {
     @State private var showNoticeBanner = false
     @State private var noticeDismissTask: Task<Void, Never>?
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14, alignment: .top)
-    ]
-
     private var activeSource: MangaSourceConfig? {
         store.enabledSources.first(where: { $0.id == store.selectedSourceID })
             ?? store.enabledSources.first
@@ -166,27 +162,19 @@ public struct DiscoverView: View {
                                     .frame(height: 0)
                                     .id("discover_top_anchor")
 
-                                LazyVGrid(columns: columns, spacing: 18) {
-                                    ForEach(mangas) { manga in
-                                        NavigationLink(value: manga) {
-                                            MangaGridCard(
-                                                manga: manga,
-                                                progress: store.progress(for: manga)
-                                            )
-                                        }
-                                        .buttonStyle(.plain)
-                                        .onAppear {
-                                            if store.discoverPaginationMode == .infiniteScroll,
-                                               manga.id == mangas.last?.id,
-                                               canLoadMore,
-                                               !isLoadingMore {
-                                                Task { await loadMore() }
-                                            }
-                                        }
+                                DiscoverLayoutCollectionView(
+                                    style: store.discoverLayoutStyle,
+                                    mangas: mangas,
+                                    store: store
+                                ) { manga in
+                                    if store.discoverPaginationMode == .infiniteScroll,
+                                       manga.id == mangas.last?.id,
+                                       canLoadMore,
+                                       !isLoadingMore {
+                                        Task { await loadMore() }
                                     }
                                 }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
+                                .animation(.easeInOut(duration: 0.22), value: store.discoverLayoutStyle)
 
                                 // 分页控制器区（无论按页还是瀑布流均提供完整分页操作）
                                 paginationBar(scrollProxy: scrollProxy)
@@ -281,8 +269,27 @@ public struct DiscoverView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("当前第 \(currentPage) 页，点击跳页")
 
-                // 浏览与分页模式切换菜单
+                // 视图排布与分页模式切换菜单
                 Menu {
+                    Section("视图排布") {
+                        ForEach(DiscoverLayoutStyle.allCases) { style in
+                            Button {
+                                guard store.discoverLayoutStyle != style else { return }
+                                withAnimation(.easeInOut(duration: 0.22)) {
+                                    store.discoverLayoutStyle = style
+                                }
+                                triggerHaptic()
+                                showNotice("已切换：\(style.displayName)")
+                            } label: {
+                                Label {
+                                    Text(style.displayName)
+                                } icon: {
+                                    Image(systemName: store.discoverLayoutStyle == style ? "checkmark" : style.iconName)
+                                }
+                            }
+                        }
+                    }
+
                     Section("浏览与分页模式") {
                         ForEach(DiscoverPaginationMode.allCases) { mode in
                             Button {
@@ -314,14 +321,14 @@ public struct DiscoverView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: store.discoverPaginationMode.iconName)
-                        .font(.system(size: 17, weight: .medium))
+                    Image(systemName: store.discoverLayoutStyle.iconName)
+                        .font(.system(size: 16.5, weight: .semibold))
                         .foregroundStyle(Color.accentColor)
-                        .padding(.leading, 5)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
+                        .frame(width: 30, height: 30)
+                        .background(Color.accentColor.opacity(0.12), in: Circle())
+                        .contentShape(Circle())
                 }
-                .accessibilityLabel("浏览与分页模式")
+                .accessibilityLabel("视图排布与分页模式，当前为\(store.discoverLayoutStyle.displayName)")
             }
             .layoutPriority(1)
         }

@@ -64,6 +64,9 @@ public final class AppStore: ObservableObject {
     @Published public var discoverPaginationMode: DiscoverPaginationMode = .pageByPage {
         didSet { save(discoverPaginationMode, key: Keys.discoverPaginationMode) }
     }
+    @Published public var discoverLayoutStyle: DiscoverLayoutStyle = .classicGrid {
+        didSet { save(discoverLayoutStyle, key: Keys.discoverLayoutStyle) }
+    }
     @Published public var searchHistory: [String] = [] {
         didSet { save(searchHistory, key: Keys.searchHistory) }
     }
@@ -93,6 +96,7 @@ public final class AppStore: ObservableObject {
         static let readerImageOnlyBackdrop = "keda_online_reader_image_only_backdrop_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
+        static let discoverLayoutStyle = "keda_online_discover_layout_style_v1"
         static let searchHistory = "keda_online_search_history_v1"
         static let imageFilterConfig = "keda_online_image_filter_config_v1"
     }
@@ -155,6 +159,7 @@ public final class AppStore: ObservableObject {
         self.readerImageOnlyBackdrop = load(key: Keys.readerImageOnlyBackdrop) ?? .paperTint
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
+        self.discoverLayoutStyle = load(key: Keys.discoverLayoutStyle) ?? .classicGrid
         self.searchHistory = load(key: Keys.searchHistory) ?? []
         self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
     }

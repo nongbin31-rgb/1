@@ -77,6 +77,12 @@ public struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+
+                    Picker("发现页默认视图排布", selection: $store.discoverLayoutStyle) {
+                        ForEach(DiscoverLayoutStyle.allCases) { style in
+                            Label(style.displayName, systemImage: style.iconName).tag(style)
+                        }
+                    }
                 }
 
                 Section {
