@@ -313,6 +313,47 @@ public final class Waifu2xService: @unchecked Sendable {
         return rects
     }
 
+    /// 将平面 RGB 缓冲区的单个分块快速写入目标 RGBA 位图指针
+    private static func copyChannelPlanes<T>(
+        _ ptr: UnsafePointer<T>,
+        planeSize: Int,
+        outputTileSize: Int,
+        destOriginX: Int,
+        destOriginY: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+        dstPixels: UnsafeMutablePointer<UInt8>,
+        toDouble: (T) -> Double
+    ) {
+        let rPtr = ptr
+        let gPtr = ptr.advanced(by: planeSize)
+        let bPtr = ptr.advanced(by: planeSize * 2)
+
+        for sy in 0..<outputTileSize {
+            let dy = destOriginY + sy
+            guard dy >= 0 && dy < targetHeight else { continue }
+            let dstRow = dy * targetWidth
+            let srcRow = sy * outputTileSize
+
+            for sx in 0..<outputTileSize {
+                let dx = destOriginX + sx
+                guard dx >= 0 && dx < targetWidth else { continue }
+
+                let srcIdx = srcRow + sx
+                let dstIdx = (dstRow + dx) * 4
+
+                let r = toDouble(rPtr[srcIdx]) * 255.0
+                let g = toDouble(gPtr[srcIdx]) * 255.0
+                let b = toDouble(bPtr[srcIdx]) * 255.0
+
+                dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
+                dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
+                dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
+                dstPixels[dstIdx + 3] = 255
+            }
+        }
+    }
+
     /// 安全读取 conv7 [3, 284, 284] 输出并直接写入目标像素指针（零拷贝，支持 Double、Float32、Float16 任意精度）
     private static func writeOutputTile(
         outputArray: MLMultiArray,
@@ -328,117 +369,74 @@ public final class Waifu2xService: @unchecked Sendable {
 
         if dataType == .double {
             let ptr = outputArray.dataPointer.bindMemory(to: Double.self, capacity: 3 * planeSize)
-            let rPtr = ptr
-            let gPtr = ptr.advanced(by: planeSize)
-            let bPtr = ptr.advanced(by: planeSize * 2)
+            copyChannelPlanes(
+                ptr,
+                planeSize: planeSize,
+                outputTileSize: outputTileSize,
+                destOriginX: destOriginX,
+                destOriginY: destOriginY,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight,
+                dstPixels: dstPixels
+            ) { $0 }
+            return
+        }
 
-            for sy in 0..<outputTileSize {
-                let dy = destOriginY + sy
-                guard dy >= 0 && dy < targetHeight else { continue }
-                let dstRow = dy * targetWidth
-                let srcRow = sy * outputTileSize
-
-                for sx in 0..<outputTileSize {
-                    let dx = destOriginX + sx
-                    guard dx >= 0 && dx < targetWidth else { continue }
-
-                    let srcIdx = srcRow + sx
-                    let dstIdx = (dstRow + dx) * 4
-
-                    let r = rPtr[srcIdx] * 255.0
-                    let g = gPtr[srcIdx] * 255.0
-                    let b = bPtr[srcIdx] * 255.0
-
-                    dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
-                    dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
-                    dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
-                    dstPixels[dstIdx + 3] = 255
-                }
-            }
-        } else if dataType == .float32 {
+        if dataType == .float32 {
             let ptr = outputArray.dataPointer.bindMemory(to: Float.self, capacity: 3 * planeSize)
-            let rPtr = ptr
-            let gPtr = ptr.advanced(by: planeSize)
-            let bPtr = ptr.advanced(by: planeSize * 2)
+            copyChannelPlanes(
+                ptr,
+                planeSize: planeSize,
+                outputTileSize: outputTileSize,
+                destOriginX: destOriginX,
+                destOriginY: destOriginY,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight,
+                dstPixels: dstPixels
+            ) { Double($0) }
+            return
+        }
 
-            for sy in 0..<outputTileSize {
-                let dy = destOriginY + sy
-                guard dy >= 0 && dy < targetHeight else { continue }
-                let dstRow = dy * targetWidth
-                let srcRow = sy * outputTileSize
-
-                for sx in 0..<outputTileSize {
-                    let dx = destOriginX + sx
-                    guard dx >= 0 && dx < targetWidth else { continue }
-
-                    let srcIdx = srcRow + sx
-                    let dstIdx = (dstRow + dx) * 4
-
-                    let r = Double(rPtr[srcIdx]) * 255.0
-                    let g = Double(gPtr[srcIdx]) * 255.0
-                    let b = Double(bPtr[srcIdx]) * 255.0
-
-                    dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
-                    dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
-                    dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
-                    dstPixels[dstIdx + 3] = 255
-                }
-            }
         #if arch(arm64)
-        } else if #available(iOS 14.0, *), dataType == .float16 {
+        // 0x10010 (65552) 为 MLMultiArrayDataType.float16.rawValue；该枚举 case 仅在 iOS 16+ 公开，直接按 rawValue 判断以兼顾 iOS 15 真机命中率
+        if #available(iOS 14.0, *), dataType.rawValue == 0x10010 {
             let ptr = outputArray.dataPointer.bindMemory(to: Float16.self, capacity: 3 * planeSize)
-            let rPtr = ptr
-            let gPtr = ptr.advanced(by: planeSize)
-            let bPtr = ptr.advanced(by: planeSize * 2)
-
-            for sy in 0..<outputTileSize {
-                let dy = destOriginY + sy
-                guard dy >= 0 && dy < targetHeight else { continue }
-                let dstRow = dy * targetWidth
-                let srcRow = sy * outputTileSize
-
-                for sx in 0..<outputTileSize {
-                    let dx = destOriginX + sx
-                    guard dx >= 0 && dx < targetWidth else { continue }
-
-                    let srcIdx = srcRow + sx
-                    let dstIdx = (dstRow + dx) * 4
-
-                    let r = Double(rPtr[srcIdx]) * 255.0
-                    let g = Double(gPtr[srcIdx]) * 255.0
-                    let b = Double(bPtr[srcIdx]) * 255.0
-
-                    dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
-                    dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
-                    dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
-                    dstPixels[dstIdx + 3] = 255
-                }
-            }
+            copyChannelPlanes(
+                ptr,
+                planeSize: planeSize,
+                outputTileSize: outputTileSize,
+                destOriginX: destOriginX,
+                destOriginY: destOriginY,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight,
+                dstPixels: dstPixels
+            ) { Double($0) }
+            return
+        }
         #endif
-        } else {
-            // 通用下标兜底（支持 Float16 等未来格式）
-            for sy in 0..<outputTileSize {
-                let dy = destOriginY + sy
-                guard dy >= 0 && dy < targetHeight else { continue }
-                let dstRow = dy * targetWidth
-                let srcRow = sy * outputTileSize
 
-                for sx in 0..<outputTileSize {
-                    let dx = destOriginX + sx
-                    guard dx >= 0 && dx < targetWidth else { continue }
+        // 通用下标兜底（支持其他格式或非 arm64 平台）
+        for sy in 0..<outputTileSize {
+            let dy = destOriginY + sy
+            guard dy >= 0 && dy < targetHeight else { continue }
+            let dstRow = dy * targetWidth
+            let srcRow = sy * outputTileSize
 
-                    let srcIdx = srcRow + sx
-                    let dstIdx = (dstRow + dx) * 4
+            for sx in 0..<outputTileSize {
+                let dx = destOriginX + sx
+                guard dx >= 0 && dx < targetWidth else { continue }
 
-                    let r = outputArray[srcIdx].doubleValue * 255.0
-                    let g = outputArray[planeSize + srcIdx].doubleValue * 255.0
-                    let b = outputArray[planeSize * 2 + srcIdx].doubleValue * 255.0
+                let srcIdx = srcRow + sx
+                let dstIdx = (dstRow + dx) * 4
 
-                    dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
-                    dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
-                    dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
-                    dstPixels[dstIdx + 3] = 255
-                }
+                let r = outputArray[srcIdx].doubleValue * 255.0
+                let g = outputArray[planeSize + srcIdx].doubleValue * 255.0
+                let b = outputArray[planeSize * 2 + srcIdx].doubleValue * 255.0
+
+                dstPixels[dstIdx]     = UInt8(max(0.0, min(255.0, r)))
+                dstPixels[dstIdx + 1] = UInt8(max(0.0, min(255.0, g)))
+                dstPixels[dstIdx + 2] = UInt8(max(0.0, min(255.0, b)))
+                dstPixels[dstIdx + 3] = 255
             }
         }
     }
