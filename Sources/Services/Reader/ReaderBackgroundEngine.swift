@@ -19,10 +19,12 @@ public final class ReaderTextureCache: @unchecked Sendable {
     public static let shared = ReaderTextureCache()
 
     private let cache = NSCache<NSString, UIImage>()
+    private let seamlessTileCache = NSCache<NSString, UIImage>()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
 
     private init() {
         cache.countLimit = 12
+        seamlessTileCache.countLimit = 12
     }
 
     /// 获取指定纸张纹理图像（带内存二级缓存）
@@ -39,6 +41,77 @@ public final class ReaderTextureCache: @unchecked Sendable {
             cache.setObject(img, forKey: key)
         }
         return loaded
+    }
+
+    /// 获取专为条漫连续滚动平铺打造的 2×2 镜像无缝纹理图（裁去边缘暗边并双向镜像衔接，消除拼接线）
+    public func seamlessTileImage(for type: ReaderTextureType) -> UIImage? {
+        let key = "\(type.rawValue)_seamless_tile" as NSString
+        if let cached = seamlessTileCache.object(forKey: key) {
+            return cached
+        }
+        guard let baseImg = textureImage(for: type) else {
+            return nil
+        }
+
+        return queue.sync {
+            if let cached = seamlessTileCache.object(forKey: key) {
+                return cached
+            }
+            let generated = Self.buildSeamlessMirroredTile(from: baseImg)
+            seamlessTileCache.setObject(generated, forKey: key)
+            return generated
+        }
+    }
+
+    private static func buildSeamlessMirroredTile(from image: UIImage) -> UIImage {
+        let origW = image.size.width
+        let origH = image.size.height
+        guard origW > 32, origH > 32 else { return image }
+
+        let trimRatio: CGFloat = 0.03
+        let visibleRatio: CGFloat = 1.0 - trimRatio * 2.0
+        let maxQuadrantDim: CGFloat = 1024.0
+        let downScale = min(1.0, maxQuadrantDim / max(origW, origH))
+        let quadW = max(64.0, floor(origW * visibleRatio * downScale))
+        let quadH = max(64.0, floor(origH * visibleRatio * downScale))
+
+        let quadFormat = UIGraphicsImageRendererFormat()
+        quadFormat.scale = 1.0
+        quadFormat.opaque = true
+
+        let drawW = quadW / visibleRatio
+        let drawH = quadH / visibleRatio
+        let offsetX = -(drawW - quadW) * 0.5
+        let offsetY = -(drawH - quadH) * 0.5
+
+        let croppedQuad = UIGraphicsImageRenderer(size: CGSize(width: quadW, height: quadH), format: quadFormat).image { _ in
+            image.draw(in: CGRect(x: offsetX, y: offsetY, width: drawW, height: drawH))
+        }
+
+        let fullSize = CGSize(width: quadW * 2.0, height: quadH * 2.0)
+        return UIGraphicsImageRenderer(size: fullSize, format: quadFormat).image { ctx in
+            let cg = ctx.cgContext
+
+            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
+
+            cg.saveGState()
+            cg.translateBy(x: fullSize.width, y: 0)
+            cg.scaleBy(x: -1.0, y: 1.0)
+            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
+            cg.restoreGState()
+
+            cg.saveGState()
+            cg.translateBy(x: 0, y: fullSize.height)
+            cg.scaleBy(x: 1.0, y: -1.0)
+            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
+            cg.restoreGState()
+
+            cg.saveGState()
+            cg.translateBy(x: fullSize.width, y: fullSize.height)
+            cg.scaleBy(x: -1.0, y: -1.0)
+            croppedQuad.draw(in: CGRect(x: 0, y: 0, width: quadW, height: quadH))
+            cg.restoreGState()
+        }
     }
 
     private func shortKey(for type: ReaderTextureType) -> String {
@@ -393,14 +466,16 @@ public struct PaperTextureOverlayView: View {
                 .allowsHitTesting(false)
 
             case .namedSpace(let spaceName):
+                let tileImg = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
                 let refSize = validReferenceSize() ?? fallbackScreenSize()
-                let tileSize = Self.scaledTileSize(for: img, fitting: refSize)
+                let singleSize = Self.scaledTileSize(for: img, fitting: refSize)
+                let screenScale = max(UIScreen.main.scale, 1.0)
+                let tileW = max(64.0, (singleSize.width * 2.0 * screenScale).rounded() / screenScale)
+                let tileH = max(64.0, (singleSize.height * 2.0 * screenScale).rounded() / screenScale)
                 GeometryReader { proxy in
                     let viewW = proxy.size.width
                     let viewH = proxy.size.height
                     if viewW > 0, viewH > 0 {
-                        let tileW = tileSize.width
-                        let tileH = tileSize.height
                         let contentFrame = proxy.frame(in: .named(spaceName))
 
                         let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
@@ -416,7 +491,7 @@ public struct PaperTextureOverlayView: View {
                                     ForEach(0..<rows, id: \.self) { _ in
                                         HStack(spacing: 0) {
                                             ForEach(0..<cols, id: \.self) { _ in
-                                                Image(uiImage: img)
+                                                Image(uiImage: tileImg)
                                                     .resizable()
                                                     .frame(width: tileW, height: tileH)
                                             }
