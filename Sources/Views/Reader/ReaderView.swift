@@ -232,15 +232,16 @@ public struct ReaderView: View {
                         .clipped()
                 }
 
-                if showChrome {
-                    chromeOverlay
-                } else if isCompareMode {
-                    // 当处于对比模式且导航栏收起时，提供常驻半透明快捷退出按钮，彻底解决无法退出的死锁
+                chromeOverlay
+                    .zIndex(10)
+
+                // 当处于对比模式且导航栏收起时，提供常驻半透明快捷退出按钮，彻底解决无法退出的死锁
+                if isCompareMode {
                     VStack {
                         HStack {
                             Spacer()
                             Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
+                                withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                                     isCompareMode = false
                                 }
                             } label: {
@@ -262,7 +263,11 @@ public struct ReaderView: View {
                         }
                         Spacer()
                     }
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .opacity(showChrome ? 0 : 1)
+                    .scaleEffect(showChrome ? 0.92 : 1.0)
+                    .allowsHitTesting(!showChrome)
+                    .animation(.spring(response: 0.30, dampingFraction: 0.92), value: showChrome)
+                    .zIndex(11)
                 }
             }
             .frame(width: windowGeo.size.width, height: windowGeo.size.height)
@@ -424,7 +429,7 @@ public struct ReaderView: View {
 
                 ZoomableWebtoonContainer(
                     onSingleTap: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
+                        withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                             showChrome.toggle()
                         }
                     }
@@ -506,7 +511,7 @@ public struct ReaderView: View {
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
                     }
                 },
@@ -538,7 +543,7 @@ public struct ReaderView: View {
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
                     }
                 },
@@ -570,7 +575,7 @@ public struct ReaderView: View {
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
                     }
                 },
@@ -649,6 +654,9 @@ public struct ReaderView: View {
                     endPoint: .bottom
                 )
             )
+            .offset(y: showChrome ? 0 : -(insets.top + 88))
+            .opacity(showChrome ? 1 : 0)
+            .allowsHitTesting(showChrome)
 
             Spacer()
 
@@ -755,8 +763,11 @@ public struct ReaderView: View {
                     endPoint: .bottom
                 )
             )
+            .offset(y: showChrome ? 0 : (insets.bottom + 148))
+            .opacity(showChrome ? 1 : 0)
+            .allowsHitTesting(showChrome)
         }
-        .transition(.opacity)
+        .animation(.spring(response: 0.30, dampingFraction: 0.92), value: showChrome)
     }
 
     /// 获取当前设备绝对可靠的安全区域边距（防止全屏沉浸/隐藏状态栏时系统 UIWindow 错误返回 0）
