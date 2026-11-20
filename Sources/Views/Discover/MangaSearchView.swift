@@ -1622,14 +1622,15 @@ private struct SourceSearchOutcome: Sendable {
     let wasCancelled: Bool
 }
 
-/// iOS 15 兼容流式标签布局（用于搜索历史与快捷标签）
+/// iOS 15 兼容流式标签布局（基于纯原生 VStack/HStack 测量折行，彻底避免 alignmentGuide 多次求值导致的错位与空白）
 private struct FlowChipView<Data: RandomAccessCollection, Content: View>: View where Data.Element: Hashable {
     let items: Data
     let horizontalSpacing: CGFloat
     let verticalSpacing: CGFloat
     let content: (Data.Element) -> Content
 
-    @State private var totalHeight: CGFloat = .zero
+    @State private var containerWidth: CGFloat = 0
+    @State private var itemWidths: [Int: CGFloat] = [:]
 
     init(
         items: Data,
@@ -1644,52 +1645,101 @@ private struct FlowChipView<Data: RandomAccessCollection, Content: View>: View w
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            generateContent(in: geometry)
+        let itemArray = Array(items)
+        let rows = computeRows(count: itemArray.count)
+
+        VStack(alignment: .leading, spacing: 0) {
+            // 零高度满宽测量锚点：独立获取父容器可用宽度，不受下方标签宽度影响且不产生额外垂直间距
+            Color.clear
+                .frame(height: 0)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear {
+                                if abs(containerWidth - geo.size.width) > 0.5 {
+                                    containerWidth = geo.size.width
+                                }
+                            }
+                            .onChange(of: geo.size.width) { newWidth in
+                                if abs(containerWidth - newWidth) > 0.5 {
+                                    containerWidth = newWidth
+                                }
+                            }
+                    }
+                )
+
+            VStack(alignment: .leading, spacing: verticalSpacing) {
+                ForEach(rows.indices, id: \.self) { rowIndex in
+                    HStack(spacing: horizontalSpacing) {
+                        ForEach(rows[rowIndex], id: \.self) { idx in
+                            content(itemArray[idx])
+                                .id(itemArray[idx])
+                                .fixedSize()
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: FlowChipWidthPreferenceKey.self,
+                                            value: [idx: geo.size.width]
+                                        )
+                                    }
+                                )
+                        }
+                    }
+                }
+            }
         }
-        .frame(height: max(totalHeight, 1))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onPreferenceChange(FlowChipWidthPreferenceKey.self) { widths in
+            if widths != itemWidths {
+                itemWidths = widths
+            }
+        }
     }
 
-    private func generateContent(in g: GeometryProxy) -> some View {
-        var width = CGFloat.zero
-        var height = CGFloat.zero
+    private func computeRows(count: Int) -> [[Int]] {
+        guard count > 0 else { return [] }
+        guard containerWidth > 1 else {
+            return (0..<count).map { [$0] }
+        }
 
-        return ZStack(alignment: .topLeading) {
-            ForEach(items, id: \.self) { item in
-                content(item)
-                    .padding(.trailing, horizontalSpacing)
-                    .padding(.bottom, verticalSpacing)
-                    .alignmentGuide(.leading) { d in
-                        if abs(width - d.width) > g.size.width {
-                            width = 0
-                            height -= d.height
-                        }
-                        let result = width
-                        width -= d.width
-                        return result
-                    }
-                    .alignmentGuide(.top) { _ in
-                        let result = height
-                        return result
-                    }
+        var rows: [[Int]] = []
+        var currentRow: [Int] = []
+        var currentRowWidth: CGFloat = 0
+
+        for idx in 0..<count {
+            guard let itemWidth = itemWidths[idx] else {
+                if !currentRow.isEmpty {
+                    rows.append(currentRow)
+                    currentRow = []
+                    currentRowWidth = 0
+                }
+                rows.append([idx])
+                continue
+            }
+
+            if currentRow.isEmpty {
+                currentRow.append(idx)
+                currentRowWidth = itemWidth
+            } else if currentRowWidth + horizontalSpacing + itemWidth <= containerWidth + 0.5 {
+                currentRow.append(idx)
+                currentRowWidth += horizontalSpacing + itemWidth
+            } else {
+                rows.append(currentRow)
+                currentRow = [idx]
+                currentRowWidth = itemWidth
             }
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(key: FlowChipHeightPreferenceKey.self, value: geo.size.height)
-            }
-        )
-        .onPreferenceChange(FlowChipHeightPreferenceKey.self) { newHeight in
-            if abs(totalHeight - newHeight) > 0.5 {
-                totalHeight = newHeight
-            }
+
+        if !currentRow.isEmpty {
+            rows.append(currentRow)
         }
+        return rows
     }
 }
 
-private struct FlowChipHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+private struct FlowChipWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
