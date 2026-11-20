@@ -9,6 +9,7 @@ public final class ComicPageSlot: ObservableObject {
     @Published public var displayImage: UIImage?
     @Published public var isLoading = true
     @Published public var isUpscaling = false
+    @Published public var upscaleProgress: String = ""
     @Published public var errorMessage: String?
 
     private var loadedPageID: String?
@@ -35,6 +36,7 @@ public final class ComicPageSlot: ObservableObject {
             errorMessage = nil
             isLoading = true
             isUpscaling = false
+            upscaleProgress = ""
             lastAppliedConfig = nil
             lastIsEnabled = nil
             lastAppliedFilterSignature = nil
@@ -128,9 +130,11 @@ public final class ComicPageSlot: ObservableObject {
         }
 
         isUpscaling = true
+        upscaleProgress = ""
         defer {
             if loadGeneration == currentGeneration {
                 isUpscaling = false
+                upscaleProgress = ""
             }
         }
 
@@ -138,7 +142,13 @@ public final class ComicPageSlot: ObservableObject {
             image: original,
             pageKey: page.imageURL,
             config: config,
-            isEnabled: isEnabled
+            isEnabled: isEnabled,
+            progress: { [weak self] pct in
+                Task { @MainActor [weak self] in
+                    guard let self, self.loadGeneration == currentGeneration else { return }
+                    self.upscaleProgress = pct
+                }
+            }
         )
         guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
             return
@@ -295,7 +305,11 @@ public struct ComicPageCellView: View {
                     VStack {
                         HStack(spacing: 8) {
                             ProgressView().tint(.white)
-                            Text("正在执行 \(config.model.displayName) 2x 超分...")
+                            Text(
+                                slot.upscaleProgress.isEmpty
+                                    ? "正在执行 \(config.model.displayName) 2x 超分..."
+                                    : "正在执行 \(config.model.displayName) 2x 超分 \(slot.upscaleProgress)"
+                            )
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.white)
                         }

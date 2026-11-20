@@ -291,11 +291,14 @@ public final class Anime4K: @unchecked Sendable {
                 textureMap[bufferIndex][shader.outputTextureName] = intermediate
             }
 
-            let outputTex = textureMap[bufferIndex][shader.outputTextureName]!
+            guard let outputTex = textureMap[bufferIndex][shader.outputTextureName] else {
+                throw Anime4KError.encoderFail("未找到目标输出纹理: \(shader.outputTextureName)")
+            }
             encoder.setTexture(outputTex, index: shader.inputTextureNames.count)
 
-            let w = pipelineState.threadExecutionWidth
-            let h = max(1, pipelineState.maxTotalThreadsPerThreadgroup / w)
+            let maxThreads = max(1, min(pipelineState.maxTotalThreadsPerThreadgroup, 256))
+            let w = max(1, min(pipelineState.threadExecutionWidth, maxThreads))
+            let h = max(1, maxThreads / w)
             let threadsPerThreadgroup = MTLSizeMake(w, h, 1)
             let threadgroupsPerGrid = MTLSize(
                 width: (outputTex.width + w - 1) / w,
@@ -306,21 +309,34 @@ public final class Anime4K: @unchecked Sendable {
             encoder.endEncoding()
         }
 
-        return textureMap[bufferIndex]["output"]!
+        // 安全获取最终输出纹理，杜绝强制解包闪退
+        guard bufferIndex >= 0 && bufferIndex < textureMap.count else {
+            return input
+        }
+        if let out = textureMap[bufferIndex]["output"] {
+            return out
+        }
+        if let lastShader = enabledShaders.last, let out = textureMap[bufferIndex][lastShader.outputTextureName] {
+            return out
+        }
+        return input
     }
 
-    /// 编码并将最终超分结果写入目标输出纹理
-    public func encode(_ device: MTLDevice, cmdBuf: MTLCommandBuffer, input: MTLTexture, output: MTLTexture) throws {
-        let outTex = try encode(device, cmdBuf: cmdBuf, input: input)
+    /// 仅编码最终 CenterResize，将上一阶段输出纹理写入目标 RGBA8 输出纹理
+    public func encodeFinalResize(cmdBuf: MTLCommandBuffer, input: MTLTexture, output: MTLTexture) throws {
         guard let encoder = cmdBuf.makeComputeCommandEncoder() else {
             throw Anime4KError.encoderCreationFail("FinalResizeEncoder")
         }
-        encoder.setComputePipelineState(finalResizePS)
-        encoder.setTexture(outTex, index: 0)
+        guard let finalPS = finalResizePS else {
+            throw Anime4KError.encoderFail("缺失最终缩放着色器管线")
+        }
+        encoder.setComputePipelineState(finalPS)
+        encoder.setTexture(input, index: 0)
         encoder.setTexture(output, index: 1)
 
-        let w = finalResizePS.threadExecutionWidth
-        let h = max(1, finalResizePS.maxTotalThreadsPerThreadgroup / w)
+        let maxThreads = max(1, min(finalPS.maxTotalThreadsPerThreadgroup, 256))
+        let w = max(1, min(finalPS.threadExecutionWidth, maxThreads))
+        let h = max(1, maxThreads / w)
         let threadsPerThreadgroup = MTLSizeMake(w, h, 1)
         let threadgroupsPerGrid = MTLSize(
             width: (output.width + w - 1) / w,
@@ -329,6 +345,12 @@ public final class Anime4K: @unchecked Sendable {
         )
         encoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
         encoder.endEncoding()
+    }
+
+    /// 编码并将最终超分结果写入目标输出纹理
+    public func encode(_ device: MTLDevice, cmdBuf: MTLCommandBuffer, input: MTLTexture, output: MTLTexture) throws {
+        let outTex = try encode(device, cmdBuf: cmdBuf, input: input)
+        try encodeFinalResize(cmdBuf: cmdBuf, input: outTex, output: output)
     }
 
     /// 释放本次推理产生的全部中间 GPU 纹理（保留已编译的 MTLLibrary 与着色器管线状态，大幅降低大图显存驻留）
@@ -388,13 +410,16 @@ public final class Anime4K: @unchecked Sendable {
     }
 
     private static func loadDefaultLibrary(device: MTLDevice) -> MTLLibrary? {
-        if let url = Bundle.main.url(forResource: "default", withExtension: "metallib", subdirectory: "Anime4K_Shaders"),
-           let lib = try? device.makeLibrary(URL: url) {
-            return lib
-        }
-        if let url = Bundle.main.url(forResource: "default", withExtension: "metallib"),
-           let lib = try? device.makeLibrary(URL: url) {
-            return lib
+        // 内置 default.metallib 为 iOS 16+ (Metal 3.0) 目标预编译，iOS 15 直接跳过走内联回退编译，避免无效加载失败
+        if #available(iOS 16.0, *) {
+            if let url = Bundle.main.url(forResource: "default", withExtension: "metallib", subdirectory: "Anime4K_Shaders"),
+               let lib = try? device.makeLibrary(URL: url) {
+                return lib
+            }
+            if let url = Bundle.main.url(forResource: "default", withExtension: "metallib"),
+               let lib = try? device.makeLibrary(URL: url) {
+                return lib
+            }
         }
         return device.makeDefaultLibrary()
     }
@@ -411,13 +436,16 @@ public final class Anime4K: @unchecked Sendable {
             texture2d<float, access::write> output [[texture(1)]],
             uint2 gid [[thread_position_in_grid]]
         ) {
+            if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+                return;
+            }
             float inW = input.get_width();
             float inH = input.get_height();
             float outW = output.get_width();
             float outH = output.get_height();
             float scale = min(outW / inW, outH / inH);
-            float outValidW = round(inW * scale);
-            float outValidH = round(inH * scale);
+            float outValidW = max(round(inW * scale), 1.0);
+            float outValidH = max(round(inH * scale), 1.0);
             float outPadW = round((outW - outValidW) / 2);
             float outPadH = round((outH - outValidH) / 2);
             float2 nPos = float2((float(gid.x) - outPadW + 0.5) / outValidW, (float(gid.y) - outPadH + 0.5) / outValidH);

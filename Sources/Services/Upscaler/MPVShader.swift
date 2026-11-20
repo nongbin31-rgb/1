@@ -140,10 +140,14 @@ public struct MPVShader: Sendable {
 
         var hookCallArgs = extraCallArgs
         hookCallArgs.removeLast(2)
-        // 归一化纹理坐标为 [0, 1]
+        // 归一化纹理坐标为 [0, 1]，增加越界与除零保护以兼容全系 Metal GPU
         body += """
         kernel void \(functionName)(\(entryArgs)) {
-            float2 mtlPos = float2(gid) / (float2(output.get_width(), output.get_height()) - float2(1, 1));
+            if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+                return;
+            }
+            float2 denom = max(float2(output.get_width(), output.get_height()) - float2(1.0, 1.0), float2(1.0, 1.0));
+            float2 mtlPos = float2(gid) / denom;
             output.write(hook(\(hookCallArgs)), gid);
         }
 

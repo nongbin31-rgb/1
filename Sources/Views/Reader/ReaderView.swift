@@ -8,11 +8,13 @@ private final class ReaderPageSlot: ObservableObject {
     @Published var displayImage: UIImage?
     @Published var isLoading = true
     @Published var isUpscaling = false
+    @Published var upscaleProgress: String = ""
     @Published var errorMessage: String?
 
     private var lastAppliedConfig: ImageUpscalerConfig?
     private var lastIsEnabled: Bool?
     private var lastAppliedFilterSignature: String?
+    private var loadGeneration: UInt64 = 0
 
     func loadAndProcess(
         page: MangaPage,
@@ -43,6 +45,9 @@ private final class ReaderPageSlot: ObservableObject {
             }
         }
 
+        loadGeneration &+= 1
+        let currentGeneration = loadGeneration
+
         if originalImage == nil {
             isLoading = true
             do {
@@ -50,15 +55,20 @@ private final class ReaderPageSlot: ObservableObject {
                     urlString: page.imageURL,
                     headers: page.headers
                 )
+                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
                 self.originalImage = img
                 self.displayImage = img
+            } catch is CancellationError {
+                return
             } catch {
+                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
                 errorMessage = error.localizedDescription
                 isLoading = false
                 return
             }
             isLoading = false
             await Task.yield()
+            guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
         }
 
         guard let original = originalImage else { return }
@@ -94,13 +104,26 @@ private final class ReaderPageSlot: ObservableObject {
         }
 
         isUpscaling = true
-        defer { isUpscaling = false }
+        upscaleProgress = ""
+        defer {
+            if loadGeneration == currentGeneration {
+                isUpscaling = false
+                upscaleProgress = ""
+            }
+        }
         let result = await PageUpscalerPipeline.shared.process(
             image: original,
             pageKey: page.imageURL,
             config: config,
-            isEnabled: isEnabled
+            isEnabled: isEnabled,
+            progress: { [weak self] pct in
+                Task { @MainActor [weak self] in
+                    guard let self, self.loadGeneration == currentGeneration else { return }
+                    self.upscaleProgress = pct
+                }
+            }
         )
+        guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
         self.processed = result
         self.lastIsEnabled = true
         self.lastAppliedConfig = config
@@ -128,6 +151,9 @@ private final class ReaderPageSlot: ObservableObject {
 
     /// 释放大图内存，防止 LazyVStack 长列表堆积爆内存
     func releaseMemoryPreservingState() {
+        loadGeneration &+= 1
+        isUpscaling = false
+        upscaleProgress = ""
         originalImage = nil
         processed = nil
         displayImage = nil
@@ -341,6 +367,7 @@ public struct ReaderView: View {
             ReaderImageUpscalerConfigView(
                 imageForPreview: resolveCurrentImageForPreview()
             )
+            .environmentObject(store)
         }
         .fullScreenCover(isPresented: $showImageFilterSheet) {
             ReaderImageFilterView(
@@ -1072,7 +1099,11 @@ private struct VerticalMangaPageCell: View {
                 if slot.isUpscaling {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.75).tint(.white)
-                        Text("\(config.model.displayName) 超分中")
+                        Text(
+                            slot.upscaleProgress.isEmpty
+                                ? "\(config.model.displayName) 超分中"
+                                : "\(config.model.displayName) 超分中 \(slot.upscaleProgress)"
+                        )
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.white)
                     }
@@ -1151,28 +1182,8 @@ private struct VerticalMangaPageCell: View {
         .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)::\(filterConfig.cacheSignature)") {
             await triggerLoad()
         }
-        .onChange(of: isEnabled) { _ in
-            Task {
-                await triggerLoad()
-            }
-        }
-        .onChange(of: config.reloadKey) { _ in
-            Task {
-                await triggerLoad()
-            }
-        }
-        .onChange(of: filterConfig.cacheSignature) { _ in
-            Task {
-                await triggerLoad()
-            }
-        }
         .onDisappear {
             slot.releaseMemoryPreservingState()
-        }
-        .onAppear {
-            if slot.originalImage == nil {
-                Task { await triggerLoad() }
-            }
         }
     }
 
