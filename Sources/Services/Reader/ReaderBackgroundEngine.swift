@@ -126,13 +126,21 @@ public class ReaderBackgroundContainerView: UIView {
         didSet {
             updateTextureImage()
             if currentBackground == .texture {
-                baseColorView.backgroundColor = currentTexture.basePaperColor
+                baseColorView.backgroundColor = blendedPaperColor()
             }
         }
     }
 
     public var textureOpacity: CGFloat = 0.4 {
         didSet { textureOverlayView.alpha = textureOpacity }
+    }
+
+    public var textureTintOpacity: CGFloat = 1.0 {
+        didSet {
+            if currentBackground == .texture {
+                baseColorView.backgroundColor = blendedPaperColor()
+            }
+        }
     }
 
     public var showSpineShadow: Bool = true {
@@ -251,9 +259,24 @@ public class ReaderBackgroundContainerView: UIView {
         case .texture:
             immersiveBackgroundView.isHidden = true
             textureOverlayView.isHidden = false
-            baseColorView.backgroundColor = currentTexture.basePaperColor
+            baseColorView.backgroundColor = blendedPaperColor()
             updateTextureImage()
         }
+    }
+
+    private func blendedPaperColor() -> UIColor {
+        let t = min(max(textureTintOpacity, 0.0), 1.0)
+        var r: CGFloat = 1.0
+        var g: CGFloat = 1.0
+        var b: CGFloat = 1.0
+        var a: CGFloat = 1.0
+        currentTexture.basePaperColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return UIColor(
+            red: (1.0 - t) + t * r,
+            green: (1.0 - t) + t * g,
+            blue: (1.0 - t) + t * b,
+            alpha: 1.0
+        )
     }
 
     private func updateTextureImage() {

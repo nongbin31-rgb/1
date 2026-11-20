@@ -25,6 +25,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public let background: ReaderBackground
     public let texture: ReaderTextureType
     public let textureOpacity: Double
+    public let textureTintOpacity: Double
     public let textureTarget: ReaderTextureTarget
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
@@ -44,6 +45,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
@@ -62,6 +64,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
@@ -97,6 +100,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
             background: background,
             texture: texture,
             textureOpacity: textureOpacity,
+            textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
             showDividingLine: showDividingLine
         )
@@ -247,6 +251,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
         background: ReaderBackground,
         texture: ReaderTextureType,
         textureOpacity: Double,
+        textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget,
         showDividingLine: Bool
     ) {
@@ -260,6 +265,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             background: background,
             texture: texture,
             textureOpacity: textureOpacity,
+            textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
             showDividingLine: showDividingLine
         )
@@ -273,6 +279,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             background: background,
             texture: texture,
             textureOpacity: textureOpacity,
+            textureTintOpacity: textureTintOpacity,
             textureTarget: textureTarget,
             showDividingLine: showDividingLine
         )
@@ -318,6 +325,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             background: parentConfig.background,
             texture: parentConfig.texture,
             textureOpacity: parentConfig.textureOpacity,
+            textureTintOpacity: parentConfig.textureTintOpacity,
             textureTarget: parentConfig.textureTarget,
             showDividingLine: parentConfig.showDividingLine,
             onSingleTap: parentConfig.onSingleTap,

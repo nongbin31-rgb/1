@@ -21,6 +21,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let background: ReaderBackground
     public let texture: ReaderTextureType
     public let textureOpacity: Double
+    public let textureTintOpacity: Double
     public let textureTarget: ReaderTextureTarget
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
@@ -41,6 +42,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         background: ReaderBackground = .followSystem,
         texture: ReaderTextureType = .classic,
         textureOpacity: Double = 0.4,
+        textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
@@ -60,6 +62,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.background = background
         self.texture = texture
         self.textureOpacity = textureOpacity
+        self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
@@ -122,6 +125,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                     background: background,
                     texture: texture,
                     textureOpacity: textureOpacity,
+                    textureTintOpacity: textureTintOpacity,
                     textureTarget: textureTarget,
                     showSpineShadow: showSpineShadow,
                     showDividingLine: showDividingLine
@@ -258,6 +262,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 background: parent.background,
                 texture: parent.texture,
                 textureOpacity: parent.textureOpacity,
+                textureTintOpacity: parent.textureTintOpacity,
                 textureTarget: parent.textureTarget,
                 showDividingLine: parent.showDividingLine,
                 onSingleTap: parent.onSingleTap,
