@@ -241,6 +241,53 @@ public struct ReaderBackgroundPickerSheet: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
+
+            if store.readerTextureTarget == .imageOnly {
+                Divider()
+                    .padding(.vertical, 4)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("四周拼接背景")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text("画面纹理 + 自定义周围背景")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 6) {
+                        ForEach(ReaderImageOnlyBackdrop.allCases) { backdrop in
+                            let isSelected = store.readerImageOnlyBackdrop == backdrop
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    store.readerImageOnlyBackdrop = backdrop
+                                }
+                            } label: {
+                                VStack(spacing: 5) {
+                                    Image(systemName: backdrop.systemIcon)
+                                        .font(.system(size: 16, weight: isSelected ? .bold : .regular))
+                                    Text(backdrop.title)
+                                        .font(.caption2.weight(isSelected ? .bold : .medium))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.75)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 9)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(isSelected ? Color.accentColor.opacity(0.15) : Color(uiColor: .secondarySystemBackground))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.8)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
         }
         .padding(14)
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))

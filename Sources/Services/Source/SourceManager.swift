@@ -55,6 +55,9 @@ public final class AppStore: ObservableObject {
     @Published public var readerTextureTarget: ReaderTextureTarget = .both {
         didSet { save(readerTextureTarget, key: Keys.readerTextureTarget) }
     }
+    @Published public var readerImageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint {
+        didSet { save(readerImageOnlyBackdrop, key: Keys.readerImageOnlyBackdrop) }
+    }
     @Published public var showSpineDividingLine: Bool = true {
         didSet { save(showSpineDividingLine, key: Keys.spineDividingLine) }
     }
@@ -87,6 +90,7 @@ public final class AppStore: ObservableObject {
         static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
         static let readerTextureTintOpacity = "keda_online_reader_texture_tint_opacity_v1"
         static let readerTextureTarget = "keda_online_reader_texture_target_v1"
+        static let readerImageOnlyBackdrop = "keda_online_reader_image_only_backdrop_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
         static let searchHistory = "keda_online_search_history_v1"
@@ -148,6 +152,7 @@ public final class AppStore: ObservableObject {
         self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4
         self.readerTextureTintOpacity = load(key: Keys.readerTextureTintOpacity) ?? 1.0
         self.readerTextureTarget = load(key: Keys.readerTextureTarget) ?? .both
+        self.readerImageOnlyBackdrop = load(key: Keys.readerImageOnlyBackdrop) ?? .paperTint
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
         self.searchHistory = load(key: Keys.searchHistory) ?? []

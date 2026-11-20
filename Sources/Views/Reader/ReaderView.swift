@@ -283,6 +283,10 @@ public struct ReaderView: View {
             }
         }
         .onChange(of: currentPageIndex) { newIndex in
+            if pages.indices.contains(newIndex),
+               let cached = OnlineImageLoader.shared.cachedImage(for: pages[newIndex].imageURL) {
+                capturedPreviewImage = cached
+            }
             guard !isRestoringInitialPage, !pages.isEmpty else { return }
             store.updateProgress(manga: manga, chapter: currentChapter, pageIndex: newIndex)
         }
@@ -341,38 +345,71 @@ public struct ReaderView: View {
         case .dark:
             Color.black.ignoresSafeArea()
         case .immersive:
-            GeometryReader { geo in
-                ZStack {
-                    Color.black
-                    if let bgImg = capturedPreviewImage {
-                        Image(uiImage: bgImg)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .clipped()
-                            .blur(radius: 45)
-                            .opacity(0.8)
-                    }
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-                .clipped()
-            }
-            .ignoresSafeArea()
+            immersiveBackdropView
+                .ignoresSafeArea()
         case .texture:
-            ZStack {
-                Color.white
-                if store.readerTextureTintOpacity > 0.001 {
-                    store.readerTextureType.basePaperSwiftUIColor
-                        .opacity(store.readerTextureTintOpacity)
-                }
-                if store.readerTextureTarget == .both || store.readerTextureTarget == .backgroundOnly {
+            if store.readerTextureTarget == .imageOnly {
+                imageOnlyBackdropView
+                    .ignoresSafeArea()
+            } else {
+                ZStack {
+                    paperTintBackdropView
                     PaperTextureOverlayView(
                         texture: store.readerTextureType,
                         opacity: store.readerTextureOpacity
                     )
                 }
+                .ignoresSafeArea()
             }
-            .ignoresSafeArea()
+        }
+    }
+
+    private var paperTintBackdropView: some View {
+        ZStack {
+            Color.white
+            if store.readerTextureTintOpacity > 0.001 {
+                store.readerTextureType.basePaperSwiftUIColor
+                    .opacity(store.readerTextureTintOpacity)
+            }
+        }
+    }
+
+    private var immersiveBackdropView: some View {
+        GeometryReader { geo in
+            let bgImg = capturedPreviewImage
+                ?? (pages.indices.contains(currentPageIndex)
+                    ? OnlineImageLoader.shared.cachedImage(for: pages[currentPageIndex].imageURL)
+                    : nil)
+            ZStack {
+                Color.black
+                if let bgImg {
+                    Image(uiImage: bgImg)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .blur(radius: 45)
+                        .opacity(0.8)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+        }
+    }
+
+    @ViewBuilder
+    private var imageOnlyBackdropView: some View {
+        switch store.readerImageOnlyBackdrop {
+        case .paperTint:
+            paperTintBackdropView
+        case .followSystem:
+            Color(uiColor: .systemBackground)
+        case .light:
+            Color.white
+        case .dark:
+            Color.black
+        case .immersive:
+            immersiveBackdropView
         }
     }
 
@@ -407,6 +444,7 @@ public struct ReaderView: View {
                                         textureOpacity: store.readerTextureOpacity,
                                         textureTintOpacity: store.readerTextureTintOpacity,
                                         textureTarget: store.readerTextureTarget,
+                                        imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                                         texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
                                         textureReferenceSize: geo.size,
                                         onStatusUpdate: { text in
@@ -463,6 +501,7 @@ public struct ReaderView: View {
                 textureOpacity: store.readerTextureOpacity,
                 textureTintOpacity: store.readerTextureTintOpacity,
                 textureTarget: store.readerTextureTarget,
+                imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
@@ -494,6 +533,7 @@ public struct ReaderView: View {
                 textureOpacity: store.readerTextureOpacity,
                 textureTintOpacity: store.readerTextureTintOpacity,
                 textureTarget: store.readerTextureTarget,
+                imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
@@ -526,6 +566,7 @@ public struct ReaderView: View {
                 textureOpacity: store.readerTextureOpacity,
                 textureTintOpacity: store.readerTextureTintOpacity,
                 textureTarget: store.readerTextureTarget,
+                imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 currentPageIndex: $currentPageIndex,
                 onSingleTap: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -889,6 +930,7 @@ private struct VerticalMangaPageCell: View {
     var textureOpacity: Double = 0.4
     var textureTintOpacity: Double = 1.0
     var textureTarget: ReaderTextureTarget = .both
+    var imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     var texturePhaseAnchor: TexturePhaseAnchor = .local
     var textureReferenceSize: CGSize? = nil
     let onStatusUpdate: (String) -> Void
@@ -1081,7 +1123,12 @@ private struct VerticalMangaPageCell: View {
         switch background {
         case .light:
             return .black
+        case .followSystem:
+            return .primary
         case .texture:
+            if textureTarget == .imageOnly {
+                return imageOnlyBackdrop.placeholderTextColor
+            }
             return Color(red: 0.2, green: 0.18, blue: 0.15)
         default:
             return .white

@@ -38,6 +38,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let textureOpacity: Double
     public let textureTintOpacity: Double
     public let textureTarget: ReaderTextureTarget
+    public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     @Binding public var currentPageIndex: Int
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
@@ -58,6 +59,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
@@ -77,6 +79,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.textureOpacity = textureOpacity
         self.textureTintOpacity = textureTintOpacity
         self.textureTarget = textureTarget
+        self.imageOnlyBackdrop = imageOnlyBackdrop
         self._currentPageIndex = currentPageIndex
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
@@ -111,7 +114,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
-            textureTarget: textureTarget
+            textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop
         )
 
         uiViewController.applyConfiguration(
@@ -162,6 +166,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 textureOpacity: parent.textureOpacity,
                 textureTintOpacity: parent.textureTintOpacity,
                 textureTarget: parent.textureTarget,
+                imageOnlyBackdrop: parent.imageOnlyBackdrop,
                 onSingleTap: parent.onSingleTap,
                 onStatusUpdate: parent.onStatusUpdate,
                 onZoomChanged: { [weak collectionView] scale in
@@ -272,7 +277,8 @@ public final class SnapPageViewController: UIViewController {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
-        textureTarget: ReaderTextureTarget
+        textureTarget: ReaderTextureTarget,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
         guard isViewLoaded, let cv = collectionView else { return }
         for cell in cv.visibleCells {
@@ -288,7 +294,8 @@ public final class SnapPageViewController: UIViewController {
                     texture: texture,
                     textureOpacity: textureOpacity,
                     textureTintOpacity: textureTintOpacity,
-                    textureTarget: textureTarget
+                    textureTarget: textureTarget,
+                    imageOnlyBackdrop: imageOnlyBackdrop
                 )
             }
         }
@@ -305,7 +312,8 @@ public final class SnapPageViewController: UIViewController {
                 texture: texture,
                 textureOpacity: textureOpacity,
                 textureTintOpacity: textureTintOpacity,
-                textureTarget: textureTarget
+                textureTarget: textureTarget,
+                imageOnlyBackdrop: imageOnlyBackdrop
             )
         }
     }
@@ -324,7 +332,8 @@ public final class SnapPageViewController: UIViewController {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
-        textureTarget: ReaderTextureTarget
+        textureTarget: ReaderTextureTarget,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
         guard isViewLoaded, let cv = collectionView else { return }
         for cell in cv.visibleCells {
@@ -334,7 +343,8 @@ public final class SnapPageViewController: UIViewController {
                     texture: texture,
                     textureOpacity: textureOpacity,
                     textureTintOpacity: textureTintOpacity,
-                    textureTarget: textureTarget
+                    textureTarget: textureTarget,
+                    imageOnlyBackdrop: imageOnlyBackdrop
                 )
             }
         }
@@ -515,6 +525,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentTextureOpacity: Double = 0.4
     private var currentTextureTintOpacity: Double = 1.0
     private var currentTextureTarget: ReaderTextureTarget = .both
+    private var currentImageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     private var currentOnSingleTap: (() -> Void)?
     private var currentOnStatusUpdate: ((String) -> Void)?
     private var currentOnZoomChanged: ((CGFloat) -> Void)?
@@ -545,6 +556,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         textureOpacity: Double = 0.4,
         textureTintOpacity: Double = 1.0,
         textureTarget: ReaderTextureTarget = .both,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: @escaping (CGFloat) -> Void,
@@ -562,6 +574,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentTextureOpacity = textureOpacity
         self.currentTextureTintOpacity = textureTintOpacity
         self.currentTextureTarget = textureTarget
+        self.currentImageOnlyBackdrop = imageOnlyBackdrop
         self.currentOnSingleTap = onSingleTap
         self.currentOnStatusUpdate = onStatusUpdate
         self.currentOnZoomChanged = onZoomChanged
@@ -593,7 +606,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
-        textureTarget: ReaderTextureTarget
+        textureTarget: ReaderTextureTarget,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
         guard currentPage != nil else { return }
 
@@ -610,6 +624,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             || currentTextureOpacity != textureOpacity
             || currentTextureTintOpacity != textureTintOpacity
             || currentTextureTarget != textureTarget
+            || currentImageOnlyBackdrop != imageOnlyBackdrop
 
         guard upscalerChanged || layoutChanged || backgroundChanged else {
             return
@@ -626,6 +641,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentTextureOpacity = textureOpacity
         self.currentTextureTintOpacity = textureTintOpacity
         self.currentTextureTarget = textureTarget
+        self.currentImageOnlyBackdrop = imageOnlyBackdrop
 
         if let existing = hostingController {
             existing.rootView = SnapPageRootView(pageView: buildPageView())
@@ -645,7 +661,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
         texture: ReaderTextureType,
         textureOpacity: Double,
         textureTintOpacity: Double = 1.0,
-        textureTarget: ReaderTextureTarget
+        textureTarget: ReaderTextureTarget,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     ) {
         updateConfiguration(
             config: currentConfig ?? ImageUpscalerConfig(),
@@ -657,7 +674,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
             texture: texture,
             textureOpacity: textureOpacity,
             textureTintOpacity: textureTintOpacity,
-            textureTarget: textureTarget
+            textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop
         )
     }
 
@@ -671,6 +689,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
                 textureOpacity: currentTextureOpacity,
                 textureTintOpacity: currentTextureTintOpacity,
                 textureTarget: currentTextureTarget,
+                imageOnlyBackdrop: currentImageOnlyBackdrop,
                 onSingleTap: {},
                 onStatusUpdate: { _ in }
             )
@@ -689,6 +708,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             textureOpacity: currentTextureOpacity,
             textureTintOpacity: currentTextureTintOpacity,
             textureTarget: currentTextureTarget,
+            imageOnlyBackdrop: currentImageOnlyBackdrop,
             onSingleTap: currentOnSingleTap ?? {},
             onStatusUpdate: currentOnStatusUpdate ?? { _ in },
             onZoomChanged: currentOnZoomChanged,
