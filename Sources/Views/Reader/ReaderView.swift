@@ -287,6 +287,18 @@ public struct ReaderView: View {
     @State private var activeLayoutMode: ReaderLayoutMode = .verticalWebtoon
     @State private var hasInitializedLayout = false
     @StateObject private var preloader = ReaderPreloadCoordinator()
+    @ObservedObject private var thumbnailStore = ReaderThumbnailStore.shared
+
+    // 进度条预览交互与原点回溯状态
+    @State private var isScrubbingProgress = false
+    @State private var scrubFraction: Double = 0
+    @State private var scrubSessionOriginIndex = 0
+    @State private var returnAnchorPageIndex: Int? = nil
+    @State private var anchorJumpDestinationIndex: Int? = nil
+    @State private var isProgrammaticJumping = false
+    @State private var programmaticJumpToken = UUID()
+    @State private var externalJumpNonce = 0
+    @State private var cachedPageAspectRatios: [String: CGFloat] = [:]
 
     public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter, initialPageIndex: Int? = nil) {
         self.manga = manga
@@ -359,8 +371,25 @@ public struct ReaderView: View {
                         .clipped()
                 }
 
+                if isScrubbingProgress && pages.count > 1 {
+                    let insets = safeAreaInsetsResolved
+                    ReaderScrubberPreviewOverlay(
+                        pages: pages,
+                        scrubFraction: scrubFraction,
+                        originIndex: scrubSessionOriginIndex,
+                        returnAnchorIndex: returnAnchorPageIndex,
+                        isRightToLeft: activeLayoutMode == .pagedRTL,
+                        upscalerConfig: store.upscalerConfig,
+                        enableUpscaler: store.enableImageUpscaler,
+                        bottomReservedHeight: insets.bottom + 108,
+                        thumbnailStore: thumbnailStore
+                    )
+                    .transition(.opacity)
+                    .zIndex(11)
+                }
+
                 chromeOverlay
-                    .zIndex(10)
+                    .zIndex(12)
 
                 // 当处于对比模式且导航栏收起时，提供常驻半透明快捷退出按钮，彻底解决无法退出的死锁
                 if isCompareMode {
@@ -394,7 +423,7 @@ public struct ReaderView: View {
                     .scaleEffect(showChrome ? 0.92 : 1.0)
                     .allowsHitTesting(!showChrome)
                     .animation(.spring(response: 0.30, dampingFraction: 0.92), value: showChrome)
-                    .zIndex(11)
+                    .zIndex(13)
                 }
             }
             .frame(width: windowGeo.size.width, height: windowGeo.size.height)
@@ -413,6 +442,7 @@ public struct ReaderView: View {
         }
         .onDisappear {
             preloader.cancelAll()
+            thumbnailStore.cancelHoverPrefetch()
             if !pages.isEmpty {
                 store.updateProgress(
                     manga: manga,
@@ -428,6 +458,17 @@ public struct ReaderView: View {
             if pages.indices.contains(newIndex),
                let cached = OnlineImageLoader.shared.cachedMemoryImage(for: pages[newIndex].imageURL) {
                 capturedPreviewImage = cached
+            }
+            if let anchor = returnAnchorPageIndex {
+                if newIndex == anchor {
+                    returnAnchorPageIndex = nil
+                    anchorJumpDestinationIndex = nil
+                } else if !isProgrammaticJumping,
+                          let dest = anchorJumpDestinationIndex,
+                          abs(newIndex - dest) > 5 {
+                    returnAnchorPageIndex = nil
+                    anchorJumpDestinationIndex = nil
+                }
             }
             preloader.updateCurrentPage(newIndex)
             guard !isRestoringInitialPage, !pages.isEmpty else { return }
@@ -604,12 +645,19 @@ public struct ReaderView: View {
                                         imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                                         texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
                                         textureReferenceSize: geo.size,
+                                        cachedAspectRatio: cachedPageAspectRatios[page.id],
                                         onStatusUpdate: { text in
                                             if page.index == currentPageIndex {
                                                 currentHUDText = text
                                             }
                                         },
                                         onImageLoaded: { img in
+                                            if img.size.width > 0, img.size.height > 0 {
+                                                let aspect = img.size.height / img.size.width
+                                                if cachedPageAspectRatios[page.id] == nil {
+                                                    cachedPageAspectRatios[page.id] = aspect
+                                                }
+                                            }
                                             if page.index == currentPageIndex {
                                                 capturedPreviewImage = img
                                             }
@@ -624,7 +672,7 @@ public struct ReaderView: View {
                                     .id(page.index)
                                     .padding(.bottom, -pixelOverlap)
                                     .onAppear {
-                                        if !isRestoringInitialPage {
+                                        if !isRestoringInitialPage && !isProgrammaticJumping {
                                             currentPageIndex = page.index
                                         }
                                     }
@@ -667,6 +715,7 @@ public struct ReaderView: View {
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
+                externalJumpNonce: externalJumpNonce,
                 onSingleTap: {
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
@@ -705,6 +754,7 @@ public struct ReaderView: View {
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 showDividingLine: store.showSpineDividingLine,
                 currentPageIndex: $currentPageIndex,
+                externalJumpNonce: externalJumpNonce,
                 onSingleTap: {
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
@@ -743,6 +793,7 @@ public struct ReaderView: View {
                 textureTarget: store.readerTextureTarget,
                 imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                 currentPageIndex: $currentPageIndex,
+                externalJumpNonce: externalJumpNonce,
                 onSingleTap: {
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
@@ -766,182 +817,223 @@ public struct ReaderView: View {
 
     private var chromeOverlay: some View {
         let insets = safeAreaInsetsResolved
-        return VStack(spacing: 0) {
-            // 顶部导航栏
-            HStack(spacing: 12) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
+        return ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                // 顶部导航栏（拖动预览期间平滑隐退，聚焦微弧画廊）
+                HStack(spacing: 12) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(currentChapter.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(currentHUDText.isEmpty ? (store.enableImageUpscaler ? store.upscalerConfig.summaryText : "原图显示") : currentHUDText)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.8))
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(currentChapter.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text(currentHUDText.isEmpty ? (store.enableImageUpscaler ? store.upscalerConfig.summaryText : "原图显示") : currentHUDText)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        if !store.enableImageUpscaler {
+                            currentHUDText = "请先开启画质增强"
+                            showUpscalerSheet = true
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isCompareMode.toggle()
+                            }
+                        }
+                    } label: {
+                        Label(isCompareMode ? "退出对比" : "对比", systemImage: "rectangle.split.2x1")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                isCompareMode ? Color.accentColor : Color.white.opacity(0.18),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(.white)
+                    }
                 }
+                .padding(.leading, max(insets.left, 16))
+                .padding(.trailing, max(insets.right, 16))
+                .padding(.top, insets.top + 8)
+                .padding(.bottom, 14)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.88),
+                            Color.black.opacity(0.70),
+                            Color.black.opacity(0.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .offset(y: showChrome ? 0 : -(insets.top + 88))
+                .opacity(showChrome && !isScrubbingProgress ? 1 : 0)
+                .allowsHitTesting(showChrome && !isScrubbingProgress)
 
                 Spacer()
 
-                Button {
-                    if !store.enableImageUpscaler {
-                        currentHUDText = "请先开启画质增强"
-                        showUpscalerSheet = true
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isCompareMode.toggle()
-                        }
-                    }
-                } label: {
-                    Label(isCompareMode ? "退出对比" : "对比", systemImage: "rectangle.split.2x1")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            isCompareMode ? Color.accentColor : Color.white.opacity(0.18),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(.white)
-                }
-            }
-            .padding(.leading, max(insets.left, 16))
-            .padding(.trailing, max(insets.right, 16))
-            .padding(.top, insets.top + 8)
-            .padding(.bottom, 14)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.88),
-                        Color.black.opacity(0.70),
-                        Color.black.opacity(0.0)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .offset(y: showChrome ? 0 : -(insets.top + 88))
-            .opacity(showChrome ? 1 : 0)
-            .allowsHitTesting(showChrome)
-
-            Spacer()
-
-            // 底部控制栏
-            VStack(spacing: 12) {
-                if pages.count > 1 {
-                    HStack(spacing: 10) {
-                        Text("\(currentPageIndex + 1)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.white)
-                            .frame(width: 28)
-
-                        Slider(
-                            value: Binding(
-                                get: { Double(currentPageIndex) },
-                                set: { val in
-                                    let newIndex = Int(val.rounded())
-                                    currentPageIndex = newIndex
-                                    if activeLayoutMode == .verticalWebtoon {
-                                        requestedScrollIndex = newIndex
-                                    }
+                // 底部控制栏（拖动轨道常驻不销毁，防止触摸流中断）
+                VStack(spacing: 12) {
+                    if pages.count > 1 {
+                        ReaderScrubberTrackBar(
+                            totalPages: pages.count,
+                            currentPageIndex: currentPageIndex,
+                            isScrubbing: isScrubbingProgress,
+                            scrubFraction: scrubFraction,
+                            isRightToLeft: activeLayoutMode == .pagedRTL,
+                            originAnchorIndex: isScrubbingProgress
+                                ? (returnAnchorPageIndex ?? scrubSessionOriginIndex)
+                                : returnAnchorPageIndex,
+                            onScrubBegin: { initialFraction in
+                                scrubSessionOriginIndex = currentPageIndex
+                                scrubFraction = initialFraction
+                                withAnimation(.easeOut(duration: 0.16)) {
+                                    isScrubbingProgress = true
                                 }
-                            ),
-                            in: 0...Double(max(pages.count - 1, 1)),
-                            step: 1
+                                let focusIdx = min(max(Int(initialFraction.rounded()), 0), max(pages.count - 1, 0))
+                                thumbnailStore.scheduleHoverUpdate(pages: pages, focusIndex: focusIdx)
+                            },
+                            onScrubChanged: { newFraction in
+                                scrubFraction = newFraction
+                                let focusIdx = min(max(Int(newFraction.rounded()), 0), max(pages.count - 1, 0))
+                                thumbnailStore.scheduleHoverUpdate(pages: pages, focusIndex: focusIdx)
+                            },
+                            onScrubEnd: { finalIndex in
+                                thumbnailStore.cancelHoverPrefetch()
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    isScrubbingProgress = false
+                                }
+                                commitProgressJump(
+                                    to: finalIndex,
+                                    originIndex: scrubSessionOriginIndex,
+                                    recordAnchor: true
+                                )
+                            }
                         )
-                        .tint(.accentColor)
-
-                        Text("\(pages.count)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.8))
-                            .frame(width: 28)
                     }
-                }
 
-                HStack {
-                    Button {
-                        switchChapter(delta: -1)
-                    } label: {
-                        Label("上一话", systemImage: "backward.end")
-                            .font(.caption)
-                    }
-                    .disabled((currentChapterArrayIndex ?? 0) <= 0)
-
-                    Spacer()
-
-                    Button {
-                        showBackgroundPickerSheet = true
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: store.preferredReaderBackground.systemIcon)
-                            Text(store.preferredReaderBackground == .texture ? store.readerTextureType.shortName : store.preferredReaderBackground.title)
+                    HStack {
+                        Button {
+                            switchChapter(delta: -1)
+                        } label: {
+                            Label("上一话", systemImage: "backward.end")
+                                .font(.caption)
                         }
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(Color.white.opacity(0.2), in: Capsule())
-                        .foregroundStyle(.white)
-                    }
+                        .disabled((currentChapterArrayIndex ?? 0) <= 0)
 
-                    Spacer()
+                        Spacer()
 
-                    Button {
-                        showUpscalerSheet = true
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "sparkles")
-                            Text(store.enableImageUpscaler ? store.upscalerConfig.model.displayName : "画质增强")
+                        Button {
+                            showBackgroundPickerSheet = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: store.preferredReaderBackground.systemIcon)
+                                Text(store.preferredReaderBackground == .texture ? store.readerTextureType.shortName : store.preferredReaderBackground.title)
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(Color.white.opacity(0.2), in: Capsule())
+                            .foregroundStyle(.white)
                         }
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
-                        .foregroundStyle(.white)
-                    }
 
-                    Spacer()
+                        Spacer()
 
-                    Button {
-                        switchChapter(delta: 1)
-                    } label: {
-                        Label("下一话", systemImage: "forward.end")
-                            .font(.caption)
+                        Button {
+                            showUpscalerSheet = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "sparkles")
+                                Text(store.enableImageUpscaler ? store.upscalerConfig.model.displayName : "画质增强")
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
+                            .foregroundStyle(.white)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            switchChapter(delta: 1)
+                        } label: {
+                            Label("下一话", systemImage: "forward.end")
+                                .font(.caption)
+                        }
+                        .disabled({
+                            guard let idx = currentChapterArrayIndex else { return true }
+                            return idx >= chapters.count - 1
+                        }())
                     }
-                    .disabled({
-                        guard let idx = currentChapterArrayIndex else { return true }
-                        return idx >= chapters.count - 1
-                    }())
+                    .foregroundStyle(.white)
+                    .opacity(isScrubbingProgress ? 0 : 1)
+                    .allowsHitTesting(!isScrubbingProgress)
                 }
-                .foregroundStyle(.white)
-            }
-            .padding(.leading, max(insets.left, 18))
-            .padding(.trailing, max(insets.right, 18))
-            .padding(.top, 14)
-            .padding(.bottom, insets.bottom + 10)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.0),
-                        Color.black.opacity(0.70),
-                        Color.black.opacity(0.88)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                .padding(.leading, max(insets.left, 18))
+                .padding(.trailing, max(insets.right, 18))
+                .padding(.top, 14)
+                .padding(.bottom, insets.bottom + 10)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.0),
+                            Color.black.opacity(0.70),
+                            Color.black.opacity(0.88)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .opacity(isScrubbingProgress ? 0.35 : 1.0)
                 )
-            )
-            .offset(y: showChrome ? 0 : (insets.bottom + 148))
-            .opacity(showChrome ? 1 : 0)
-            .allowsHitTesting(showChrome)
+                .offset(y: showChrome ? 0 : (insets.bottom + 148))
+                .opacity(showChrome ? 1 : 0)
+                .allowsHitTesting(showChrome)
+            }
+            .animation(.spring(response: 0.30, dampingFraction: 0.92), value: showChrome)
+
+            // 跨页跳转后的返回原点锚点胶囊（独立叠放在进度条上方，完全不影响滑轨几何位置）
+            if showChrome && !isScrubbingProgress,
+               let anchor = returnAnchorPageIndex,
+               anchor >= 0,
+               anchor < pages.count,
+               anchor != currentPageIndex {
+                HStack {
+                    Spacer()
+                    ReaderReturnAnchorPill(
+                        anchorPageIndex: anchor,
+                        onReturn: {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                commitProgressJump(to: anchor, originIndex: nil, recordAnchor: false)
+                            }
+                        },
+                        onDismiss: {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                returnAnchorPageIndex = nil
+                                anchorJumpDestinationIndex = nil
+                            }
+                        }
+                    )
+                }
+                .padding(.trailing, max(insets.right, 16))
+                .padding(.bottom, insets.bottom + (pages.count > 1 ? 104 : 66))
+                .transition(.opacity.combined(with: .scale(scale: 0.94)))
+            }
         }
-        .animation(.spring(response: 0.30, dampingFraction: 0.92), value: showChrome)
     }
 
     /// 获取当前设备绝对可靠的安全区域边距（防止全屏沉浸/隐藏状态栏时系统 UIWindow 错误返回 0）
@@ -1021,6 +1113,12 @@ public struct ReaderView: View {
         let targetIndex = currentIndex + delta
         guard chapters.indices.contains(targetIndex) else { return }
         let nextChapter = chapters[targetIndex]
+        thumbnailStore.cancelHoverPrefetch()
+        isScrubbingProgress = false
+        returnAnchorPageIndex = nil
+        anchorJumpDestinationIndex = nil
+        isProgrammaticJumping = false
+        cachedPageAspectRatios.removeAll()
         store.updateProgress(
             manga: manga,
             chapter: currentChapter,
@@ -1030,6 +1128,48 @@ public struct ReaderView: View {
             totalChapters: chapters.count
         )
         currentChapter = nextChapter
+    }
+
+    /// 统一处理进度条松手跳转或回跳锚点定位，避免拖动过程高频写回页码导致滑块抽动
+    private func commitProgressJump(to targetIndex: Int, originIndex: Int?, recordAnchor: Bool) {
+        guard pages.indices.contains(targetIndex) else { return }
+
+        if targetIndex == returnAnchorPageIndex {
+            returnAnchorPageIndex = nil
+            anchorJumpDestinationIndex = nil
+        } else if recordAnchor, let origin = originIndex, origin != targetIndex {
+            if returnAnchorPageIndex == nil {
+                returnAnchorPageIndex = origin
+            }
+            anchorJumpDestinationIndex = targetIndex
+        }
+
+        guard targetIndex != currentPageIndex else { return }
+
+        let token = UUID()
+        programmaticJumpToken = token
+        isProgrammaticJumping = true
+        externalJumpNonce &+= 1
+        currentPageIndex = targetIndex
+
+        if activeLayoutMode == .verticalWebtoon && !isCompareMode {
+            requestedScrollIndex = targetIndex
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 85_000_000)
+                guard programmaticJumpToken == token else { return }
+                requestedScrollIndex = targetIndex
+
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                guard programmaticJumpToken == token else { return }
+                isProgrammaticJumping = false
+            }
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                guard programmaticJumpToken == token else { return }
+                isProgrammaticJumping = false
+            }
+        }
     }
 
     private func syncPreloaderSettings() {
@@ -1083,6 +1223,11 @@ public struct ReaderView: View {
 
     private func applyLoadedChapterPages(_ loadedPages: [MangaPage], targetIndex: Int) {
         self.pages = loadedPages
+        self.isScrubbingProgress = false
+        self.returnAnchorPageIndex = nil
+        self.anchorJumpDestinationIndex = nil
+        self.isProgrammaticJumping = false
+        self.cachedPageAspectRatios.removeAll()
         let resolvedIndex = min(targetIndex, max(0, loadedPages.count - 1))
         self.currentPageIndex = resolvedIndex
         if resolvedIndex > 0 {
@@ -1173,11 +1318,19 @@ private struct VerticalMangaPageCell: View {
     var imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     var texturePhaseAnchor: TexturePhaseAnchor = .local
     var textureReferenceSize: CGSize? = nil
+    var cachedAspectRatio: CGFloat? = nil
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
     var onPageReady: ((Int) -> Void)? = nil
 
     @StateObject private var slot = ReaderPageSlot()
+
+    private var resolvedPlaceholderHeight: CGFloat {
+        guard contentWidth > 0, let ratio = cachedAspectRatio, ratio > 0 else {
+            return 380
+        }
+        return max(160, ceil(contentWidth * ratio))
+    }
 
     private var shouldApplyImageTexture: Bool {
         background == .texture && (textureTarget == .both || textureTarget == .imageOnly)
@@ -1340,7 +1493,7 @@ private struct VerticalMangaPageCell: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 380)
+                .frame(height: resolvedPlaceholderHeight)
                 .clipped()
             }
         }
