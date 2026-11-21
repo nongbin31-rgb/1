@@ -708,7 +708,8 @@ public struct ReaderView: View {
                     }
                 ) {
                     ScrollViewReader { scrollProxy in
-                        ScrollView {
+                        let showsSystemIndicator = store.readerProgressStyle != .sideRail
+                        ScrollView(.vertical, showsIndicators: showsSystemIndicator) {
                             LazyVStack(spacing: 0) {
                                 ForEach(pages) { page in
                                     VerticalMangaPageCell(
@@ -761,6 +762,7 @@ public struct ReaderView: View {
                                 }
                             }
                             .coordinateSpace(name: "webtoon_scroll_content")
+                            .background(WebtoonScrollIndicatorSyncView(showsIndicator: showsSystemIndicator))
                         }
                         .onAppear {
                             if isRestoringInitialPage && currentPageIndex > 0 {
@@ -1849,6 +1851,33 @@ private struct ReaderUpscalerSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
                 }
+            }
+        }
+    }
+}
+
+/// 同步条漫 ScrollView 底层 UIScrollView 的垂直滚动条显示状态（兼容 iOS 15+，支持阅读中动态切换进度器风格而不丢失滚动位置）
+private struct WebtoonScrollIndicatorSyncView: UIViewRepresentable {
+    let showsIndicator: Bool
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            var current: UIView? = uiView.superview
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView {
+                    if scrollView.showsVerticalScrollIndicator != showsIndicator {
+                        scrollView.showsVerticalScrollIndicator = showsIndicator
+                    }
+                    break
+                }
+                current = candidate.superview
             }
         }
     }
