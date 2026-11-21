@@ -490,6 +490,13 @@ public struct ReaderView: View {
         .onAppear {
             initializeLayoutIfNeeded()
             syncPreloaderSettings()
+            store.beginReadingSession()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            store.endReadingSession()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            store.beginReadingSession()
         }
         .task(id: currentChapter.id) {
             initializeLayoutIfNeeded()
@@ -509,6 +516,7 @@ public struct ReaderView: View {
                     totalChapters: chapters.count
                 )
             }
+            store.endReadingSession()
         }
         .onChange(of: currentPageIndex) { newIndex in
             if pages.indices.contains(newIndex),

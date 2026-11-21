@@ -73,6 +73,15 @@ public final class AppStore: ObservableObject {
     @Published public var showAmbientProgressInReader: Bool = true {
         didSet { save(showAmbientProgressInReader, key: Keys.showAmbientProgressInReader) }
     }
+    /// 按日聚合的阅读统计（key: yyyy-MM-dd 本地日历日）
+    @Published public var dailyReadingStats: [String: DailyReadingStat] = [:] {
+        didSet { save(dailyReadingStats, key: Keys.dailyReadingStats) }
+    }
+    /// 阅读计时会话：上次有效阅读活动时间与上次计入的页标识（不持久化）
+    private var lastReadingActivityAt: Date?
+    private var lastRecordedPageToken: String?
+    /// 两次活动间隔超过该阈值视为挂机离开，不计入阅读时长
+    private let readingIdleThreshold: TimeInterval = 180
     @Published public var discoverPaginationMode: DiscoverPaginationMode = .pageByPage {
         didSet { save(discoverPaginationMode, key: Keys.discoverPaginationMode) }
     }
@@ -137,6 +146,7 @@ public final class AppStore: ObservableObject {
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
         static let readerProgressStyle = "keda_online_reader_progress_style_v1"
         static let showAmbientProgressInReader = "keda_online_show_ambient_progress_v1"
+        static let dailyReadingStats = "keda_online_daily_reading_stats_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
         static let discoverLayoutStyle = "keda_online_discover_layout_style_v1"
         static let bookshelfLayoutStyle = "keda_online_bookshelf_layout_style_v1"
@@ -211,6 +221,7 @@ public final class AppStore: ObservableObject {
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
         self.readerProgressStyle = load(key: Keys.readerProgressStyle) ?? .edgeDock
         self.showAmbientProgressInReader = load(key: Keys.showAmbientProgressInReader) ?? true
+        self.dailyReadingStats = load(key: Keys.dailyReadingStats) ?? [:]
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
         self.discoverLayoutStyle = load(key: Keys.discoverLayoutStyle) ?? .classicGrid
         self.bookshelfLayoutStyle = load(key: Keys.bookshelfLayoutStyle) ?? .focusShelf
@@ -438,10 +449,163 @@ public final class AppStore: ObservableObject {
             totalChapters: totalChapters ?? existing?.totalChapters,
             updatedAt: Date()
         )
+
+        recordReadingActivity(pageToken: "\(manga.compositeKey)#\(chapter.id)#\(pageIndex)")
     }
 
     public func progress(for manga: Manga) -> ReadingProgress? {
         progressMap[manga.compositeKey]
+    }
+
+    // MARK: - 阅读统计（时长 / 翻页 / 连续打卡）
+
+    private static let readingStatsDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static var readingStatsCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        calendar.firstWeekday = 2 // 周一为一周起点
+        return calendar
+    }
+
+    private func readingStatsDayKey(for date: Date) -> String {
+        Self.readingStatsDayFormatter.timeZone = TimeZone.current
+        return Self.readingStatsDayFormatter.string(from: date)
+    }
+
+    /// 阅读器进入前台 / 打开时开启计时会话
+    public func beginReadingSession() {
+        lastReadingActivityAt = Date()
+    }
+
+    /// 阅读器关闭 / 退到后台时结算最后一段阅读时长
+    public func endReadingSession() {
+        accumulateReadingTime(until: Date(), addingPages: 0)
+        lastReadingActivityAt = nil
+        lastRecordedPageToken = nil
+    }
+
+    /// 记录一次阅读活动：累计与上次活动的间隔时长（超过挂机阈值不计），页标识变化时计 1 页
+    private func recordReadingActivity(pageToken: String) {
+        let isNewPage = pageToken != lastRecordedPageToken
+        accumulateReadingTime(until: Date(), addingPages: isNewPage ? 1 : 0)
+        lastRecordedPageToken = pageToken
+    }
+
+    private func accumulateReadingTime(until now: Date, addingPages pages: Int) {
+        var delta: TimeInterval = 0
+        if let last = lastReadingActivityAt {
+            let gap = now.timeIntervalSince(last)
+            if gap > 0 && gap <= readingIdleThreshold {
+                delta = gap
+            }
+        }
+        lastReadingActivityAt = now
+        guard delta > 0 || pages > 0 else { return }
+
+        let calendar = Self.readingStatsCalendar
+        var updated = dailyReadingStats
+        if delta > 0 {
+            let last = now.addingTimeInterval(-delta)
+            if !calendar.isDate(last, inSameDayAs: now) {
+                // 跨零点：按零点切分到前后两天
+                let midnight = calendar.startOfDay(for: now)
+                let beforeMidnight = max(0, midnight.timeIntervalSince(last))
+                let prevKey = readingStatsDayKey(for: last)
+                updated[prevKey, default: DailyReadingStat()].seconds += beforeMidnight
+                delta = max(0, delta - beforeMidnight)
+            }
+        }
+        let key = readingStatsDayKey(for: now)
+        var stat = updated[key] ?? DailyReadingStat()
+        stat.seconds += delta
+        stat.pages += pages
+        updated[key] = stat
+
+        // 仅保留近 400 天，防止 UserDefaults 无限膨胀
+        if updated.count > 400,
+           let cutoff = calendar.date(byAdding: .day, value: -400, to: now) {
+            let cutoffKey = readingStatsDayKey(for: cutoff)
+            updated = updated.filter { $0.key >= cutoffKey }
+        }
+        dailyReadingStats = updated
+    }
+
+    /// 汇总阅读统计：本周（周一起）时长与页数、连续打卡天数、累计数据与近 7 日趋势
+    public func readingStatsSummary(now: Date = Date()) -> ReadingStatsSummary {
+        let calendar = Self.readingStatsCalendar
+        let stats = dailyReadingStats
+        let today = calendar.startOfDay(for: now)
+
+        var weekSeconds: Double = 0
+        var weekPages = 0
+        if let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start {
+            var cursor = calendar.startOfDay(for: weekStart)
+            while cursor <= today {
+                if let stat = stats[readingStatsDayKey(for: cursor)] {
+                    weekSeconds += stat.seconds
+                    weekPages += stat.pages
+                }
+                guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+                cursor = next
+            }
+        }
+
+        // 连续打卡：今天未读时从昨天起算，不中断连胜
+        var streak = 0
+        var cursor = today
+        if stats[readingStatsDayKey(for: today)]?.isActiveDay != true {
+            cursor = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        }
+        while stats[readingStatsDayKey(for: cursor)]?.isActiveDay == true {
+            streak += 1
+            guard let prev = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = prev
+        }
+
+        let totalSeconds = stats.values.reduce(0) { $0 + $1.seconds }
+        let totalPages = stats.values.reduce(0) { $0 + $1.pages }
+
+        let weekdaySymbols = ["日", "一", "二", "三", "四", "五", "六"]
+        var recent: [ReadingStatsDayPoint] = []
+        for offset in stride(from: 6, through: 0, by: -1) {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+            let key = readingStatsDayKey(for: day)
+            let stat = stats[key] ?? DailyReadingStat()
+            let weekday = calendar.component(.weekday, from: day)
+            recent.append(
+                ReadingStatsDayPoint(
+                    id: key,
+                    label: offset == 0 ? "今" : weekdaySymbols[(weekday - 1) % 7],
+                    seconds: stat.seconds,
+                    pages: stat.pages,
+                    isToday: offset == 0
+                )
+            )
+        }
+
+        return ReadingStatsSummary(
+            weekSeconds: weekSeconds,
+            weekPages: weekPages,
+            streakDays: streak,
+            totalSeconds: totalSeconds,
+            totalPages: totalPages,
+            recentDays: recent
+        )
+    }
+
+    /// 清空全部阅读统计
+    public func resetReadingStats() {
+        dailyReadingStats = [:]
+        lastReadingActivityAt = nil
+        lastRecordedPageToken = nil
     }
 
     public func addSource(_ source: MangaSourceConfig) {

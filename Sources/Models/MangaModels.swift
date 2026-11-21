@@ -854,6 +854,41 @@ public struct ReadingProgress: Codable, Equatable, Sendable {
     }
 }
 
+/// 单日阅读统计（按本地日历日聚合：有效阅读秒数 + 翻阅页数）
+public struct DailyReadingStat: Codable, Equatable, Sendable {
+    public var seconds: Double
+    public var pages: Int
+
+    public init(seconds: Double = 0, pages: Int = 0) {
+        self.seconds = seconds
+        self.pages = pages
+    }
+
+    /// 是否计入连续阅读打卡（≥ 1 分钟或翻阅 ≥ 3 页）
+    public var isActiveDay: Bool {
+        seconds >= 60 || pages >= 3
+    }
+}
+
+/// 阅读统计图表单日数据点
+public struct ReadingStatsDayPoint: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var label: String
+    public var seconds: Double
+    public var pages: Int
+    public var isToday: Bool
+}
+
+/// 阅读统计汇总（本周 / 连续打卡 / 累计 / 近 7 日）
+public struct ReadingStatsSummary: Equatable, Sendable {
+    public var weekSeconds: Double
+    public var weekPages: Int
+    public var streakDays: Int
+    public var totalSeconds: Double
+    public var totalPages: Int
+    public var recentDays: [ReadingStatsDayPoint]
+}
+
 /// 阅读方向与排版模式
 public enum ReaderLayoutMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case verticalWebtoon = "vertical"
