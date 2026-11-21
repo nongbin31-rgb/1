@@ -99,6 +99,7 @@ struct BookshelfLayoutCollectionView: View {
             BookshelfReadingTimelineView(
                 books: displayedBooks,
                 isEditing: isEditing,
+                showsStatsHeader: !isSearching && !isEditing,
                 selectedKeys: selectedKeys,
                 launchingMangaKey: launchingMangaKey,
                 store: store,
@@ -1044,6 +1045,7 @@ private struct BookshelfTimelineSection: Identifiable {
 private struct BookshelfReadingTimelineView: View {
     let books: [Manga]
     let isEditing: Bool
+    let showsStatsHeader: Bool
     let selectedKeys: Set<String>
     let launchingMangaKey: String?
     @ObservedObject var store: AppStore
@@ -1079,6 +1081,10 @@ private struct BookshelfReadingTimelineView: View {
 
     var body: some View {
         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            if showsStatsHeader {
+                ReadingStatsDashboardView(store: store)
+                    .padding(.bottom, 4)
+            }
             ForEach(groupedSections) { section in
                 Section {
                     VStack(spacing: 10) {
