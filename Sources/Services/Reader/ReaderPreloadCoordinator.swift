@@ -437,6 +437,24 @@ public final class ReaderPreloadCoordinator: ObservableObject {
             guard !Task.isCancelled else { return }
 
             if shouldPreheatUpscaler {
+                // 提前预热 1x 原始底图的滤镜版本，确保即使用户在超分完成前翻页也能零闪烁秒显滤镜底图
+                if filterSnapshot.hasActiveFilters {
+                    let rawFilterKey = ImageFilterPipeline.cacheKey(
+                        pageURL: nextPage.imageURL,
+                        upscalerConfig: nil,
+                        isUpscaled: false
+                    )
+                    if ImageFilterPipeline.shared.cachedImage(cacheKey: rawFilterKey, config: filterSnapshot) == nil {
+                        _ = await ImageFilterPipeline.shared.processAsync(
+                            image: originalImage,
+                            cacheKey: rawFilterKey,
+                            config: filterSnapshot
+                        )
+                    }
+                }
+
+                guard !Task.isCancelled else { return }
+
                 // 超过单图缓存上限或硬件限制的巨图不参与后台预热，避免无用算力消耗
                 guard PageUpscalerPipeline.shared.canCacheUpscaledOutput(
                     for: originalImage,
