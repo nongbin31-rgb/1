@@ -34,6 +34,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
+    public var onPageReady: ((Int) -> Void)? = nil
 
     public init(
         pages: [MangaPage],
@@ -55,7 +56,8 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
-        onImageLoaded: ((UIImage) -> Void)? = nil
+        onImageLoaded: ((UIImage) -> Void)? = nil,
+        onPageReady: ((Int) -> Void)? = nil
     ) {
         self.pages = pages
         self.upscalerConfig = upscalerConfig
@@ -77,6 +79,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
+        self.onPageReady = onPageReady
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -354,6 +357,9 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
                 if index == self?.currentDisplayIndex {
                     self?.parentConfig.onImageLoaded?(img)
                 }
+            },
+            onPageReady: { [weak self] readyIndex in
+                self?.parentConfig.onPageReady?(readyIndex)
             }
         )
     }

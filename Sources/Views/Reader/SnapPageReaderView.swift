@@ -44,6 +44,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
+    public var onPageReady: ((Int) -> Void)? = nil
 
     public init(
         pages: [MangaPage],
@@ -65,7 +66,8 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         currentPageIndex: Binding<Int>,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
-        onImageLoaded: ((UIImage) -> Void)? = nil
+        onImageLoaded: ((UIImage) -> Void)? = nil,
+        onPageReady: ((Int) -> Void)? = nil
     ) {
         self.pages = pages
         self.upscalerConfig = upscalerConfig
@@ -87,6 +89,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
+        self.onPageReady = onPageReady
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -185,6 +188,9 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                     if indexPath.item == self?.parent.currentPageIndex {
                         self?.parent.onImageLoaded?(img)
                     }
+                },
+                onPageReady: { [weak self] readyIndex in
+                    self?.parent.onPageReady?(readyIndex)
                 }
             )
             return cell
@@ -541,6 +547,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentOnStatusUpdate: ((String) -> Void)?
     private var currentOnZoomChanged: ((CGFloat) -> Void)?
     private var currentOnImageLoaded: ((UIImage) -> Void)?
+    private var currentOnPageReady: ((Int) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -572,7 +579,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: @escaping (CGFloat) -> Void,
-        onImageLoaded: ((UIImage) -> Void)? = nil
+        onImageLoaded: ((UIImage) -> Void)? = nil,
+        onPageReady: ((Int) -> Void)? = nil
     ) {
         self.currentPage = page
         self.currentConfig = config
@@ -592,6 +600,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentOnStatusUpdate = onStatusUpdate
         self.currentOnZoomChanged = onZoomChanged
         self.currentOnImageLoaded = onImageLoaded
+        self.currentOnPageReady = onPageReady
 
         let rootView = SnapPageRootView(pageView: buildPageView())
 
@@ -732,7 +741,8 @@ final class SnapPageHostingCell: UICollectionViewCell {
             onSingleTap: currentOnSingleTap ?? {},
             onStatusUpdate: currentOnStatusUpdate ?? { _ in },
             onZoomChanged: currentOnZoomChanged,
-            onImageLoaded: currentOnImageLoaded
+            onImageLoaded: currentOnImageLoaded,
+            onPageReady: currentOnPageReady
         )
     }
 

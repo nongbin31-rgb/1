@@ -76,6 +76,15 @@ public final class AppStore: ObservableObject {
     @Published public var imageFilterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig() {
         didSet { save(imageFilterConfig, key: Keys.imageFilterConfig) }
     }
+    @Published public var readerPreloadMode: ReaderPreloadMode = .standard {
+        didSet { save(readerPreloadMode, key: Keys.readerPreloadMode) }
+    }
+    @Published public var enableUpscalerPreload: Bool = true {
+        didSet { save(enableUpscalerPreload, key: Keys.enableUpscalerPreload) }
+    }
+    @Published public var preloadNextChapter: Bool = true {
+        didSet { save(preloadNextChapter, key: Keys.preloadNextChapter) }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -103,6 +112,9 @@ public final class AppStore: ObservableObject {
         static let discoverLayoutStyle = "keda_online_discover_layout_style_v1"
         static let searchHistory = "keda_online_search_history_v1"
         static let imageFilterConfig = "keda_online_image_filter_config_v1"
+        static let readerPreloadMode = "keda_online_reader_preload_mode_v1"
+        static let enableUpscalerPreload = "keda_online_enable_upscaler_preload_v1"
+        static let preloadNextChapter = "keda_online_preload_next_chapter_v1"
     }
 
     public init() {
@@ -167,6 +179,9 @@ public final class AppStore: ObservableObject {
         self.discoverLayoutStyle = load(key: Keys.discoverLayoutStyle) ?? .classicGrid
         self.searchHistory = load(key: Keys.searchHistory) ?? []
         self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
+        self.readerPreloadMode = load(key: Keys.readerPreloadMode) ?? .standard
+        self.enableUpscalerPreload = load(key: Keys.enableUpscalerPreload) ?? true
+        self.preloadNextChapter = load(key: Keys.preloadNextChapter) ?? true
     }
 
     public var enabledSources: [MangaSourceConfig] {

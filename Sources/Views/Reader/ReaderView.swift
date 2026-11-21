@@ -28,7 +28,7 @@ private final class ReaderPageSlot: ObservableObject {
         let targetFilterSig = filterConfig.cacheSignature
 
         // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
-        if let original = originalImage {
+        if let _ = originalImage {
             if !isEnabled {
                 if lastIsEnabled == false,
                    processed?.appliedModel == nil,
@@ -39,9 +39,75 @@ private final class ReaderPageSlot: ObservableObject {
             } else if lastIsEnabled == true,
                       lastAppliedConfig == config,
                       lastAppliedFilterSignature == targetFilterSig,
-                      let currentProcessed = processed,
+                      processed != nil,
                       displayImage != nil {
                 return
+            }
+        }
+
+        // 零闪烁内存全命中快路径：预载入已备齐原图 + 目标超分/滤镜时同步直出
+        if let memOriginal = originalImage ?? OnlineImageLoader.shared.cachedMemoryImage(for: page.imageURL) {
+            let origSize = Self.pixelSize(of: memOriginal)
+            if !isEnabled {
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: nil,
+                    isUpscaled: false
+                )
+                let fastDisplay = filterConfig.hasActiveFilters
+                    ? ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig)
+                    : memOriginal
+                if let fastDisplay {
+                    loadGeneration &+= 1
+                    self.originalImage = memOriginal
+                    self.processed = ProcessedPageImage(
+                        image: memOriginal,
+                        originalSize: origSize,
+                        outputSize: origSize,
+                        elapsedMs: 0,
+                        appliedModel: nil
+                    )
+                    self.lastIsEnabled = false
+                    self.lastAppliedConfig = nil
+                    self.lastAppliedFilterSignature = targetFilterSig
+                    self.isLoading = false
+                    self.isUpscaling = false
+                    self.upscaleProgress = ""
+                    self.displayImage = fastDisplay
+                    return
+                }
+            } else if let memUpscaled = PageUpscalerPipeline.shared.cachedImage(
+                pageKey: page.imageURL,
+                config: config
+            ) {
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: config,
+                    isUpscaled: true
+                )
+                let fastDisplay = filterConfig.hasActiveFilters
+                    ? ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig)
+                    : memUpscaled
+                if let fastDisplay {
+                    loadGeneration &+= 1
+                    self.originalImage = memOriginal
+                    self.processed = ProcessedPageImage(
+                        image: memUpscaled,
+                        originalSize: origSize,
+                        outputSize: Self.pixelSize(of: memUpscaled),
+                        elapsedMs: 0,
+                        appliedModel: config.model,
+                        notice: "命中缓存"
+                    )
+                    self.lastIsEnabled = true
+                    self.lastAppliedConfig = config
+                    self.lastAppliedFilterSignature = targetFilterSig
+                    self.isLoading = false
+                    self.isUpscaling = false
+                    self.upscaleProgress = ""
+                    self.displayImage = fastDisplay
+                    return
+                }
             }
         }
 
@@ -49,35 +115,38 @@ private final class ReaderPageSlot: ObservableObject {
         let currentGeneration = loadGeneration
 
         if originalImage == nil {
-            isLoading = true
-            do {
-                let img = try await OnlineImageLoader.shared.loadImage(
-                    urlString: page.imageURL,
-                    headers: page.headers
-                )
-                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
-                self.originalImage = img
-                self.displayImage = img
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
-                errorMessage = error.localizedDescription
+            if let memOriginal = OnlineImageLoader.shared.cachedMemoryImage(for: page.imageURL) {
+                self.originalImage = memOriginal
+                self.displayImage = memOriginal
+                self.isLoading = false
+            } else {
+                isLoading = true
+                do {
+                    let img = try await OnlineImageLoader.shared.loadImage(
+                        urlString: page.imageURL,
+                        headers: page.headers
+                    )
+                    guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
+                    self.originalImage = img
+                    self.displayImage = img
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                    return
+                }
                 isLoading = false
-                return
+                await Task.yield()
+                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
             }
-            isLoading = false
-            await Task.yield()
-            guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
         }
 
         guard let original = originalImage else { return }
 
         guard isEnabled else {
-            let size = CGSize(
-                width: original.cgImage?.width ?? Int(original.size.width),
-                height: original.cgImage?.height ?? Int(original.size.height)
-            )
+            let size = Self.pixelSize(of: original)
             processed = ProcessedPageImage(
                 image: original,
                 originalSize: size,
@@ -90,9 +159,14 @@ private final class ReaderPageSlot: ObservableObject {
 
             let finalImage: UIImage
             if filterConfig.hasActiveFilters {
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: nil,
+                    isUpscaled: false
+                )
                 finalImage = ImageFilterPipeline.shared.process(
                     image: original,
-                    cacheKey: "\(page.imageURL)_webtoon_raw",
+                    cacheKey: filterKey,
                     config: filterConfig
                 )
             } else {
@@ -130,9 +204,14 @@ private final class ReaderPageSlot: ObservableObject {
 
         let finalImage: UIImage
         if filterConfig.hasActiveFilters {
+            let filterKey = ImageFilterPipeline.cacheKey(
+                pageURL: page.imageURL,
+                upscalerConfig: config,
+                isUpscaled: result.appliedModel != nil
+            )
             finalImage = ImageFilterPipeline.shared.process(
                 image: result.image,
-                cacheKey: "\(page.imageURL)_webtoon_upscaled",
+                cacheKey: filterKey,
                 config: filterConfig
             )
         } else {
@@ -140,13 +219,29 @@ private final class ReaderPageSlot: ObservableObject {
         }
         self.lastAppliedFilterSignature = targetFilterSig
 
-        if transitionAfterUpscaled {
+        let shouldAnimateTransition = transitionAfterUpscaled
+            && result.appliedModel != nil
+            && result.notice != "命中缓存"
+            && result.elapsedMs > 0
+        if shouldAnimateTransition {
             withAnimation(.easeInOut(duration: 0.35)) {
                 self.displayImage = finalImage
             }
         } else {
             self.displayImage = finalImage
         }
+    }
+
+    private static func pixelSize(of image: UIImage) -> CGSize {
+        if let cg = image.cgImage {
+            switch image.imageOrientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                return CGSize(width: cg.height, height: cg.width)
+            default:
+                return CGSize(width: cg.width, height: cg.height)
+            }
+        }
+        return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
     }
 
     /// 释放大图内存，防止 LazyVStack 长列表堆积爆内存
@@ -191,6 +286,7 @@ public struct ReaderView: View {
     @State private var capturedPreviewImage: UIImage?
     @State private var activeLayoutMode: ReaderLayoutMode = .verticalWebtoon
     @State private var hasInitializedLayout = false
+    @StateObject private var preloader = ReaderPreloadCoordinator()
 
     public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter, initialPageIndex: Int? = nil) {
         self.manga = manga
@@ -203,6 +299,10 @@ public struct ReaderView: View {
 
     private var currentChapterArrayIndex: Int? {
         chapters.firstIndex(where: { $0.id == currentChapter.id })
+    }
+
+    private var preloadSettingsSignature: String {
+        "\(store.readerPreloadMode.rawValue)::\(store.enableImageUpscaler)::\(store.enableUpscalerPreload)::\(store.upscalerConfig.reloadKey)::\(store.imageFilterConfig.cacheSignature)::\(store.preloadNextChapter)"
     }
 
     public var body: some View {
@@ -254,6 +354,7 @@ public struct ReaderView: View {
                     .frame(width: windowGeo.size.width, height: windowGeo.size.height)
                 } else {
                     readerContent
+                        .id(currentChapter.id)
                         .frame(width: windowGeo.size.width, height: windowGeo.size.height)
                         .clipped()
                 }
@@ -303,12 +404,15 @@ public struct ReaderView: View {
         .statusBarHidden(!showChrome)
         .onAppear {
             initializeLayoutIfNeeded()
+            syncPreloaderSettings()
         }
         .task(id: currentChapter.id) {
             initializeLayoutIfNeeded()
+            syncPreloaderSettings()
             await loadChapterPages()
         }
         .onDisappear {
+            preloader.cancelAll()
             if !pages.isEmpty {
                 store.updateProgress(
                     manga: manga,
@@ -322,9 +426,10 @@ public struct ReaderView: View {
         }
         .onChange(of: currentPageIndex) { newIndex in
             if pages.indices.contains(newIndex),
-               let cached = OnlineImageLoader.shared.cachedImage(for: pages[newIndex].imageURL) {
+               let cached = OnlineImageLoader.shared.cachedMemoryImage(for: pages[newIndex].imageURL) {
                 capturedPreviewImage = cached
             }
+            preloader.updateCurrentPage(newIndex)
             guard !isRestoringInitialPage, !pages.isEmpty else { return }
             store.updateProgress(
                 manga: manga,
@@ -334,6 +439,9 @@ public struct ReaderView: View {
                 chapterIndex: currentChapterArrayIndex,
                 totalChapters: chapters.count
             )
+        }
+        .onChange(of: preloadSettingsSignature) { _ in
+            syncPreloaderSettings()
         }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
@@ -506,6 +614,11 @@ public struct ReaderView: View {
                                                 capturedPreviewImage = img
                                             }
                                             checkAspectRatioIfUndetermined(with: img.size)
+                                        },
+                                        onPageReady: { readyIdx in
+                                            if pages.indices.contains(readyIdx) {
+                                                preloader.markPageReady(pageID: pages[readyIdx].id, index: readyIdx)
+                                            }
                                         }
                                     )
                                     .id(page.index)
@@ -565,6 +678,11 @@ public struct ReaderView: View {
                 onImageLoaded: { img in
                     capturedPreviewImage = img
                     checkAspectRatioIfUndetermined(with: img.size)
+                },
+                onPageReady: { readyIdx in
+                    if pages.indices.contains(readyIdx) {
+                        preloader.markPageReady(pageID: pages[readyIdx].id, index: readyIdx)
+                    }
                 }
             )
         } else if store.pageTurningEffect == .cover {
@@ -598,6 +716,11 @@ public struct ReaderView: View {
                 onImageLoaded: { img in
                     capturedPreviewImage = img
                     checkAspectRatioIfUndetermined(with: img.size)
+                },
+                onPageReady: { readyIdx in
+                    if pages.indices.contains(readyIdx) {
+                        preloader.markPageReady(pageID: pages[readyIdx].id, index: readyIdx)
+                    }
                 }
             )
         } else {
@@ -631,6 +754,11 @@ public struct ReaderView: View {
                 onImageLoaded: { img in
                     capturedPreviewImage = img
                     checkAspectRatioIfUndetermined(with: img.size)
+                },
+                onPageReady: { readyIdx in
+                    if pages.indices.contains(readyIdx) {
+                        preloader.markPageReady(pageID: pages[readyIdx].id, index: readyIdx)
+                    }
                 }
             )
         }
@@ -904,8 +1032,18 @@ public struct ReaderView: View {
         currentChapter = nextChapter
     }
 
+    private func syncPreloaderSettings() {
+        preloader.updateSettings(
+            preloadMode: store.readerPreloadMode,
+            enableUpscaler: store.enableImageUpscaler,
+            enableUpscalerPreload: store.enableUpscalerPreload,
+            upscalerConfig: store.upscalerConfig,
+            filterConfig: store.imageFilterConfig,
+            preloadNextChapter: store.preloadNextChapter
+        )
+    }
+
     private func loadChapterPages() async {
-        isLoadingChapter = true
         chapterError = nil
 
         let targetIndex: Int
@@ -918,6 +1056,15 @@ public struct ReaderView: View {
             targetIndex = 0
         }
 
+        // 若 L3 已预取本话页面列表，直接瞬时切入免去章节 Loading 等待
+        if let prefetchedPages = preloader.consumePrefetchedPages(for: currentChapter.id), !prefetchedPages.isEmpty {
+            applyLoadedChapterPages(prefetchedPages, targetIndex: targetIndex)
+            isLoadingChapter = false
+            return
+        }
+
+        isLoadingChapter = true
+
         guard let adapter = store.adapter(for: manga.sourceID) else {
             chapterError = "未找到图源适配器 [\(manga.sourceID)]"
             isLoadingChapter = false
@@ -926,27 +1073,44 @@ public struct ReaderView: View {
 
         do {
             let loadedPages = try await adapter.fetchPages(for: currentChapter)
-            self.pages = loadedPages
-            let resolvedIndex = min(targetIndex, max(0, loadedPages.count - 1))
-            self.currentPageIndex = resolvedIndex
-            if resolvedIndex > 0 {
-                self.isRestoringInitialPage = true
-            }
-            if !loadedPages.isEmpty {
-                store.updateProgress(
-                    manga: manga,
-                    chapter: currentChapter,
-                    pageIndex: resolvedIndex,
-                    totalPages: loadedPages.count,
-                    chapterIndex: currentChapterArrayIndex,
-                    totalChapters: chapters.count
-                )
-            }
+            applyLoadedChapterPages(loadedPages, targetIndex: targetIndex)
         } catch {
             self.chapterError = error.localizedDescription
         }
 
         isLoadingChapter = false
+    }
+
+    private func applyLoadedChapterPages(_ loadedPages: [MangaPage], targetIndex: Int) {
+        self.pages = loadedPages
+        let resolvedIndex = min(targetIndex, max(0, loadedPages.count - 1))
+        self.currentPageIndex = resolvedIndex
+        if resolvedIndex > 0 {
+            self.isRestoringInitialPage = true
+        }
+        if !loadedPages.isEmpty {
+            store.updateProgress(
+                manga: manga,
+                chapter: currentChapter,
+                pageIndex: resolvedIndex,
+                totalPages: loadedPages.count,
+                chapterIndex: currentChapterArrayIndex,
+                totalChapters: chapters.count
+            )
+            let appStore = store
+            syncPreloaderSettings()
+            preloader.updateContext(
+                chapterID: currentChapter.id,
+                pages: loadedPages,
+                chapters: chapters,
+                currentChapterIndex: currentChapterArrayIndex,
+                sourceID: manga.sourceID,
+                adapterProvider: { [weak appStore] sourceID in
+                    appStore?.adapter(for: sourceID)
+                }
+            )
+            preloader.updateCurrentPage(resolvedIndex)
+        }
     }
 
     /// 条漫模式平滑精准恢复初始历史页码（双帧渐进式定位，避让首屏 LazyVStack 重绘）
@@ -1011,6 +1175,7 @@ private struct VerticalMangaPageCell: View {
     var textureReferenceSize: CGSize? = nil
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
+    var onPageReady: ((Int) -> Void)? = nil
 
     @StateObject private var slot = ReaderPageSlot()
 
@@ -1211,6 +1376,10 @@ private struct VerticalMangaPageCell: View {
             transitionAfterUpscaled: transitionAfterUpscaled,
             filterConfig: filterConfig
         )
+        guard !Task.isCancelled else { return }
+        if slot.errorMessage == nil, slot.displayImage != nil {
+            onPageReady?(page.index)
+        }
         if let orig = slot.originalImage {
             onImageLoaded?(orig)
         }
@@ -1343,6 +1512,9 @@ private struct ReaderUpscalerSheet: View {
                 Section {
                     Toggle("启用 AI 画质增强", isOn: $enableUpscaler)
                     Toggle("增强后平滑淡入", isOn: $transitionAfterUpscaled)
+                    if enableUpscaler && store.readerPreloadMode.isEnabled {
+                        Toggle("空闲预热下一页超分", isOn: $store.enableUpscalerPreload)
+                    }
                     Toggle("解除超分尺寸限制（慎用）", isOn: $config.bypassSizeLimit)
 
                     Picker("超分引擎", selection: $config.model) {

@@ -802,6 +802,58 @@ public enum PageTurningEffect: String, Codable, CaseIterable, Identifiable, Send
     }
 }
 
+/// 阅读器页面预载入策略
+public enum ReaderPreloadMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case off      = "off"       // 关闭预载入（省流模式）
+    case light    = "light"     // 轻量（后 2 页，前 1 页）
+    case standard = "standard"  // 标准（推荐：后 4 页，前 1 页）
+    case fast     = "fast"      // 极速（后 6 页，前 2 页）
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .off:      return "关闭"
+        case .light:    return "轻量 (后2前1)"
+        case .standard: return "标准 (后4前1)"
+        case .fast:     return "极速 (后6前2)"
+        }
+    }
+
+    public var shortName: String {
+        switch self {
+        case .off:      return "关闭"
+        case .light:    return "轻量"
+        case .standard: return "标准"
+        case .fast:     return "极速"
+        }
+    }
+
+    /// 向后预载页数
+    public var aheadCount: Int {
+        switch self {
+        case .off:      return 0
+        case .light:    return 2
+        case .standard: return 4
+        case .fast:     return 6
+        }
+    }
+
+    /// 向前预载页数
+    public var behindCount: Int {
+        switch self {
+        case .off:      return 0
+        case .light:    return 1
+        case .standard: return 1
+        case .fast:     return 2
+        }
+    }
+
+    public var isEnabled: Bool {
+        self != .off
+    }
+}
+
 /// 阅读背景模式（100% 对齐原版可达阅读器 ReaderBackground）
 public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable {
     case followSystem = 0   // 跟随系统主题
