@@ -180,6 +180,7 @@ private struct DiscoverEditorialListView: View {
                                             progress: progress?.progressRatio,
                                             isExact: progress?.totalPages != nil
                                         )
+                                        .frame(width: 14, height: 14, alignment: .center)
                                     }
                                 }
                                 .frame(height: 104, alignment: .top)
@@ -192,6 +193,7 @@ private struct DiscoverEditorialListView: View {
                         }
 
                         // 独立覆盖层书签按钮，避免嵌套在 NavigationLink 内产生手势冲突
+                        // 图标置于右对齐的 14pt 居中槽位，与下方进度圆环水平中心严格对齐，同时保留左侧与上下扩展点击热区
                         Button {
                             store.toggleBookshelf(manga)
                             triggerLightHaptic()
@@ -199,11 +201,13 @@ private struct DiscoverEditorialListView: View {
                             Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                                 .font(.system(size: 16, weight: .medium))
                                 .foregroundStyle(isSaved ? Color.accentColor : Color.secondary.opacity(0.65))
-                                .padding(6)
+                                .frame(width: 14, height: 18, alignment: .center)
+                                .padding(.leading, 12)
+                                .padding(.vertical, 6)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .padding(.top, 8)
+                        .padding(.top, 6)
                         .accessibilityLabel(isSaved ? "移出书架" : "加入书架")
                     }
 
