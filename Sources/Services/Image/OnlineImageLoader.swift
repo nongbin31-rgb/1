@@ -2,6 +2,109 @@ import CryptoKit
 import Foundation
 import UIKit
 
+/// 线程安全图片内存缓存封装（支持在 actor 的 nonisolated 同步快路径中零锁访问 NSCache）
+private final class SendableImageCache: @unchecked Sendable {
+    private let cache: NSCache<NSString, UIImage>
+
+    init(countLimit: Int, totalCostLimit: Int) {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = countLimit
+        c.totalCostLimit = totalCostLimit
+        self.cache = c
+    }
+
+    func object(forKey key: NSString) -> UIImage? {
+        cache.object(forKey: key)
+    }
+
+    func setObject(_ image: UIImage, forKey key: NSString, cost: Int) {
+        if cost > 0 {
+            cache.setObject(image, forKey: key, cost: cost)
+        } else {
+            cache.setObject(image, forKey: key)
+        }
+    }
+
+    func removeAllObjects() {
+        cache.removeAllObjects()
+    }
+}
+
+/// 原子一次性 Continuation 盒子（保证多订阅者共享下载任务时取消与完成绝不重复 resume）
+private final class CancellableImageWaiter: @unchecked Sendable {
+    private enum State {
+        case pending
+        case registered(CheckedContinuation<UIImage, Error>)
+        case finished(Result<UIImage, Error>)
+    }
+
+    private let lock = NSLock()
+    private var state: State = .pending
+
+    func attach(_ continuation: CheckedContinuation<UIImage, Error>) {
+        var immediate: Result<UIImage, Error>?
+        lock.lock()
+        switch state {
+        case .pending:
+            state = .registered(continuation)
+        case .finished(let result):
+            immediate = result
+        case .registered:
+            break
+        }
+        lock.unlock()
+
+        if let immediate {
+            continuation.resume(with: immediate)
+        }
+    }
+
+    func resume(with result: Result<UIImage, Error>) {
+        var contToResume: CheckedContinuation<UIImage, Error>?
+        lock.lock()
+        switch state {
+        case .pending:
+            state = .finished(result)
+        case .registered(let cont):
+            state = .finished(result)
+            contToResume = cont
+        case .finished:
+            break
+        }
+        lock.unlock()
+
+        contToResume?.resume(with: result)
+    }
+
+    @discardableResult
+    func cancel() -> Bool {
+        var contToResume: CheckedContinuation<UIImage, Error>?
+        var didCancel = false
+        lock.lock()
+        switch state {
+        case .pending:
+            state = .finished(.failure(CancellationError()))
+            didCancel = true
+        case .registered(let cont):
+            state = .finished(.failure(CancellationError()))
+            contToResume = cont
+            didCancel = true
+        case .finished:
+            break
+        }
+        lock.unlock()
+
+        contToResume?.resume(throwing: CancellationError())
+        return didCancel
+    }
+}
+
+/// 在途下载任务登记项（同一 URL 支持前台与预载共享下载；仅当全部等待者取消时中止底层 HTTP 请求）
+private final class InFlightImageEntry: @unchecked Sendable {
+    var task: Task<Void, Never>?
+    var waiters: [UUID: CancellableImageWaiter] = [:]
+}
+
 /// 在线漫画图片异步加载与双层缓存（内存 + 磁盘），集成多图床容灾竞速与 JM 分块反混淆，同时支持 synthetic:// 测试图生成
 public actor OnlineImageLoader {
     public static let shared = OnlineImageLoader()
@@ -14,15 +117,13 @@ public actor OnlineImageLoader {
         return URLSession(configuration: config)
     }()
 
-    private let memoryCache: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 60
-        cache.totalCostLimit = 160 * 1024 * 1024
-        return cache
-    }()
+    private let memoryCache = SendableImageCache(
+        countLimit: 60,
+        totalCostLimit: 160 * 1024 * 1024
+    )
 
     private let diskDirectory: URL
-    private var inFlightTasks: [String: Task<UIImage, Error>] = [:]
+    private var inFlightEntries: [String: InFlightImageEntry] = [:]
 
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -41,50 +142,118 @@ public actor OnlineImageLoader {
 
         if urlString.hasPrefix("synthetic://") {
             let synthetic = Self.renderSyntheticMangaImage(urlString: urlString)
-            memoryCache.setObject(synthetic, forKey: cacheKey)
+            memoryCache.setObject(synthetic, forKey: cacheKey, cost: Self.memoryCost(of: synthetic))
             return synthetic
         }
 
+        try Task.checkCancellation()
+
         let diskPath = diskFileURL(for: identityKey)
         if let data = try? Data(contentsOf: diskPath), let diskImage = UIImage(data: data) {
-            memoryCache.setObject(diskImage, forKey: cacheKey, cost: data.count)
+            let cost = max(data.count, Self.memoryCost(of: diskImage))
+            memoryCache.setObject(diskImage, forKey: cacheKey, cost: cost)
             return diskImage
         }
 
-        if let existingTask = inFlightTasks[identityKey] {
-            return try await existingTask.value
+        try Task.checkCancellation()
+
+        let waiterID = UUID()
+        let waiter = CancellableImageWaiter()
+        let entry: InFlightImageEntry
+
+        if let existing = inFlightEntries[identityKey] {
+            existing.waiters[waiterID] = waiter
+            entry = existing
+        } else {
+            let newEntry = InFlightImageEntry()
+            newEntry.waiters[waiterID] = waiter
+            inFlightEntries[identityKey] = newEntry
+            entry = newEntry
+
+            newEntry.task = Task<Void, Never> {
+                do {
+                    let jmMeta = JmImageMeta.tryParse(urlString)
+                    let candidates = await self.buildCandidateUrls(rawUrl: urlString)
+                    guard !candidates.isEmpty else {
+                        throw MangaSourceError.invalidURL(urlString)
+                    }
+
+                    let fetched = try await self.fetchFirstValidImage(candidates: candidates, extraHeaders: headers)
+                    try Task.checkCancellation()
+
+                    if let group = self.imageDomainGroup(for: urlString),
+                       let winningHost = URL(string: fetched.winningURL)?.host {
+                        await OnlineEndpointStore.shared.setHealthyImageDomain(winningHost, for: group)
+                    }
+
+                    guard let processed = JmImageDescrambler.descrambleIfNeeded(data: fetched.data, meta: jmMeta) else {
+                        throw MangaSourceError.decodingFailed("响应内容不是有效的图片数据")
+                    }
+
+                    try? processed.cacheData.write(to: diskPath, options: .atomic)
+                    await self.finishInFlight(
+                        key: identityKey,
+                        entry: newEntry,
+                        result: .success(processed.image)
+                    )
+                } catch {
+                    await self.finishInFlight(
+                        key: identityKey,
+                        entry: newEntry,
+                        result: .failure(error)
+                    )
+                }
+            }
         }
 
-        let task = Task<UIImage, Error> {
-            let jmMeta = JmImageMeta.tryParse(urlString)
-            let candidates = await self.buildCandidateUrls(rawUrl: urlString)
-            guard !candidates.isEmpty else {
-                throw MangaSourceError.invalidURL(urlString)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiter.attach(continuation)
             }
-
-            let fetched = try await self.fetchFirstValidImage(candidates: candidates, extraHeaders: headers)
-            if let group = self.imageDomainGroup(for: urlString),
-               let winningHost = URL(string: fetched.winningURL)?.host {
-                await OnlineEndpointStore.shared.setHealthyImageDomain(winningHost, for: group)
+        } onCancel: {
+            if waiter.cancel() {
+                Task {
+                    await self.handleWaiterCancelled(key: identityKey, waiterID: waiterID, entry: entry)
+                }
             }
-
-            guard let processed = JmImageDescrambler.descrambleIfNeeded(data: fetched.data, meta: jmMeta) else {
-                throw MangaSourceError.decodingFailed("响应内容不是有效的图片数据")
-            }
-
-            try? processed.cacheData.write(to: diskPath, options: .atomic)
-            return processed.image
         }
+    }
 
-        inFlightTasks[identityKey] = task
-        do {
-            let image = try await task.value
-            inFlightTasks.removeValue(forKey: identityKey)
-            memoryCache.setObject(image, forKey: cacheKey)
-            return image
-        } catch {
-            inFlightTasks.removeValue(forKey: identityKey)
-            throw error
+    /// 后台预载入单张图片（若已在内存缓存则跳过；可随时响应 Task 取消）
+    public func preloadImage(urlString: String, headers: [String: String] = [:]) async {
+        guard !Task.isCancelled else { return }
+        let identityKey = normalizedCacheKey(for: urlString)
+        if memoryCache.object(forKey: identityKey as NSString) != nil {
+            return
+        }
+        _ = try? await loadImage(urlString: urlString, headers: headers)
+    }
+
+    private func finishInFlight(
+        key: String,
+        entry: InFlightImageEntry,
+        result: Result<UIImage, Error>
+    ) {
+        if case .success(let image) = result {
+            memoryCache.setObject(image, forKey: key as NSString, cost: Self.memoryCost(of: image))
+        }
+        if inFlightEntries[key] === entry {
+            inFlightEntries.removeValue(forKey: key)
+        }
+        let waiters = Array(entry.waiters.values)
+        entry.waiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(with: result)
+        }
+    }
+
+    private func handleWaiterCancelled(key: String, waiterID: UUID, entry: InFlightImageEntry) {
+        entry.waiters.removeValue(forKey: waiterID)
+        if entry.waiters.isEmpty {
+            if inFlightEntries[key] === entry {
+                inFlightEntries.removeValue(forKey: key)
+            }
+            entry.task?.cancel()
         }
     }
 
@@ -94,18 +263,34 @@ public actor OnlineImageLoader {
         try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
     }
 
+    /// 同步零 IO 内存缓存查询（专供主线程 Slot 快路径与预载入调度使用）
+    public nonisolated func cachedMemoryImage(for urlString: String) -> UIImage? {
+        let identityKey = normalizedCacheKey(for: urlString)
+        return memoryCache.object(forKey: identityKey as NSString)
+    }
+
     /// 同步快速获取已缓存的图片（优先内存，次选磁盘）
-    public func cachedImage(for urlString: String) -> UIImage? {
+    public nonisolated func cachedImage(for urlString: String) -> UIImage? {
         let identityKey = normalizedCacheKey(for: urlString)
         if let memoryImage = memoryCache.object(forKey: identityKey as NSString) {
             return memoryImage
         }
         let diskURL = diskFileURL(for: identityKey)
         if let diskData = try? Data(contentsOf: diskURL), let diskImage = UIImage(data: diskData) {
-            memoryCache.setObject(diskImage, forKey: identityKey as NSString)
+            let cost = max(diskData.count, Self.memoryCost(of: diskImage))
+            memoryCache.setObject(diskImage, forKey: identityKey as NSString, cost: cost)
             return diskImage
         }
         return nil
+    }
+
+    /// 快速判断图片是否已存在于内存或磁盘（不触发图片解码）
+    public nonisolated func hasCachedImage(for urlString: String) -> Bool {
+        let identityKey = normalizedCacheKey(for: urlString)
+        if memoryCache.object(forKey: identityKey as NSString) != nil {
+            return true
+        }
+        return FileManager.default.fileExists(atPath: diskFileURL(for: identityKey).path)
     }
 
     public func diskCacheSizeBytes() -> Int64 {
@@ -125,9 +310,18 @@ public actor OnlineImageLoader {
         diskCacheSizeBytes()
     }
 
-    private func diskFileURL(for key: String) -> URL {
+    private nonisolated func diskFileURL(for key: String) -> URL {
         let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return diskDirectory.appendingPathComponent(hash)
+    }
+
+    private nonisolated static func memoryCost(of image: UIImage) -> Int {
+        if let cg = image.cgImage {
+            return max(1, cg.width * cg.height * 4)
+        }
+        let w = Int(image.size.width * image.scale)
+        let h = Int(image.size.height * image.scale)
+        return max(1, w * h * 4)
     }
 
     // MARK: - Multi-CDN Failover & URL Normalization

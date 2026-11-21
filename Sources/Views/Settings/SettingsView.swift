@@ -189,6 +189,27 @@ public struct SettingsView: View {
                     Toggle("书脊中缝细分割线", isOn: $store.showSpineDividingLine)
                 }
 
+                Section {
+                    Picker("页面预载入策略", selection: $store.readerPreloadMode) {
+                        ForEach(ReaderPreloadMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+
+                    if store.readerPreloadMode.isEnabled {
+                        Toggle("空闲预热下一页 AI 超分", isOn: $store.enableUpscalerPreload)
+                        Toggle("章末自动预载下一话", isOn: $store.preloadNextChapter)
+                    }
+                } header: {
+                    Text("阅读预载入与性能")
+                } footer: {
+                    if store.readerPreloadMode.isEnabled {
+                        Text("顺读方向自动预下载临近页面以消除翻页等待；启用 AI 画质增强时会在当前页渲染完成后静默预热下一页。低电量、机身过热或内存紧张时将自动暂停后台超分预热。")
+                    } else {
+                        Text("已关闭预载入：仅在翻到对应页时才发起下载与超分，最省流量与电量。")
+                    }
+                }
+
                 Section("存储与显存缓存") {
                     HStack {
                         Text("在线图片磁盘缓存")
@@ -223,6 +244,7 @@ public struct SettingsView: View {
                     Task {
                         await OnlineImageLoader.shared.clearAllCache()
                         PageUpscalerPipeline.shared.clearCache()
+                        ImageFilterPipeline.shared.clearCache()
                         await refreshCacheSize()
                     }
                 }

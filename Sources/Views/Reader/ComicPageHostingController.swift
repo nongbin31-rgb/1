@@ -24,6 +24,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     private var onStatusUpdate: (String) -> Void
     private var onZoomChanged: ((CGFloat) -> Void)?
     private var onImageLoaded: ((UIImage) -> Void)?
+    private var onPageReady: ((Int) -> Void)?
 
     public init(
         pageIndex: Int,
@@ -46,7 +47,8 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil,
-        onImageLoaded: ((UIImage) -> Void)? = nil
+        onImageLoaded: ((UIImage) -> Void)? = nil,
+        onPageReady: ((Int) -> Void)? = nil
     ) {
         self.pageIndex = pageIndex
         self.page = page
@@ -69,6 +71,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.onStatusUpdate = onStatusUpdate
         self.onZoomChanged = onZoomChanged
         self.onImageLoaded = onImageLoaded
+        self.onPageReady = onPageReady
 
         super.init(rootView: ComicPageCellView(
             page: page,
@@ -90,7 +93,8 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
             onZoomChanged: onZoomChanged,
-            onImageLoaded: onImageLoaded
+            onImageLoaded: onImageLoaded,
+            onPageReady: onPageReady
         ))
     }
 
@@ -227,7 +231,8 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             onSingleTap: onSingleTap,
             onStatusUpdate: onStatusUpdate,
             onZoomChanged: onZoomChanged,
-            onImageLoaded: onImageLoaded
+            onImageLoaded: onImageLoaded,
+            onPageReady: onPageReady
         )
     }
 }

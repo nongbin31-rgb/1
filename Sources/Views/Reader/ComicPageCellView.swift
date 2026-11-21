@@ -47,7 +47,7 @@ public final class ComicPageSlot: ObservableObject {
         let targetFilterSig = filterConfig.cacheSignature
 
         // 如果当前页原图已经存在，检查是否已经达到目标状态以避免重复计算
-        if let original = originalImage {
+        if let _ = originalImage {
             if !isEnabled {
                 if lastIsEnabled == false,
                    processed?.appliedModel == nil,
@@ -58,9 +58,75 @@ public final class ComicPageSlot: ObservableObject {
             } else if lastIsEnabled == true,
                       lastAppliedConfig == config,
                       lastAppliedFilterSignature == targetFilterSig,
-                      let currentProcessed = processed,
+                      processed != nil,
                       displayImage != nil {
                 return
+            }
+        }
+
+        // 零闪烁内存全命中快路径：预载入或近期翻阅已将原图 + 目标超分/滤镜备齐时，直接同步直出跳过转圈与淡入
+        if let memOriginal = originalImage ?? OnlineImageLoader.shared.cachedMemoryImage(for: page.imageURL) {
+            let origSize = Self.pixelSize(of: memOriginal)
+            if !isEnabled {
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: nil,
+                    isUpscaled: false
+                )
+                let fastDisplay = filterConfig.hasActiveFilters
+                    ? ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig)
+                    : memOriginal
+                if let fastDisplay {
+                    loadGeneration &+= 1
+                    self.originalImage = memOriginal
+                    self.processed = ProcessedPageImage(
+                        image: memOriginal,
+                        originalSize: origSize,
+                        outputSize: origSize,
+                        elapsedMs: 0,
+                        appliedModel: nil
+                    )
+                    self.lastIsEnabled = false
+                    self.lastAppliedConfig = nil
+                    self.lastAppliedFilterSignature = targetFilterSig
+                    self.isLoading = false
+                    self.isUpscaling = false
+                    self.upscaleProgress = ""
+                    self.displayImage = fastDisplay
+                    return
+                }
+            } else if let memUpscaled = PageUpscalerPipeline.shared.cachedImage(
+                pageKey: page.imageURL,
+                config: config
+            ) {
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: config,
+                    isUpscaled: true
+                )
+                let fastDisplay = filterConfig.hasActiveFilters
+                    ? ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig)
+                    : memUpscaled
+                if let fastDisplay {
+                    loadGeneration &+= 1
+                    self.originalImage = memOriginal
+                    self.processed = ProcessedPageImage(
+                        image: memUpscaled,
+                        originalSize: origSize,
+                        outputSize: Self.pixelSize(of: memUpscaled),
+                        elapsedMs: 0,
+                        appliedModel: config.model,
+                        notice: "命中缓存"
+                    )
+                    self.lastIsEnabled = true
+                    self.lastAppliedConfig = config
+                    self.lastAppliedFilterSignature = targetFilterSig
+                    self.isLoading = false
+                    self.isUpscaling = false
+                    self.upscaleProgress = ""
+                    self.displayImage = fastDisplay
+                    return
+                }
             }
         }
 
@@ -68,31 +134,37 @@ public final class ComicPageSlot: ObservableObject {
         let currentGeneration = loadGeneration
 
         if originalImage == nil {
-            isLoading = true
-            do {
-                let img = try await OnlineImageLoader.shared.loadImage(
-                    urlString: page.imageURL,
-                    headers: page.headers
-                )
-                guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+            if let memOriginal = OnlineImageLoader.shared.cachedMemoryImage(for: page.imageURL) {
+                self.originalImage = memOriginal
+                self.displayImage = memOriginal
+                self.isLoading = false
+            } else {
+                isLoading = true
+                do {
+                    let img = try await OnlineImageLoader.shared.loadImage(
+                        urlString: page.imageURL,
+                        headers: page.headers
+                    )
+                    guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                        return
+                    }
+                    self.originalImage = img
+                    self.displayImage = img
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                        return
+                    }
+                    errorMessage = error.localizedDescription
+                    isLoading = false
                     return
                 }
-                self.originalImage = img
-                self.displayImage = img
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
-                    return
-                }
-                errorMessage = error.localizedDescription
                 isLoading = false
-                return
-            }
-            isLoading = false
-            await Task.yield()
-            guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
-                return
+                await Task.yield()
+                guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                    return
+                }
             }
         }
 
@@ -100,10 +172,7 @@ public final class ComicPageSlot: ObservableObject {
 
         // 若超分未启用，直接处理原图 + 滤镜
         guard isEnabled else {
-            let size = CGSize(
-                width: original.cgImage?.width ?? Int(original.size.width),
-                height: original.cgImage?.height ?? Int(original.size.height)
-            )
+            let size = Self.pixelSize(of: original)
             processed = ProcessedPageImage(
                 image: original,
                 originalSize: size,
@@ -116,9 +185,14 @@ public final class ComicPageSlot: ObservableObject {
 
             let finalImage: UIImage
             if filterConfig.hasActiveFilters {
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: nil,
+                    isUpscaled: false
+                )
                 finalImage = ImageFilterPipeline.shared.process(
                     image: original,
-                    cacheKey: "\(page.imageURL)_raw",
+                    cacheKey: filterKey,
                     config: filterConfig
                 )
             } else {
@@ -159,9 +233,14 @@ public final class ComicPageSlot: ObservableObject {
 
         let finalImage: UIImage
         if filterConfig.hasActiveFilters {
+            let filterKey = ImageFilterPipeline.cacheKey(
+                pageURL: page.imageURL,
+                upscalerConfig: config,
+                isUpscaled: result.appliedModel != nil
+            )
             finalImage = ImageFilterPipeline.shared.process(
                 image: result.image,
-                cacheKey: "\(page.imageURL)_upscaled",
+                cacheKey: filterKey,
                 config: filterConfig
             )
         } else {
@@ -169,14 +248,30 @@ public final class ComicPageSlot: ObservableObject {
         }
         self.lastAppliedFilterSignature = targetFilterSig
 
-        // 增强后平滑淡入（可达阅读器 transitionAfterImageUpscaled 逻辑）
-        if transitionAfterUpscaled {
+        // 命中预热缓存时零闪烁直出；仅现场等待超分完成后播放平滑淡入
+        let shouldAnimateTransition = transitionAfterUpscaled
+            && result.appliedModel != nil
+            && result.notice != "命中缓存"
+            && result.elapsedMs > 0
+        if shouldAnimateTransition {
             withAnimation(.easeInOut(duration: 0.35)) {
                 self.displayImage = finalImage
             }
         } else {
             self.displayImage = finalImage
         }
+    }
+
+    private static func pixelSize(of image: UIImage) -> CGSize {
+        if let cg = image.cgImage {
+            switch image.imageOrientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                return CGSize(width: cg.height, height: cg.width)
+            default:
+                return CGSize(width: cg.width, height: cg.height)
+            }
+        }
+        return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
     }
 
     /// 释放大图内存以应对长列表/长时间翻页，仅保留占位状态
@@ -215,6 +310,7 @@ public struct ComicPageCellView: View {
     public let onStatusUpdate: (String) -> Void
     public var onZoomChanged: ((CGFloat) -> Void)? = nil
     public var onImageLoaded: ((UIImage) -> Void)? = nil
+    public var onPageReady: ((Int) -> Void)? = nil
 
     @StateObject private var slot = ComicPageSlot()
 
@@ -238,7 +334,8 @@ public struct ComicPageCellView: View {
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil,
-        onImageLoaded: ((UIImage) -> Void)? = nil
+        onImageLoaded: ((UIImage) -> Void)? = nil,
+        onPageReady: ((Int) -> Void)? = nil
     ) {
         self.page = page
         self.config = config
@@ -260,6 +357,7 @@ public struct ComicPageCellView: View {
         self.onStatusUpdate = onStatusUpdate
         self.onZoomChanged = onZoomChanged
         self.onImageLoaded = onImageLoaded
+        self.onPageReady = onPageReady
     }
 
     public var body: some View {
@@ -395,6 +493,9 @@ public struct ComicPageCellView: View {
             filterConfig: filterConfig
         )
         guard !Task.isCancelled else { return }
+        if slot.errorMessage == nil, slot.displayImage != nil {
+            onPageReady?(page.index)
+        }
         if let p = slot.processed {
             let orig = "\(Int(p.originalSize.width))×\(Int(p.originalSize.height))"
             let out = "\(Int(p.outputSize.width))×\(Int(p.outputSize.height))"

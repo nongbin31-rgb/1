@@ -99,6 +99,25 @@ public final class ImageFilterPipeline: @unchecked Sendable {
         }.value
     }
 
+    /// 生成跨排版模式统一的滤镜缓存 Key（避免条漫与翻页割裂，并隔离不同超分模型配置）
+    public static func cacheKey(
+        pageURL: String,
+        upscalerConfig: ImageUpscalerConfig?,
+        isUpscaled: Bool
+    ) -> String {
+        if isUpscaled, let upscalerConfig {
+            return "\(pageURL)::upscaled::\(upscalerConfig.cacheKey)"
+        }
+        return "\(pageURL)::raw"
+    }
+
+    /// 同步查询已缓存的滤镜成品图（专供主线程快路径与预热跳过检查使用）
+    public func cachedImage(cacheKey: String, config: ImageFilterConfig) -> UIImage? {
+        guard config.hasActiveFilters else { return nil }
+        let fullKey = "\(cacheKey)_\(config.cacheSignature)" as NSString
+        return cache.object(forKey: fullKey)
+    }
+
     /// 清空图片滤镜缓存
     public func clearCache() {
         cache.removeAllObjects()
