@@ -27,20 +27,41 @@ private final class ReaderPageSlot: ObservableObject {
 
         let targetFilterSig = filterConfig.cacheSignature
 
-        // 如果原图已经存在，检查是否已经达到目标状态以避免重复计算
-        if let _ = originalImage {
+        // 动态调滤镜极速响应快路径：原图已在内存，且超分配置/开启状态未变，仅调整滤镜参数时直接对现有成品跑 CoreImage 滤镜
+        if let existingOriginal = originalImage {
             if !isEnabled {
-                if lastIsEnabled == false,
-                   processed?.appliedModel == nil,
-                   lastAppliedFilterSignature == targetFilterSig,
-                   displayImage != nil {
+                if lastIsEnabled == false {
+                    if lastAppliedFilterSignature == targetFilterSig, displayImage != nil {
+                        return
+                    }
+                    let filterKey = ImageFilterPipeline.cacheKey(
+                        pageURL: page.imageURL,
+                        upscalerConfig: nil,
+                        isUpscaled: false
+                    )
+                    let finalImage = filterConfig.hasActiveFilters
+                        ? ImageFilterPipeline.shared.process(image: existingOriginal, cacheKey: filterKey, config: filterConfig)
+                        : existingOriginal
+                    self.lastAppliedFilterSignature = targetFilterSig
+                    self.displayImage = finalImage
+                    self.isLoading = false
                     return
                 }
-            } else if lastIsEnabled == true,
-                      lastAppliedConfig == config,
-                      lastAppliedFilterSignature == targetFilterSig,
-                      processed != nil,
-                      displayImage != nil {
+            } else if lastIsEnabled == true, lastAppliedConfig == config, let existingProcessed = processed {
+                if lastAppliedFilterSignature == targetFilterSig, displayImage != nil {
+                    return
+                }
+                let filterKey = ImageFilterPipeline.cacheKey(
+                    pageURL: page.imageURL,
+                    upscalerConfig: config,
+                    isUpscaled: existingProcessed.appliedModel != nil
+                )
+                let finalImage = filterConfig.hasActiveFilters
+                    ? ImageFilterPipeline.shared.process(image: existingProcessed.image, cacheKey: filterKey, config: filterConfig)
+                    : existingProcessed.image
+                self.lastAppliedFilterSignature = targetFilterSig
+                self.displayImage = finalImage
+                self.isLoading = false
                 return
             }
         }
@@ -114,11 +135,10 @@ private final class ReaderPageSlot: ObservableObject {
         loadGeneration &+= 1
         let currentGeneration = loadGeneration
 
-        if originalImage == nil {
+        var rawLoadedImage: UIImage? = originalImage
+        if rawLoadedImage == nil {
             if let memOriginal = OnlineImageLoader.shared.cachedMemoryImage(for: page.imageURL) {
-                self.originalImage = memOriginal
-                self.displayImage = memOriginal
-                self.isLoading = false
+                rawLoadedImage = memOriginal
             } else {
                 isLoading = true
                 do {
@@ -127,8 +147,7 @@ private final class ReaderPageSlot: ObservableObject {
                         headers: page.headers
                     )
                     guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
-                    self.originalImage = img
-                    self.displayImage = img
+                    rawLoadedImage = img
                 } catch is CancellationError {
                     return
                 } catch {
@@ -137,14 +156,27 @@ private final class ReaderPageSlot: ObservableObject {
                     isLoading = false
                     return
                 }
-                isLoading = false
-                await Task.yield()
-                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
             }
         }
 
-        guard let original = originalImage else { return }
+        guard let original = rawLoadedImage else { return }
+        self.originalImage = original
 
+        // 【原子化滤镜门禁】：先根据当前滤镜配置生成 1x 基准底图，绝不在屏幕上提前暴露未处理的原图
+        let rawFilterKey = ImageFilterPipeline.cacheKey(
+            pageURL: page.imageURL,
+            upscalerConfig: nil,
+            isUpscaled: false
+        )
+        let baselineFilteredImage = filterConfig.hasActiveFilters
+            ? ImageFilterPipeline.shared.process(
+                image: original,
+                cacheKey: rawFilterKey,
+                config: filterConfig
+            )
+            : original
+
+        // 若超分未启用，直接呈现带滤镜的原图，首帧即是最终效果，绝无二次跳变闪烁
         guard isEnabled else {
             let size = Self.pixelSize(of: original)
             processed = ProcessedPageImage(
@@ -156,26 +188,15 @@ private final class ReaderPageSlot: ObservableObject {
             )
             lastIsEnabled = false
             lastAppliedConfig = nil
-
-            let finalImage: UIImage
-            if filterConfig.hasActiveFilters {
-                let filterKey = ImageFilterPipeline.cacheKey(
-                    pageURL: page.imageURL,
-                    upscalerConfig: nil,
-                    isUpscaled: false
-                )
-                finalImage = ImageFilterPipeline.shared.process(
-                    image: original,
-                    cacheKey: filterKey,
-                    config: filterConfig
-                )
-            } else {
-                finalImage = original
-            }
             self.lastAppliedFilterSignature = targetFilterSig
-            self.displayImage = finalImage
+            self.displayImage = baselineFilteredImage
+            self.isLoading = false
             return
         }
+
+        // 超分已启用：秒显底图直接展示带滤镜的 baselineFilteredImage，基准色调从第 0 毫秒起就与最终成品完全一致
+        self.displayImage = baselineFilteredImage
+        self.isLoading = false
 
         isUpscaling = true
         upscaleProgress = ""
@@ -219,6 +240,7 @@ private final class ReaderPageSlot: ObservableObject {
         }
         self.lastAppliedFilterSignature = targetFilterSig
 
+        // 命中预热缓存时零闪烁直出；仅现场等待超分完成后播放平滑淡入（色调完全一致，仅清晰度由 1x 柔和过渡到 2x）
         let shouldAnimateTransition = transitionAfterUpscaled
             && result.appliedModel != nil
             && result.notice != "命中缓存"

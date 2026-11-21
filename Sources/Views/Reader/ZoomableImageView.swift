@@ -289,6 +289,7 @@ public struct ZoomableImageView: UIViewRepresentable {
 
                         imageView.neutralTextureOverlayView.backgroundColor = .clear
                         imageView.textureOverlayView.backgroundColor = .clear
+                        imageView.textureOverlayView.contentMode = .scaleToFill
                         imageView.textureOverlayView.layer.magnificationFilter = .linear
                         imageView.textureOverlayView.layer.minificationFilter = .linear
 
@@ -296,22 +297,23 @@ public struct ZoomableImageView: UIViewRepresentable {
                         imageView.highlightClipContainer.alpha = 0.0
                         imageView.highlightOverlayView.image = nil
 
-                        let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
-                        if let neutralImg, clampedTint < 0.999 {
+                        let neutralTiled = clampedTint < 0.999 ? ReaderTextureCache.shared.tiledNeutralTextureImage(for: texture) : nil
+                        if let neutralTiled, clampedTint < 0.999 {
                             imageView.neutralTextureOverlayView.isHidden = false
-                            imageView.neutralTextureOverlayView.contentMode = .scaleAspectFill
-                            imageView.neutralTextureOverlayView.image = neutralImg
+                            imageView.neutralTextureOverlayView.contentMode = .scaleToFill
+                            imageView.neutralTextureOverlayView.image = neutralTiled
                             imageView.neutralTextureOverlayView.alpha = 1.0
                         } else {
                             imageView.neutralTextureOverlayView.isHidden = true
                             imageView.neutralTextureOverlayView.image = nil
                         }
 
-                        if clampedTint > 0.001 || neutralImg == nil {
+                        let tiled = ReaderTextureCache.shared.tiledTextureImage(for: texture, grainDensity: grainDensity)
+                        if clampedTint > 0.001 || neutralTiled == nil, let tiled {
                             imageView.textureOverlayView.isHidden = false
-                            imageView.textureOverlayView.contentMode = .scaleAspectFill
-                            imageView.textureOverlayView.image = texImg
-                            imageView.textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : CGFloat(clampedTint)
+                            imageView.textureOverlayView.contentMode = .scaleToFill
+                            imageView.textureOverlayView.image = tiled
+                            imageView.textureOverlayView.alpha = (neutralTiled == nil) ? 1.0 : CGFloat(clampedTint)
                         } else {
                             imageView.textureOverlayView.isHidden = true
                             imageView.textureOverlayView.alpha = 0.0

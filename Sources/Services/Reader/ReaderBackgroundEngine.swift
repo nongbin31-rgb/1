@@ -158,12 +158,95 @@ public final class ReaderTextureCache: @unchecked Sendable {
         if let cached = tiledImageCache.object(forKey: key) {
             return cached
         }
-        guard let img = textureImage(for: type, grainDensity: grainDensity) else {
+        let baseImg: UIImage?
+        if type.usesFineTilePattern {
+            baseImg = textureImage(for: type, grainDensity: grainDensity)
+        } else {
+            // 对除经典外的其他材质，使用无缝 160pt 高密平铺切片，避免 AspectFill 放大 5 倍导致的粗糙噪点感
+            baseImg = seamlessDenseTileImage(for: type)
+        }
+        guard let img = baseImg else {
             return nil
         }
         let tiled = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
         tiledImageCache.setObject(tiled, forKey: key)
         return tiled
+    }
+
+    /// 获取缓存的去色中性版 GPU 原生无缝平铺图像（供着色度 < 100% 时无缝混合使用）
+    public func tiledNeutralTextureImage(for type: ReaderTextureType) -> UIImage? {
+        if type.usesFineTilePattern {
+            return tiledTextureImage(for: type)
+        }
+        let key = "\(type.rawValue)_neutral_dense_tiled" as NSString
+        if let cached = tiledImageCache.object(forKey: key) {
+            return cached
+        }
+        guard let img = seamlessNeutralDenseTileImage(for: type) else {
+            return nil
+        }
+        let tiled = img.resizableImage(withCapInsets: .zero, resizingMode: .tile)
+        tiledImageCache.setObject(tiled, forKey: key)
+        return tiled
+    }
+
+    /// 获取其它位图材质的高密无缝平铺切片（消除接缝，并将瓦片逻辑大小缩放到细腻的 ~160pt，恢复真实物理纸质纤维）
+    public func seamlessDenseTileImage(for type: ReaderTextureType) -> UIImage? {
+        if type.usesFineTilePattern {
+            return textureImage(for: type)
+        }
+        let key = "\(type.rawValue)_dense_tile" as NSString
+        if let cached = seamlessTileCache.object(forKey: key) {
+            return cached
+        }
+        guard let baseImg = textureImage(for: type) else {
+            return nil
+        }
+
+        return queue.sync {
+            if let cached = seamlessTileCache.object(forKey: key) {
+                return cached
+            }
+            let generated = Self.buildSeamlessDenseTile(from: baseImg, targetLogicalSize: 160.0)
+            seamlessTileCache.setObject(generated, forKey: key)
+            return generated
+        }
+    }
+
+    /// 获取其它位图材质去色中性版的高密无缝平铺切片
+    public func seamlessNeutralDenseTileImage(for type: ReaderTextureType) -> UIImage? {
+        if type.usesFineTilePattern {
+            return textureImage(for: type)
+        }
+        let key = "\(type.rawValue)_neutral_dense_tile" as NSString
+        if let cached = seamlessTileCache.object(forKey: key) {
+            return cached
+        }
+        guard let neutralImg = neutralGrainImage(for: type) else {
+            return nil
+        }
+
+        return queue.sync {
+            if let cached = seamlessTileCache.object(forKey: key) {
+                return cached
+            }
+            let generated = Self.buildSeamlessDenseTile(from: neutralImg, targetLogicalSize: 160.0)
+            seamlessTileCache.setObject(generated, forKey: key)
+            return generated
+        }
+    }
+
+    private static func buildSeamlessDenseTile(from image: UIImage, targetLogicalSize: CGFloat = 160.0) -> UIImage {
+        let mirrored = buildSeamlessMirroredTile(from: image)
+        let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+        let targetSize = CGSize(width: targetLogicalSize, height: targetLogicalSize)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = screenScale
+        format.opaque = true
+
+        return UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
+            mirrored.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
     }
 
     /// 获取双层细节纸纹 (Mipmap Level 1) 的 2x 细度微观切片（64×64pt 逻辑尺寸，放大 2x 时还原 1:1 物理像素细腻颗粒）
@@ -1048,6 +1131,7 @@ public class ReaderBackgroundContainerView: UIView {
             } else {
                 neutralTextureOverlayView.backgroundColor = .clear
                 textureOverlayView.backgroundColor = .clear
+                textureOverlayView.contentMode = .scaleToFill
                 textureOverlayView.layer.magnificationFilter = .linear
                 textureOverlayView.layer.minificationFilter = .linear
 
@@ -1055,22 +1139,23 @@ public class ReaderBackgroundContainerView: UIView {
                 highlightOverlayView.image = nil
                 highlightOverlayView.alpha = 0.0
 
-                let neutralImg = t < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: currentTexture) : nil
-                if let neutralImg, t < 0.999 {
+                let neutralTiled = t < 0.999 ? ReaderTextureCache.shared.tiledNeutralTextureImage(for: currentTexture) : nil
+                if let neutralTiled, t < 0.999 {
                     neutralTextureOverlayView.isHidden = false
-                    neutralTextureOverlayView.contentMode = .scaleAspectFill
-                    neutralTextureOverlayView.image = neutralImg
+                    neutralTextureOverlayView.contentMode = .scaleToFill
+                    neutralTextureOverlayView.image = neutralTiled
                     neutralTextureOverlayView.alpha = 1.0
                 } else {
                     neutralTextureOverlayView.isHidden = true
                     neutralTextureOverlayView.image = nil
                 }
 
-                if t > 0.001 || neutralImg == nil {
+                let tiled = ReaderTextureCache.shared.tiledTextureImage(for: currentTexture, grainDensity: grainDensity)
+                if t > 0.001 || neutralTiled == nil, let tiled {
                     textureOverlayView.isHidden = false
-                    textureOverlayView.contentMode = .scaleAspectFill
-                    textureOverlayView.image = img
-                    textureOverlayView.alpha = (neutralImg == nil) ? 1.0 : t
+                    textureOverlayView.contentMode = .scaleToFill
+                    textureOverlayView.image = tiled
+                    textureOverlayView.alpha = (neutralTiled == nil) ? 1.0 : t
                 } else {
                     textureOverlayView.isHidden = true
                     textureOverlayView.alpha = 0.0
@@ -1222,21 +1307,21 @@ public struct PaperTextureOverlayView: View {
                     }
                     .allowsHitTesting(false)
                 } else {
-                    let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: texture) : nil
-                    // 与画面层 ZoomableImageView 保持完全一致的 AspectFill 缩放与居中锚点，
-                    // 避免高分原图 1:1 平铺导致背景纹理颗粒过大及边缘接缝错位
-                    GeometryReader { proxy in
-                        let targetSize = validReferenceSize() ?? proxy.size
-                        ZStack {
-                            if let neutralImg, clampedTint < 0.999 {
-                                aspectFilledTexture(neutralImg, targetSize: targetSize, containerSize: proxy.size)
-                            }
-                            if clampedTint > 0.001 || neutralImg == nil {
-                                aspectFilledTexture(img, targetSize: targetSize, containerSize: proxy.size)
-                                    .opacity(neutralImg == nil ? 1.0 : clampedTint)
-                            }
+                    let neutralTile = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralDenseTileImage(for: texture) : nil
+                    let denseTile = ReaderTextureCache.shared.seamlessDenseTileImage(for: texture) ?? img
+
+                    ZStack {
+                        if let neutralTile, clampedTint < 0.999 {
+                            Image(uiImage: neutralTile)
+                                .interpolation(.medium)
+                                .resizable(resizingMode: .tile)
                         }
-                        .compositingGroup()
+                        if clampedTint > 0.001 || neutralTile == nil {
+                            Image(uiImage: denseTile)
+                                .interpolation(.medium)
+                                .resizable(resizingMode: .tile)
+                                .opacity(neutralTile == nil ? 1.0 : clampedTint)
+                        }
                     }
                     .blendMode(.multiply)
                     .opacity(effectiveOpacity)
@@ -1297,13 +1382,10 @@ public struct PaperTextureOverlayView: View {
                     }
                     .allowsHitTesting(false)
                 } else {
-                    let tileImg = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
-                    let neutralTileImg = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralTileImage(for: texture) : nil
-                    let refSize = validReferenceSize() ?? fallbackScreenSize()
-                    let singleSize = Self.scaledTileSize(for: img, fitting: refSize)
-                    let screenScale = max(UIScreen.main.scale, 1.0)
-                    let tileW = max(64.0, (singleSize.width * 2.0 * screenScale).rounded() / screenScale)
-                    let tileH = max(64.0, (singleSize.height * 2.0 * screenScale).rounded() / screenScale)
+                    let tileImg = ReaderTextureCache.shared.seamlessDenseTileImage(for: texture) ?? img
+                    let neutralTileImg = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralDenseTileImage(for: texture) : nil
+                    let tileW: CGFloat = max(tileImg.size.width, 64.0)
+                    let tileH: CGFloat = max(tileImg.size.height, 64.0)
                     GeometryReader { proxy in
                         let viewW = proxy.size.width
                         let viewH = proxy.size.height
