@@ -237,15 +237,6 @@ public struct SettingsView: View {
                         Text("清理全部图片与超分管线缓存")
                     }
                 }
-
-                Section("关于与技术架构") {
-                    CompatLabeledContent("应用定位", value: "纯原生 iOS 在线漫画阅读器")
-                    CompatLabeledContent("最低系统", value: "iOS 15.0")
-                    CompatLabeledContent("超分资产包", value: "可达阅读器_1.7.2 原包提取 (18 模型 + 48 GLSL)")
-                    CompatLabeledContent("Waifu2x 核心", value: "Apple Neural Engine (ANE) Float16 编译模型")
-                    CompatLabeledContent("Anime4K 引擎", value: "Metal 多 Pass 实时计算着色器")
-                    CompatLabeledContent("拟真背景引擎", value: "6 套实体纸张扫描材质 + 正片叠底复合管线")
-                }
             }
             .navigationTitle("设置")
             .task {
