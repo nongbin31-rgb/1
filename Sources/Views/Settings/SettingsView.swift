@@ -125,6 +125,13 @@ public struct SettingsView: View {
                         }
                     }
 
+                    Picker("阅读进度条样式", selection: $store.readerProgressStyle) {
+                        ForEach(ReaderProgressStyle.allCases) { style in
+                            Label(style.displayName, systemImage: style.iconName).tag(style)
+                        }
+                    }
+
+                    Toggle("隐藏控制栏时显示极简进度", isOn: $store.showAmbientProgressInReader)
                     Toggle("翻页音效与轻触震动", isOn: $store.pageTurnSoundEnabled)
                     Toggle("仿真卷页书脊立体中缝阴影", isOn: $store.showSpineShadowInCurl)
                 } header: {

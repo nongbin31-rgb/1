@@ -67,6 +67,12 @@ public final class AppStore: ObservableObject {
     @Published public var showSpineDividingLine: Bool = true {
         didSet { save(showSpineDividingLine, key: Keys.spineDividingLine) }
     }
+    @Published public var readerProgressStyle: ReaderProgressStyle = .edgeDock {
+        didSet { save(readerProgressStyle, key: Keys.readerProgressStyle) }
+    }
+    @Published public var showAmbientProgressInReader: Bool = true {
+        didSet { save(showAmbientProgressInReader, key: Keys.showAmbientProgressInReader) }
+    }
     @Published public var discoverPaginationMode: DiscoverPaginationMode = .pageByPage {
         didSet { save(discoverPaginationMode, key: Keys.discoverPaginationMode) }
     }
@@ -129,6 +135,8 @@ public final class AppStore: ObservableObject {
         static let readerTextureTarget = "keda_online_reader_texture_target_v1"
         static let readerImageOnlyBackdrop = "keda_online_reader_image_only_backdrop_v1"
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
+        static let readerProgressStyle = "keda_online_reader_progress_style_v1"
+        static let showAmbientProgressInReader = "keda_online_show_ambient_progress_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
         static let discoverLayoutStyle = "keda_online_discover_layout_style_v1"
         static let bookshelfLayoutStyle = "keda_online_bookshelf_layout_style_v1"
@@ -201,6 +209,8 @@ public final class AppStore: ObservableObject {
         self.readerTextureTarget = load(key: Keys.readerTextureTarget) ?? .both
         self.readerImageOnlyBackdrop = load(key: Keys.readerImageOnlyBackdrop) ?? .paperTint
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
+        self.readerProgressStyle = load(key: Keys.readerProgressStyle) ?? .edgeDock
+        self.showAmbientProgressInReader = load(key: Keys.showAmbientProgressInReader) ?? true
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
         self.discoverLayoutStyle = load(key: Keys.discoverLayoutStyle) ?? .classicGrid
         self.bookshelfLayoutStyle = load(key: Keys.bookshelfLayoutStyle) ?? .focusShelf
