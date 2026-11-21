@@ -362,13 +362,8 @@ public struct ComicPageCellView: View {
 
     public var body: some View {
         ZStack {
-            currentBackgroundColor
-
-            // 当处于纹理或沉浸模式时，单页留白区域保持完全透明，
-            // 统一直透最底层铺满全屏的 readerBackgroundView，彻底消除翻页时 Cell 背景遮挡与安全区错位产生的白块
-            if background == .texture && (textureTarget == .both || textureTarget == .backgroundOnly) && !isCompareMode {
-                // 由外层 ReaderView 的 readerBackgroundView 统一承载全屏纸张底色与微粒纹理
-            }
+            // 每页自带完整不透明且铺满安全区的纸张背景与纹理（确保仿真卷页/层叠翻页时上下留白为真实实体纸面而非透明镂空）
+            pageBackdropView
 
             if let currentImg = slot.displayImage, let orig = slot.originalImage {
                 if isCompareMode, isEnabled, let processed = slot.processed, processed.appliedModel != nil {
@@ -454,17 +449,90 @@ public struct ComicPageCellView: View {
         }
     }
 
+    private var pageBackdropView: some View {
+        GeometryReader { geo in
+            pageBackdropContent(referenceSize: geo.size)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+                .compositingGroup()
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+
     @ViewBuilder
-    private var currentBackgroundColor: some View {
+    private func pageBackdropContent(referenceSize: CGSize) -> some View {
         switch background {
         case .followSystem:
-            Color(uiColor: .systemBackground).ignoresSafeArea()
+            Color(uiColor: .systemBackground)
         case .light:
-            Color.white.ignoresSafeArea()
+            Color.white
         case .dark:
-            Color.black.ignoresSafeArea()
-        case .immersive, .texture:
-            Color.clear.ignoresSafeArea()
+            Color.black
+        case .immersive:
+            pageImmersiveBackdrop(referenceSize: referenceSize)
+        case .texture:
+            if textureTarget == .imageOnly {
+                pageImageOnlyBackdrop(referenceSize: referenceSize)
+            } else {
+                ZStack {
+                    pagePaperTintBackdrop
+                    if !isCompareMode {
+                        PaperTextureOverlayView(
+                            texture: texture,
+                            opacity: textureOpacity,
+                            tintOpacity: textureTintOpacity,
+                            grainDensity: textureGrainDensity,
+                            phaseAnchor: .local,
+                            referenceSize: referenceSize
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var pagePaperTintBackdrop: some View {
+        ZStack {
+            Color.white
+            if textureTintOpacity > 0.001 {
+                texture.basePaperSwiftUIColor
+                    .opacity(textureTintOpacity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func pageImageOnlyBackdrop(referenceSize: CGSize) -> some View {
+        switch imageOnlyBackdrop {
+        case .paperTint:
+            pagePaperTintBackdrop
+        case .followSystem:
+            Color(uiColor: .systemBackground)
+        case .light:
+            Color.white
+        case .dark:
+            Color.black
+        case .immersive:
+            pageImmersiveBackdrop(referenceSize: referenceSize)
+        }
+    }
+
+    private func pageImmersiveBackdrop(referenceSize: CGSize) -> some View {
+        let sourceImg = slot.originalImage ?? slot.displayImage
+        let blurredImg = sourceImg.flatMap {
+            ReaderTextureCache.shared.ambientBlurImage(for: $0, cacheKey: page.imageURL)
+        }
+        return ZStack {
+            Color.black
+            if let blurredImg {
+                Image(uiImage: blurredImg)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: referenceSize.width, height: referenceSize.height)
+                    .clipped()
+                    .opacity(0.8)
+            }
         }
     }
 

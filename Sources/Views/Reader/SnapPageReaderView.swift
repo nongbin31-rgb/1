@@ -603,12 +603,23 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentOnPageReady = onPageReady
 
         let rootView = SnapPageRootView(pageView: buildPageView())
+        let hostBgColor = ReaderTextureCache.resolvedHostUIColor(
+            background: background,
+            texture: texture,
+            tintOpacity: textureTintOpacity,
+            textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop
+        )
 
         if let existing = hostingController {
+            existing.view.backgroundColor = hostBgColor
             existing.rootView = rootView
         } else {
             let hc = UIHostingController(rootView: rootView)
-            hc.view.backgroundColor = .clear
+            hc.view.backgroundColor = hostBgColor
+            if #available(iOS 16.4, *) {
+                hc.safeAreaRegions = []
+            }
             hc.view.frame = contentView.bounds
             hc.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             contentView.addSubview(hc.view)
@@ -669,6 +680,13 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentImageOnlyBackdrop = imageOnlyBackdrop
 
         if let existing = hostingController {
+            existing.view.backgroundColor = ReaderTextureCache.resolvedHostUIColor(
+                background: background,
+                texture: texture,
+                tintOpacity: textureTintOpacity,
+                textureTarget: textureTarget,
+                imageOnlyBackdrop: imageOnlyBackdrop
+            )
             existing.rootView = SnapPageRootView(pageView: buildPageView())
         }
     }

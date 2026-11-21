@@ -104,7 +104,20 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        syncHostBackgroundColor()
+        if #available(iOS 16.4, *) {
+            safeAreaRegions = []
+        }
+    }
+
+    private func syncHostBackgroundColor() {
+        view.backgroundColor = ReaderTextureCache.resolvedHostUIColor(
+            background: background,
+            texture: texture,
+            tintOpacity: textureTintOpacity,
+            textureTarget: textureTarget,
+            imageOnlyBackdrop: imageOnlyBackdrop
+        )
     }
 
     /// 全面动态同步页面超分配置、排版方向与背景材质（关键修复：开启超分/切换模式时当前页即时生效）
@@ -171,6 +184,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.textureTarget = newTarget
         self.imageOnlyBackdrop = newBackdrop
 
+        syncHostBackgroundColor()
         self.rootView = buildRootView()
     }
 
