@@ -1,128 +1,383 @@
 import SwiftUI
 
-/// 在线收藏书架
+/// 在线收藏书架（4 套原生高阶视图 + 真实数据排序 + 批量管理 + 撤销恢复 + 一键续读直达阅读器）
 public struct BookshelfView: View {
     @EnvironmentObject private var store: AppStore
     @Binding var selectedTab: AppTab
 
     @State private var searchText = ""
-    @State private var isGridMode = true
+    @State private var focusFilter: BookshelfFocusFilter = .all
 
-    private var filteredBooks: [Manga] {
+    // 批量管理多选状态
+    @State private var isEditing = false
+    @State private var selectedKeys: Set<String> = []
+
+    // 撤销快照与顶部轻提示 HUD
+    @State private var lastRemovedSnapshot: [AppStore.BookshelfRemovedItem] = []
+    @State private var hudMessage: String?
+    @State private var hudShowsUndo = false
+    @State private var hudDismissTask: Task<Void, Never>?
+
+    // 一键续读直达阅读器状态
+    @State private var quickLaunchingMangaKey: String?
+    @State private var quickLaunchTask: Task<Void, Never>?
+    @State private var readerLaunchPayload: BookshelfReaderLaunchPayload?
+
+    private var searchedBooks: [Manga] {
         let kw = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kw.isEmpty else { return store.bookshelf }
-        return store.bookshelf.filter {
-            $0.title.localizedCaseInsensitiveContains(kw) ||
-            $0.displayAuthor.localizedCaseInsensitiveContains(kw)
+        return store.bookshelf.filter { manga in
+            if manga.title.localizedCaseInsensitiveContains(kw)
+                || manga.displayAuthor.localizedCaseInsensitiveContains(kw) {
+                return true
+            }
+            if manga.tags.contains(where: { $0.localizedCaseInsensitiveContains(kw) }) {
+                return true
+            }
+            let cleanTitle = MangaTitleMetadataParser.parse(title: manga.title, author: manga.displayAuthor).cleanTitle
+            return cleanTitle.localizedCaseInsensitiveContains(kw)
         }
     }
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 112, maximum: 165), spacing: 14, alignment: .top)
-    ]
+    private var sortedBooks: [Manga] {
+        let indexed = Array(searchedBooks.enumerated())
+        switch store.bookshelfSortOrder {
+        case .recentRead:
+            return indexed.sorted { lhs, rhs in
+                let lp = store.progress(for: lhs.element)
+                let rp = store.progress(for: rhs.element)
+                switch (lp?.updatedAt, rp?.updatedAt) {
+                case let (lDate?, rDate?):
+                    if lDate != rDate { return lDate > rDate }
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                case (nil, nil):
+                    break
+                }
+                let lAdded = store.bookshelfAddedDate(for: lhs.element)
+                let rAdded = store.bookshelfAddedDate(for: rhs.element)
+                switch (lAdded, rAdded) {
+                case let (la?, ra?) where la != ra:
+                    return la > ra
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.offset < rhs.offset
+                }
+            }.map(\.element)
+
+        case .recentAdded:
+            return indexed.sorted { lhs, rhs in
+                let lAdded = store.bookshelfAddedDate(for: lhs.element)
+                let rAdded = store.bookshelfAddedDate(for: rhs.element)
+                switch (lAdded, rAdded) {
+                case let (la?, ra?) where la != ra:
+                    return la > ra
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.offset < rhs.offset
+                }
+            }.map(\.element)
+
+        case .progress:
+            return indexed.sorted { lhs, rhs in
+                let lp = store.progress(for: lhs.element)
+                let rp = store.progress(for: rhs.element)
+                let lScore = progressSortScore(lp)
+                let rScore = progressSortScore(rp)
+                if lScore != rScore {
+                    return lScore > rScore
+                }
+                if let lPage = lp?.pageIndex, let rPage = rp?.pageIndex, lPage != rPage {
+                    return lPage > rPage
+                }
+                if let lDate = lp?.updatedAt, let rDate = rp?.updatedAt, lDate != rDate {
+                    return lDate > rDate
+                }
+                return lhs.offset < rhs.offset
+            }.map(\.element)
+        }
+    }
+
+    private var displayedBooks: [Manga] {
+        guard store.bookshelfLayoutStyle == .focusShelf else {
+            return sortedBooks
+        }
+        return sortedBooks.filter { manga in
+            focusFilter.matches(manga, progress: store.progress(for: manga))
+        }
+    }
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var visibleKeySet: Set<String> {
+        Set(displayedBooks.map(\.compositeKey))
+    }
+
+    private var activeSelectedKeys: Set<String> {
+        selectedKeys.intersection(visibleKeySet)
+    }
+
+    private var isAllVisibleSelected: Bool {
+        !displayedBooks.isEmpty && activeSelectedKeys.count == displayedBooks.count
+    }
+
+    private var callbacks: BookshelfViewCallbacks {
+        BookshelfViewCallbacks(
+            onToggleSelect: toggleSelect(_:),
+            onQuickResume: quickResume(_:),
+            onMarkCompleted: markSingleCompleted(_:),
+            onResetProgress: resetSingleProgress(_:),
+            onRemoveSingle: removeSingle(_:)
+        )
+    }
 
     public var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                bookshelfHeaderBar
+            ZStack(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    bookshelfHeaderBar
 
-                if !store.bookshelf.isEmpty {
-                    bookshelfSearchBar
+                    if !store.bookshelf.isEmpty {
+                        bookshelfSearchBar
+                    }
+
+                    Group {
+                        if store.bookshelf.isEmpty {
+                            emptyStateView
+                        } else if sortedBooks.isEmpty {
+                            emptySearchResultView
+                        } else {
+                            ScrollView {
+                                BookshelfLayoutCollectionView(
+                                    style: store.bookshelfLayoutStyle,
+                                    allBooks: store.bookshelf,
+                                    sortedBooks: sortedBooks,
+                                    displayedBooks: displayedBooks,
+                                    isSearching: isSearching,
+                                    isEditing: isEditing,
+                                    selectedKeys: activeSelectedKeys,
+                                    launchingMangaKey: quickLaunchingMangaKey,
+                                    focusFilter: $focusFilter,
+                                    store: store,
+                                    callbacks: callbacks
+                                )
+                                .padding(.bottom, isEditing ? 78 : 8)
+                            }
+                            .background(
+                                (store.bookshelfLayoutStyle == .readingTimeline
+                                    ? Color(uiColor: .systemGroupedBackground)
+                                    : Color.clear)
+                                .ignoresSafeArea(edges: .bottom)
+                            )
+                            .compatScrollDismissesKeyboard()
+                        }
+                    }
+                    .overlay(alignment: .top) {
+                        if let hudMessage {
+                            bookshelfHudBanner(message: hudMessage, showsUndo: hudShowsUndo)
+                                .padding(.top, 10)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.spring(response: 0.32, dampingFraction: 0.84), value: hudMessage)
                 }
 
-                Group {
-                    if store.bookshelf.isEmpty {
-                        emptyStateView
-                    } else if filteredBooks.isEmpty {
-                        emptySearchResultView
-                    } else if isGridMode {
-                        ScrollView {
-                            LazyVGrid(columns: columns, spacing: 18) {
-                                ForEach(filteredBooks) { manga in
-                                    NavigationLink(destination: MangaDetailView(manga: manga)) {
-                                        MangaGridCard(
-                                            manga: manga,
-                                            progress: store.progress(for: manga)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                        }
-                    } else {
-                        List {
-                            ForEach(filteredBooks) { manga in
-                                NavigationLink(destination: MangaDetailView(manga: manga)) {
-                                    HStack(spacing: 12) {
-                                        AsyncMangaCoverView(urlString: manga.coverURL, cornerRadius: 8)
-                                            .frame(width: 56, height: 80)
-
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(manga.title)
-                                                .font(.headline)
-                                                .lineLimit(2)
-                                            if !manga.displayAuthor.isEmpty {
-                                                Text(manga.displayAuthor)
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            if let progress = store.progress(for: manga) {
-                                                Text("上次读到：\(progress.chapterTitle) · 第 \(progress.pageIndex + 1) 页")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.tint)
-                                            }
-                                        }
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                            }
-                            .onDelete { offsets in
-                                for idx in offsets {
-                                    store.toggleBookshelf(filteredBooks[idx])
-                                }
-                            }
-                        }
-                        .listStyle(.plain)
-                    }
+                // 底部悬浮毛玻璃批量操作条（保留系统 TabBar 零兼容坑）
+                if isEditing && !store.bookshelf.isEmpty {
+                    batchActionBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isEditing)
             .navigationTitle("书架")
             .navigationBarTitleDisplayMode(.inline)
             .compatNavigationBarHidden(true)
+            .fullScreenCover(item: $readerLaunchPayload) { payload in
+                ReaderView(
+                    manga: payload.manga,
+                    chapters: payload.chapters,
+                    initialChapter: payload.initialChapter,
+                    initialPageIndex: payload.initialPageIndex
+                )
+                .environmentObject(store)
+            }
+            .onChange(of: store.bookshelf.count) { count in
+                if count == 0 && isEditing {
+                    exitEditMode()
+                } else {
+                    selectedKeys = selectedKeys.intersection(Set(store.bookshelf.map(\.compositeKey)))
+                }
+            }
+            .onChange(of: store.bookshelfLayoutStyle) { _ in
+                if isEditing {
+                    selectedKeys = selectedKeys.intersection(visibleKeySet)
+                }
+            }
+            .onChange(of: focusFilter) { _ in
+                if isEditing {
+                    selectedKeys = selectedKeys.intersection(visibleKeySet)
+                }
+            }
+            .onDisappear {
+                hudDismissTask?.cancel()
+                quickLaunchTask?.cancel()
+                quickLaunchingMangaKey = nil
+            }
         }
         .navigationViewStyle(.stack)
     }
 
+    // MARK: - Header Bar
+
     private var bookshelfHeaderBar: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text("书架")
-                .font(.largeTitle.bold())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-
-            Spacer(minLength: 8)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isGridMode.toggle()
+        HStack(alignment: .center, spacing: 10) {
+            if isEditing {
+                Button {
+                    toggleSelectAll()
+                } label: {
+                    Text(isAllVisibleSelected ? "取消全选" : "全选")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Image(systemName: isGridMode ? "list.bullet" : "square.grid.2x2")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.leading, 5)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .disabled(displayedBooks.isEmpty)
+
+                Spacer(minLength: 8)
+
+                Text(activeSelectedKeys.isEmpty ? "选择漫画" : "已选 \(activeSelectedKeys.count) 本")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+
+                Spacer(minLength: 8)
+
+                Button {
+                    exitEditMode()
+                } label: {
+                    Text("完成")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("书架")
+                        .font(.largeTitle.bold())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if !store.bookshelf.isEmpty {
+                        Text("\(store.bookshelf.count)本")
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                if !store.bookshelf.isEmpty {
+                    Button {
+                        enterEditMode()
+                    } label: {
+                        Text("选择")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("进入批量管理")
+                }
+
+                bookshelfOptionsMenu
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isGridMode ? "切换列表视图" : "切换网格视图")
         }
+        .frame(minHeight: 40)
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 4)
     }
+
+    private var bookshelfOptionsMenu: some View {
+        Menu {
+            Section("书架视图排布") {
+                ForEach(BookshelfLayoutStyle.allCases) { style in
+                    Button {
+                        guard store.bookshelfLayoutStyle != style else { return }
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            store.bookshelfLayoutStyle = style
+                        }
+                        BookshelfHaptics.light()
+                        showHud("已切换：\(style.displayName)")
+                    } label: {
+                        Label {
+                            Text(style.displayName)
+                        } icon: {
+                            Image(systemName: store.bookshelfLayoutStyle == style ? "checkmark" : style.iconName)
+                        }
+                    }
+                }
+            }
+
+            Section("排序方式") {
+                ForEach(BookshelfSortOrder.allCases) { order in
+                    Button {
+                        guard store.bookshelfSortOrder != order else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            store.bookshelfSortOrder = order
+                        }
+                        BookshelfHaptics.light()
+                        showHud("排序：\(order.displayName)")
+                    } label: {
+                        Label {
+                            Text(order.displayName)
+                        } icon: {
+                            Image(systemName: store.bookshelfSortOrder == order ? "checkmark" : order.iconName)
+                        }
+                    }
+                }
+            }
+
+            if !store.bookshelf.isEmpty {
+                Divider()
+
+                Button {
+                    enterEditMode()
+                } label: {
+                    Label("批量管理", systemImage: "checkmark.circle")
+                }
+            }
+        } label: {
+            Image(systemName: store.bookshelfLayoutStyle.iconName)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 32, height: 32)
+                .background(Color.accentColor.opacity(0.12), in: Circle())
+                .contentShape(Circle())
+        }
+        .accessibilityLabel("切换书架视图与排序，当前为\(store.bookshelfLayoutStyle.displayName)")
+    }
+
+    // MARK: - Search Bar
 
     private var bookshelfSearchBar: some View {
         HStack(spacing: 8) {
@@ -150,14 +405,131 @@ public struct BookshelfView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 6)
-        .padding(.bottom, 4)
+        .padding(.bottom, 6)
     }
 
+    // MARK: - Batch Action Floating Bar & HUD
+
+    private var batchActionBar: some View {
+        let count = activeSelectedKeys.count
+        let disabled = count == 0
+
+        return HStack(spacing: 0) {
+            Button {
+                batchMarkCompleted()
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("标为已读")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(Color.accentColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .opacity(disabled ? 0.35 : 1)
+
+            Divider()
+                .frame(height: 26)
+
+            Button {
+                batchResetProgress()
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("重置进度")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(Color.accentColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .opacity(disabled ? 0.35 : 1)
+
+            Divider()
+                .frame(height: 26)
+
+            Button(role: .destructive) {
+                batchRemoveSelected()
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text(count > 0 ? "移出(\(count))" : "移出")
+                        .font(.system(size: 11, weight: .bold))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(Color.red)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .opacity(disabled ? 0.35 : 1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 14, y: 6)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+    }
+
+    private func bookshelfHudBanner(message: String, showsUndo: Bool) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(showsUndo ? Color.orange : Color.green)
+                .frame(width: 6, height: 6)
+
+            Text(message)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+
+            if showsUndo {
+                Button {
+                    undoLastRemove()
+                } label: {
+                    Text("撤销")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color(red: 0.25, green: 0.65, blue: 1.0))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Color.black.opacity(0.84), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.24), radius: 12, y: 5)
+    }
+
+    // MARK: - Empty States
+
     private var emptySearchResultView: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 36))
                 .foregroundStyle(.secondary)
@@ -166,6 +538,18 @@ public struct BookshelfView: View {
             Text("试试其他关键词，或清空搜索条件。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            Button {
+                searchText = ""
+            } label: {
+                Text("清空搜索")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -195,6 +579,188 @@ public struct BookshelfView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    // MARK: - Actions
+
+    private func progressSortScore(_ progress: ReadingProgress?) -> Double {
+        guard let progress else { return -1.0 }
+        if let ratio = progress.progressRatio {
+            return ratio
+        }
+        return 0.01
+    }
+
+    private func enterEditMode() {
+        selectedKeys.removeAll()
+        isEditing = true
+        BookshelfHaptics.light()
+    }
+
+    private func exitEditMode() {
+        isEditing = false
+        selectedKeys.removeAll()
+    }
+
+    private func toggleSelect(_ manga: Manga) {
+        let key = manga.compositeKey
+        if selectedKeys.contains(key) {
+            selectedKeys.remove(key)
+        } else {
+            selectedKeys.insert(key)
+        }
+        BookshelfHaptics.light()
+    }
+
+    private func toggleSelectAll() {
+        if isAllVisibleSelected {
+            selectedKeys.removeAll()
+        } else {
+            selectedKeys = visibleKeySet
+        }
+        BookshelfHaptics.light()
+    }
+
+    private func batchMarkCompleted() {
+        let keys = activeSelectedKeys
+        let targets = displayedBooks.filter { keys.contains($0.compositeKey) }
+        guard !targets.isEmpty else { return }
+        store.markAsCompleted(targets)
+        BookshelfHaptics.medium()
+        exitEditMode()
+        showHud("已将 \(targets.count) 本标为已读")
+    }
+
+    private func batchResetProgress() {
+        let keys = activeSelectedKeys
+        let targets = displayedBooks.filter { keys.contains($0.compositeKey) }
+        guard !targets.isEmpty else { return }
+        store.resetProgress(for: targets)
+        BookshelfHaptics.medium()
+        exitEditMode()
+        showHud("已重置 \(targets.count) 本阅读进度")
+    }
+
+    private func batchRemoveSelected() {
+        let keys = activeSelectedKeys
+        guard !keys.isEmpty else { return }
+        let removed = store.removeFromBookshelf(keys: keys)
+        guard !removed.isEmpty else { return }
+        lastRemovedSnapshot = removed
+        BookshelfHaptics.medium()
+        exitEditMode()
+        showHud("已移出 \(removed.count) 本漫画", showsUndo: true, duration: 3.8)
+    }
+
+    private func markSingleCompleted(_ manga: Manga) {
+        store.markAsCompleted([manga])
+        BookshelfHaptics.light()
+        showHud("已标为已读")
+    }
+
+    private func resetSingleProgress(_ manga: Manga) {
+        store.resetProgress(for: [manga])
+        BookshelfHaptics.light()
+        showHud("已重置阅读进度")
+    }
+
+    private func removeSingle(_ manga: Manga) {
+        let removed = store.removeFromBookshelf(keys: [manga.compositeKey])
+        guard !removed.isEmpty else { return }
+        lastRemovedSnapshot = removed
+        BookshelfHaptics.medium()
+        showHud("已移出书架", showsUndo: true, duration: 3.8)
+    }
+
+    private func undoLastRemove() {
+        guard !lastRemovedSnapshot.isEmpty else { return }
+        let count = lastRemovedSnapshot.count
+        store.restoreToBookshelf(lastRemovedSnapshot)
+        lastRemovedSnapshot = []
+        BookshelfHaptics.light()
+        showHud("已恢复 \(count) 本漫画")
+    }
+
+    private func showHud(_ message: String, showsUndo: Bool = false, duration: TimeInterval = 2.2) {
+        hudDismissTask?.cancel()
+        hudMessage = message
+        hudShowsUndo = showsUndo
+
+        hudDismissTask = Task { @MainActor in
+            let nanos = UInt64(duration * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                hudMessage = nil
+                hudShowsUndo = false
+            }
+        }
+    }
+
+    /// 一键续读：异步拉取最新章节列表并直达 ReaderView，规避必须先点进详情页的两步跳转
+    private func quickResume(_ manga: Manga) {
+        guard quickLaunchingMangaKey != manga.compositeKey else { return }
+        guard let adapter = store.adapter(for: manga.sourceID) else {
+            showHud("未找到对应在线图源")
+            return
+        }
+
+        quickLaunchTask?.cancel()
+        quickLaunchingMangaKey = manga.compositeKey
+        BookshelfHaptics.light()
+
+        quickLaunchTask = Task { @MainActor in
+            defer {
+                if quickLaunchingMangaKey == manga.compositeKey {
+                    quickLaunchingMangaKey = nil
+                }
+            }
+            do {
+                let detail = try await adapter.fetchDetail(for: manga)
+                guard !Task.isCancelled else { return }
+
+                let resolvedManga = detail.manga
+                let chapters = detail.chapters
+                guard let firstChapter = chapters.first else {
+                    showHud("该漫画暂无可阅读章节")
+                    return
+                }
+
+                store.updateBookshelfManga(resolvedManga)
+
+                let progress = store.progress(for: resolvedManga) ?? store.progress(for: manga)
+                let targetChapter: MangaChapter
+                let targetPageIndex: Int
+
+                if let progress,
+                   !progress.isCompleted,
+                   let resumeChapter = chapters.first(where: { $0.id == progress.chapterID }) {
+                    targetChapter = resumeChapter
+                    targetPageIndex = progress.pageIndex
+                } else {
+                    targetChapter = firstChapter
+                    targetPageIndex = 0
+                }
+
+                readerLaunchPayload = BookshelfReaderLaunchPayload(
+                    manga: resolvedManga,
+                    chapters: chapters,
+                    initialChapter: targetChapter,
+                    initialPageIndex: targetPageIndex
+                )
+            } catch {
+                guard !Task.isCancelled else { return }
+                showHud("章节载入失败：\(error.localizedDescription)", duration: 3.0)
+            }
+        }
+    }
+}
+
+private struct BookshelfReaderLaunchPayload: Identifiable {
+    let id = UUID()
+    let manga: Manga
+    let chapters: [MangaChapter]
+    let initialChapter: MangaChapter
+    let initialPageIndex: Int?
 }
 
 struct MangaGridCard: View {
@@ -225,7 +791,7 @@ struct MangaGridCard: View {
             }
             .overlay(alignment: .bottomLeading) {
                 if let progress {
-                    Text("P\(progress.pageIndex + 1)")
+                    Text(progress.isManuallyMarkedCompleted ? "已读" : "P\(progress.pageIndex + 1)")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)

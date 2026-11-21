@@ -73,6 +73,18 @@ public final class AppStore: ObservableObject {
     @Published public var discoverLayoutStyle: DiscoverLayoutStyle = .classicGrid {
         didSet { save(discoverLayoutStyle, key: Keys.discoverLayoutStyle) }
     }
+    @Published public var bookshelfLayoutStyle: BookshelfLayoutStyle = .focusShelf {
+        didSet { save(bookshelfLayoutStyle, key: Keys.bookshelfLayoutStyle) }
+    }
+    @Published public var bookshelfSortOrder: BookshelfSortOrder = .recentRead {
+        didSet { save(bookshelfSortOrder, key: Keys.bookshelfSortOrder) }
+    }
+    @Published public var bookshelfGeekMatrixShowTitles: Bool = true {
+        didSet { save(bookshelfGeekMatrixShowTitles, key: Keys.bookshelfGeekMatrixShowTitles) }
+    }
+    @Published public var bookshelfAddedAt: [String: Date] = [:] {
+        didSet { save(bookshelfAddedAt, key: Keys.bookshelfAddedAt) }
+    }
     @Published public var searchHistory: [String] = [] {
         didSet { save(searchHistory, key: Keys.searchHistory) }
     }
@@ -119,6 +131,10 @@ public final class AppStore: ObservableObject {
         static let spineDividingLine = "keda_online_spine_dividing_line_v1"
         static let discoverPaginationMode = "keda_online_discover_pagination_mode_v1"
         static let discoverLayoutStyle = "keda_online_discover_layout_style_v1"
+        static let bookshelfLayoutStyle = "keda_online_bookshelf_layout_style_v1"
+        static let bookshelfSortOrder = "keda_online_bookshelf_sort_order_v1"
+        static let bookshelfGeekMatrixShowTitles = "keda_online_bookshelf_matrix_titles_v1"
+        static let bookshelfAddedAt = "keda_online_bookshelf_added_at_v1"
         static let searchHistory = "keda_online_search_history_v1"
         static let imageFilterConfig = "keda_online_image_filter_config_v1"
         static let readerPreloadMode = "keda_online_reader_preload_mode_v1"
@@ -187,6 +203,10 @@ public final class AppStore: ObservableObject {
         self.showSpineDividingLine = load(key: Keys.spineDividingLine) ?? true
         self.discoverPaginationMode = load(key: Keys.discoverPaginationMode) ?? .pageByPage
         self.discoverLayoutStyle = load(key: Keys.discoverLayoutStyle) ?? .classicGrid
+        self.bookshelfLayoutStyle = load(key: Keys.bookshelfLayoutStyle) ?? .focusShelf
+        self.bookshelfSortOrder = load(key: Keys.bookshelfSortOrder) ?? .recentRead
+        self.bookshelfGeekMatrixShowTitles = load(key: Keys.bookshelfGeekMatrixShowTitles) ?? true
+        self.bookshelfAddedAt = load(key: Keys.bookshelfAddedAt) ?? [:]
         self.searchHistory = load(key: Keys.searchHistory) ?? []
         self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
         self.readerPreloadMode = load(key: Keys.readerPreloadMode) ?? .standard
@@ -238,15 +258,145 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    public struct BookshelfRemovedItem: Sendable {
+        public let manga: Manga
+        public let originalIndex: Int
+        public let addedAt: Date?
+
+        public init(manga: Manga, originalIndex: Int, addedAt: Date?) {
+            self.manga = manga
+            self.originalIndex = originalIndex
+            self.addedAt = addedAt
+        }
+    }
+
     public func isInBookshelf(_ manga: Manga) -> Bool {
         bookshelf.contains(where: { $0.compositeKey == manga.compositeKey })
+    }
+
+    public func bookshelfAddedDate(for manga: Manga) -> Date? {
+        bookshelfAddedAt[manga.compositeKey]
     }
 
     public func toggleBookshelf(_ manga: Manga) {
         if let idx = bookshelf.firstIndex(where: { $0.compositeKey == manga.compositeKey }) {
             bookshelf.remove(at: idx)
+            bookshelfAddedAt.removeValue(forKey: manga.compositeKey)
         } else {
             bookshelf.insert(manga, at: 0)
+            bookshelfAddedAt[manga.compositeKey] = Date()
+        }
+    }
+
+    /// 批量移出书架并返回用于撤销恢复的快照
+    @discardableResult
+    public func removeFromBookshelf(keys: Set<String>) -> [BookshelfRemovedItem] {
+        guard !keys.isEmpty else { return [] }
+        var removed: [BookshelfRemovedItem] = []
+        var remaining: [Manga] = []
+        var updatedAddedAt = bookshelfAddedAt
+
+        for (index, manga) in bookshelf.enumerated() {
+            if keys.contains(manga.compositeKey) {
+                removed.append(
+                    BookshelfRemovedItem(
+                        manga: manga,
+                        originalIndex: index,
+                        addedAt: updatedAddedAt.removeValue(forKey: manga.compositeKey)
+                    )
+                )
+            } else {
+                remaining.append(manga)
+            }
+        }
+
+        guard !removed.isEmpty else { return [] }
+        bookshelf = remaining
+        bookshelfAddedAt = updatedAddedAt
+        return removed
+    }
+
+    /// 按原始顺序撤销恢复已移出的书架条目
+    public func restoreToBookshelf(_ items: [BookshelfRemovedItem]) {
+        guard !items.isEmpty else { return }
+        var updatedShelf = bookshelf
+        var updatedAddedAt = bookshelfAddedAt
+
+        for item in items.sorted(by: { $0.originalIndex < $1.originalIndex }) {
+            guard !updatedShelf.contains(where: { $0.compositeKey == item.manga.compositeKey }) else {
+                continue
+            }
+            let targetIndex = min(max(0, item.originalIndex), updatedShelf.count)
+            updatedShelf.insert(item.manga, at: targetIndex)
+            if let addedAt = item.addedAt {
+                updatedAddedAt[item.manga.compositeKey] = addedAt
+            }
+        }
+
+        bookshelf = updatedShelf
+        bookshelfAddedAt = updatedAddedAt
+    }
+
+    /// 批量将漫画标记为已读完（已有章节进度时保留真实页数并置为 100%，未读过时写入显式手动已读标记）
+    public func markAsCompleted(_ mangas: [Manga]) {
+        guard !mangas.isEmpty else { return }
+        var updated = progressMap
+        let now = Date()
+
+        for manga in mangas {
+            let key = manga.compositeKey
+            let existing = updated[key]
+            if let existing, let totalPages = existing.totalPages, totalPages > 0 {
+                let finalChapterIndex = existing.totalChapters.map { max(0, $0 - 1) } ?? existing.chapterIndex
+                updated[key] = ReadingProgress(
+                    mangaKey: key,
+                    chapterID: existing.chapterID,
+                    chapterTitle: existing.chapterTitle,
+                    pageIndex: max(0, totalPages - 1),
+                    totalPages: totalPages,
+                    chapterIndex: finalChapterIndex,
+                    totalChapters: existing.totalChapters,
+                    updatedAt: now
+                )
+            } else {
+                updated[key] = ReadingProgress(
+                    mangaKey: key,
+                    chapterID: "",
+                    chapterTitle: "已读完",
+                    pageIndex: 0,
+                    totalPages: 1,
+                    chapterIndex: nil,
+                    totalChapters: existing?.totalChapters,
+                    updatedAt: now
+                )
+            }
+        }
+
+        progressMap = updated
+    }
+
+    /// 批量重置指定漫画的阅读进度
+    public func resetProgress(for mangas: [Manga]) {
+        guard !mangas.isEmpty else { return }
+        var updated = progressMap
+        var changed = false
+        for manga in mangas {
+            if updated.removeValue(forKey: manga.compositeKey) != nil {
+                changed = true
+            }
+        }
+        if changed {
+            progressMap = updated
+        }
+    }
+
+    /// 当详情页或一键续读拉取到更完整的漫画元数据时，静默刷新书架中对应条目
+    public func updateBookshelfManga(_ manga: Manga) {
+        guard let idx = bookshelf.firstIndex(where: { $0.compositeKey == manga.compositeKey }) else {
+            return
+        }
+        if bookshelf[idx] != manga {
+            bookshelf[idx] = manga
         }
     }
 
