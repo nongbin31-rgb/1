@@ -284,18 +284,22 @@ public struct ZoomableImageView: UIViewRepresentable {
                         }
                         updateZoomMipmapBlend(zoomScale: currentZoom)
                     } else {
-                        let effectiveAlpha = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
-                        imageView.textureClipContainer.alpha = CGFloat(effectiveAlpha)
-
                         imageView.neutralTextureOverlayView.backgroundColor = .clear
                         imageView.textureOverlayView.backgroundColor = .clear
                         imageView.textureOverlayView.contentMode = .scaleToFill
                         imageView.textureOverlayView.layer.magnificationFilter = .linear
                         imageView.textureOverlayView.layer.minificationFilter = .linear
 
-                        imageView.highlightClipContainer.isHidden = true
-                        imageView.highlightClipContainer.alpha = 0.0
-                        imageView.highlightOverlayView.image = nil
+                        imageView.highlightOverlayView.layer.magnificationFilter = .linear
+                        imageView.highlightOverlayView.layer.minificationFilter = .linear
+                        if currentZoom > 1.08 {
+                            imageView.highlightOverlayView.image = ReaderTextureCache.shared.tiledFineDetailTextureImage(
+                                for: texture,
+                                grainDensity: grainDensity
+                            )
+                        } else {
+                            imageView.highlightOverlayView.image = nil
+                        }
 
                         let neutralTiled = clampedTint < 0.999 ? ReaderTextureCache.shared.tiledNeutralTextureImage(for: texture) : nil
                         if let neutralTiled, clampedTint < 0.999 {
@@ -318,6 +322,7 @@ public struct ZoomableImageView: UIViewRepresentable {
                             imageView.textureOverlayView.isHidden = true
                             imageView.textureOverlayView.alpha = 0.0
                         }
+                        updateZoomMipmapBlend(zoomScale: currentZoom)
                     }
                 } else {
                     imageView.textureClipContainer.isHidden = true
@@ -348,7 +353,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         }
 
         private func updateZoomMipmapBlend(zoomScale: CGFloat) {
-            guard let imageView, activeApplyToImage, let texture = activeTexture, texture.usesFineTilePattern else {
+            guard let imageView, activeApplyToImage, let texture = activeTexture else {
                 return
             }
             let mip = ReaderTextureCache.zoomMipmapOpacities(
@@ -365,6 +370,9 @@ public struct ZoomableImageView: UIViewRepresentable {
                         grainDensity: activeGrainDensity
                     )
                 }
+                let filter: CALayerContentsFilter = texture.usesFineTilePattern ? .nearest : .linear
+                imageView.highlightOverlayView.layer.magnificationFilter = filter
+                imageView.highlightOverlayView.layer.minificationFilter = filter
                 imageView.highlightClipContainer.isHidden = false
                 imageView.highlightClipContainer.alpha = CGFloat(mip.fine)
             } else {
