@@ -309,11 +309,13 @@ public struct ReaderView: View {
     @State private var activeLayoutMode: ReaderLayoutMode = .verticalWebtoon
     @State private var hasInitializedLayout = false
     @StateObject private var preloader = ReaderPreloadCoordinator()
+    @StateObject private var pageCacheSnapshot = ReaderPageCacheSnapshotStore()
     @ObservedObject private var thumbnailStore = ReaderThumbnailStore.shared
 
     // 进度条预览交互与原点回溯状态
     @State private var isScrubbingProgress = false
     @State private var scrubFraction: Double = 0
+    @State private var activeScrubSpeed: ReaderScrubSpeed = .fast
     @State private var scrubSessionOriginIndex = 0
     @State private var returnAnchorPageIndex: Int? = nil
     @State private var anchorJumpDestinationIndex: Int? = nil
@@ -393,7 +395,7 @@ public struct ReaderView: View {
                         .clipped()
                 }
 
-                if isScrubbingProgress && pages.count > 1 {
+                if isScrubbingProgress && pages.count > 1 && store.readerProgressStyle != .sideRail {
                     let insets = safeAreaInsetsResolved
                     ReaderScrubberPreviewOverlay(
                         pages: pages,
@@ -404,11 +406,43 @@ public struct ReaderView: View {
                         upscalerConfig: store.upscalerConfig,
                         enableUpscaler: store.enableImageUpscaler,
                         bottomReservedHeight: insets.bottom + 108,
+                        progressStyle: store.readerProgressStyle,
+                        scrubSpeed: activeScrubSpeed,
                         thumbnailStore: thumbnailStore
                     )
                     .transition(.opacity)
                     .zIndex(11)
                 }
+
+                // 沉浸阅读态极简进度微轨 & 侧边隐形纵轨
+                ReaderAmbientProgressOverlay(
+                    style: store.readerProgressStyle,
+                    showChrome: showChrome,
+                    showAmbientProgress: store.showAmbientProgressInReader,
+                    isScrubbing: isScrubbingProgress,
+                    totalPages: pages.count,
+                    currentPageIndex: currentPageIndex,
+                    isRightToLeft: activeLayoutMode == .pagedRTL,
+                    readerBackground: store.preferredReaderBackground,
+                    safeAreaInsets: safeAreaInsetsResolved,
+                    onSideRailScrubBegin: { initialFraction in
+                        scrubSessionOriginIndex = currentPageIndex
+                        scrubFraction = initialFraction
+                        isScrubbingProgress = true
+                    },
+                    onSideRailScrubChanged: { newFraction in
+                        scrubFraction = newFraction
+                    },
+                    onSideRailScrubEnd: { finalIndex in
+                        isScrubbingProgress = false
+                        commitProgressJump(
+                            to: finalIndex,
+                            originIndex: scrubSessionOriginIndex,
+                            recordAnchor: true
+                        )
+                    }
+                )
+                .zIndex(10)
 
                 chromeOverlay
                     .zIndex(12)
@@ -493,6 +527,9 @@ public struct ReaderView: View {
                 }
             }
             preloader.updateCurrentPage(newIndex)
+            if showChrome && (store.readerProgressStyle == .vernierDial || store.readerProgressStyle == .heatmapSeg) {
+                refreshPageCacheSnapshot()
+            }
             guard !isRestoringInitialPage, !pages.isEmpty else { return }
             store.updateProgress(
                 manga: manga,
@@ -505,6 +542,21 @@ public struct ReaderView: View {
         }
         .onChange(of: preloadSettingsSignature) { _ in
             syncPreloaderSettings()
+            refreshPageCacheSnapshot()
+        }
+        .onChange(of: showChrome) { isVisible in
+            if isVisible {
+                refreshPageCacheSnapshot()
+            }
+        }
+        .onChange(of: store.readerProgressStyle) { _ in
+            refreshPageCacheSnapshot()
+        }
+        .onChange(of: pages.count) { _ in
+            refreshPageCacheSnapshot()
+        }
+        .onDisappear {
+            pageCacheSnapshot.cancel()
         }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
@@ -866,6 +918,8 @@ public struct ReaderView: View {
 
                     Spacer()
 
+                    readerProgressStyleMenuButton
+
                     Button {
                         if !store.enableImageUpscaler {
                             currentHUDText = "请先开启画质增强"
@@ -911,7 +965,8 @@ public struct ReaderView: View {
                 // 底部控制栏（拖动轨道常驻不销毁，防止触摸流中断）
                 VStack(spacing: 12) {
                     if pages.count > 1 {
-                        ReaderScrubberTrackBar(
+                        ReaderActiveProgressBar(
+                            style: store.readerProgressStyle,
                             totalPages: pages.count,
                             currentPageIndex: currentPageIndex,
                             isScrubbing: isScrubbingProgress,
@@ -920,9 +975,11 @@ public struct ReaderView: View {
                             originAnchorIndex: isScrubbingProgress
                                 ? (returnAnchorPageIndex ?? scrubSessionOriginIndex)
                                 : returnAnchorPageIndex,
+                            cacheStatuses: pageCacheSnapshot,
                             onScrubBegin: { initialFraction in
                                 scrubSessionOriginIndex = currentPageIndex
                                 scrubFraction = initialFraction
+                                activeScrubSpeed = .fast
                                 withAnimation(.easeOut(duration: 0.16)) {
                                     isScrubbingProgress = true
                                 }
@@ -934,8 +991,12 @@ public struct ReaderView: View {
                                 let focusIdx = min(max(Int(newFraction.rounded()), 0), max(pages.count - 1, 0))
                                 thumbnailStore.scheduleHoverUpdate(pages: pages, focusIndex: focusIdx)
                             },
+                            onSpeedChanged: { speed in
+                                activeScrubSpeed = speed
+                            },
                             onScrubEnd: { finalIndex in
                                 thumbnailStore.cancelHoverPrefetch()
+                                activeScrubSpeed = .fast
                                 withAnimation(.easeOut(duration: 0.18)) {
                                     isScrubbingProgress = false
                                 }
@@ -1115,6 +1176,59 @@ public struct ReaderView: View {
         guard !hasInitializedLayout else { return }
         activeLayoutMode = store.layoutMode(for: manga)
         hasInitializedLayout = true
+    }
+
+    private var readerProgressStyleMenuButton: some View {
+        Menu {
+            Section("进度条交互风格") {
+                ForEach(ReaderProgressStyle.allCases) { style in
+                    Button {
+                        guard store.readerProgressStyle != style else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            store.readerProgressStyle = style
+                        }
+                        currentHUDText = "进度条：\(style.displayName)"
+                    } label: {
+                        Label {
+                            Text(style.displayName)
+                        } icon: {
+                            Image(systemName: store.readerProgressStyle == style ? "checkmark" : style.iconName)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    store.showAmbientProgressInReader.toggle()
+                }
+                currentHUDText = store.showAmbientProgressInReader
+                    ? "已开启沉浸态极简进度"
+                    : "已开启纯净全屏（隐藏进度）"
+            } label: {
+                Label(
+                    store.showAmbientProgressInReader ? "隐藏控制栏时显示进度 ✓" : "隐藏控制栏时显示进度",
+                    systemImage: store.showAmbientProgressInReader ? "eye" : "eye.slash"
+                )
+            }
+        } label: {
+            Image(systemName: store.readerProgressStyle.iconName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .accessibilityLabel("切换进度条风格与沉浸态显示，当前为\(store.readerProgressStyle.displayName)")
+    }
+
+    private func refreshPageCacheSnapshot() {
+        pageCacheSnapshot.refresh(
+            pages: pages,
+            enableUpscaler: store.enableImageUpscaler,
+            upscalerConfig: store.upscalerConfig
+        )
     }
 
     private func checkAspectRatioIfUndetermined(with size: CGSize) {

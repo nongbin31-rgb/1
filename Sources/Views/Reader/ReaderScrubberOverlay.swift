@@ -1,7 +1,247 @@
 import SwiftUI
 import UIKit
 
-/// 阅读器自定义进度滑动轨道（支持日漫 RTL 镜像、原点锚点标记、按住零跳变抓手与跨页无间断拖动）
+// MARK: - 精细调速倍率与缓存健康状态模型
+
+/// 进度条纵向拉离时的精细调速档位
+enum ReaderScrubSpeed: Equatable {
+    case fast
+    case medium
+    case fine
+
+    var scale: Double {
+        switch self {
+        case .fast:   return 1.0
+        case .medium: return 0.5
+        case .fine:   return 0.25
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .fast:   return "高速寻页 (1.0x) · 上拉微调"
+        case .medium: return "中速微调 (0.5x)"
+        case .fine:   return "逐页精调 (0.25x)"
+        }
+    }
+
+    var indicatorColor: Color {
+        switch self {
+        case .fast:   return .white
+        case .medium: return .yellow
+        case .fine:   return .green
+        }
+    }
+}
+
+/// 单页缓存与 AI 超分就绪状态
+enum ReaderPageHealthStatus: Equatable, Sendable {
+    case remote
+    case cached
+    case upscaled
+}
+
+/// 异步扫描章节缓存与超分状态快照（避免拖动滑块期间在主线程频繁访问磁盘缓存）
+@MainActor
+final class ReaderPageCacheSnapshotStore: ObservableObject {
+    @Published private(set) var statuses: [ReaderPageHealthStatus] = []
+
+    private var refreshTask: Task<Void, Never>?
+
+    func refresh(
+        pages: [MangaPage],
+        enableUpscaler: Bool,
+        upscalerConfig: ImageUpscalerConfig
+    ) {
+        refreshTask?.cancel()
+        guard !pages.isEmpty else {
+            statuses = []
+            return
+        }
+
+        let capturedPages = pages
+        refreshTask = Task.detached(priority: .utility) {
+            let count = capturedPages.count
+            // 超长章节抽样步长控制，单次扫描不超过 120 次磁盘状态探测
+            let strideStep = max(1, count / 120)
+            var result = [ReaderPageHealthStatus](repeating: .remote, count: count)
+
+            var idx = 0
+            while idx < count {
+                if Task.isCancelled { return }
+                let page = capturedPages[idx]
+                let status: ReaderPageHealthStatus
+                if enableUpscaler && PageUpscalerPipeline.shared.cachedImage(pageKey: page.id, config: upscalerConfig) != nil {
+                    status = .upscaled
+                } else if OnlineImageLoader.shared.hasCachedImage(for: page.imageURL) {
+                    status = .cached
+                } else {
+                    status = .remote
+                }
+
+                let fillEnd = min(count, idx + strideStep)
+                for fillIdx in idx..<fillEnd {
+                    result[fillIdx] = status
+                }
+                idx += strideStep
+            }
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                self?.statuses = result
+            }
+        }
+    }
+
+    func status(at pageIndex: Int) -> ReaderPageHealthStatus {
+        guard statuses.indices.contains(pageIndex) else { return .remote }
+        return statuses[pageIndex]
+    }
+
+    /// 聚合成最多 bucketCount 个热力分段桶（优先级：upscaled > cached > remote）
+    func bucketStatuses(totalPages: Int, bucketCount: Int) -> [ReaderPageHealthStatus] {
+        let safeBuckets = max(1, min(totalPages, bucketCount))
+        guard totalPages > 0 else { return [] }
+
+        var buckets = [ReaderPageHealthStatus](repeating: .remote, count: safeBuckets)
+        for b in 0..<safeBuckets {
+            let start = (b * totalPages) / safeBuckets
+            let end = max(start + 1, ((b + 1) * totalPages) / safeBuckets)
+            var best: ReaderPageHealthStatus = .remote
+            for p in start..<min(end, totalPages) {
+                let s = status(at: p)
+                if s == .upscaled {
+                    best = .upscaled
+                    break
+                } else if s == .cached {
+                    best = .cached
+                }
+            }
+            buckets[b] = best
+        }
+        return buckets
+    }
+
+    func cancel() {
+        refreshTask?.cancel()
+        refreshTask = nil
+    }
+}
+
+// MARK: - 1. 操控态底部进度条调度容器（5 套风格统一接口）
+
+struct ReaderActiveProgressBar: View {
+    let style: ReaderProgressStyle
+    let totalPages: Int
+    let currentPageIndex: Int
+    let isScrubbing: Bool
+    let scrubFraction: Double
+    let isRightToLeft: Bool
+    let originAnchorIndex: Int?
+    let cacheStatuses: ReaderPageCacheSnapshotStore
+    let onScrubBegin: (Double) -> Void
+    let onScrubChanged: (Double) -> Void
+    let onSpeedChanged: (ReaderScrubSpeed) -> Void
+    let onScrubEnd: (Int) -> Void
+
+    private var activeFraction: Double {
+        let maxIdx = Double(max(totalPages - 1, 1))
+        let raw = isScrubbing ? scrubFraction : Double(currentPageIndex)
+        return min(max(raw, 0), maxIdx)
+    }
+
+    private var displayedPageIndex: Int {
+        min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
+    }
+
+    var body: some View {
+        switch style {
+        case .edgeDock:
+            ReaderScrubberTrackBar(
+                totalPages: totalPages,
+                currentPageIndex: currentPageIndex,
+                isScrubbing: isScrubbing,
+                scrubFraction: scrubFraction,
+                isRightToLeft: isRightToLeft,
+                originAnchorIndex: originAnchorIndex,
+                onScrubBegin: onScrubBegin,
+                onScrubChanged: onScrubChanged,
+                onSpeedChanged: onSpeedChanged,
+                onScrubEnd: onScrubEnd
+            )
+        case .foreEdge:
+            ReaderForeEdgeActiveBar(
+                totalPages: totalPages,
+                currentPageIndex: currentPageIndex,
+                isScrubbing: isScrubbing,
+                scrubFraction: scrubFraction,
+                isRightToLeft: isRightToLeft,
+                originAnchorIndex: originAnchorIndex,
+                onScrubBegin: onScrubBegin,
+                onScrubChanged: onScrubChanged,
+                onScrubEnd: onScrubEnd
+            )
+        case .vernierDial:
+            ReaderVernierDialActiveBar(
+                totalPages: totalPages,
+                currentPageIndex: currentPageIndex,
+                isScrubbing: isScrubbing,
+                scrubFraction: scrubFraction,
+                isRightToLeft: isRightToLeft,
+                cacheStatuses: cacheStatuses,
+                onScrubBegin: onScrubBegin,
+                onScrubChanged: onScrubChanged,
+                onScrubEnd: onScrubEnd
+            )
+        case .sideRail:
+            sideRailSummaryRow
+        case .heatmapSeg:
+            ReaderHeatmapActiveBar(
+                totalPages: totalPages,
+                currentPageIndex: currentPageIndex,
+                isScrubbing: isScrubbing,
+                scrubFraction: scrubFraction,
+                isRightToLeft: isRightToLeft,
+                originAnchorIndex: originAnchorIndex,
+                cacheStatuses: cacheStatuses,
+                onScrubBegin: onScrubBegin,
+                onScrubChanged: onScrubChanged,
+                onScrubEnd: onScrubEnd
+            )
+        }
+    }
+
+    private var sideRailSummaryRow: some View {
+        let maxIdx = max(totalPages - 1, 1)
+        let pct = Int(((Double(displayedPageIndex) / Double(maxIdx)) * 100).rounded())
+        return HStack(spacing: 8) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+                Text("第 \(displayedPageIndex + 1) / \(totalPages) 页")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                Text("· \(pct)%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.68))
+            }
+
+            Spacer()
+
+            Text("拖动右侧纵轨寻页")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.62))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.10), in: Capsule())
+        .frame(height: 36)
+    }
+}
+
+// MARK: - 风格 1：灵动纸缘微轨滑条（支持纵向拉离 1.0x -> 0.5x -> 0.25x 精细调速）
+
 struct ReaderScrubberTrackBar: View {
     let totalPages: Int
     let currentPageIndex: Int
@@ -11,10 +251,13 @@ struct ReaderScrubberTrackBar: View {
     let originAnchorIndex: Int?
     let onScrubBegin: (Double) -> Void
     let onScrubChanged: (Double) -> Void
+    var onSpeedChanged: ((ReaderScrubSpeed) -> Void)? = nil
     let onScrubEnd: (Int) -> Void
 
-    @State private var captureAnchorFraction: Double? = nil
-    @State private var isRelativeCapture: Bool = false
+    @State private var isDragging = false
+    @State private var trackedFraction: Double = 0
+    @State private var lastTranslationX: CGFloat = 0
+    @State private var activeSpeed: ReaderScrubSpeed = .fast
     @State private var lastHapticPageIndex: Int? = nil
     private let feedbackGenerator = UISelectionFeedbackGenerator()
 
@@ -81,11 +324,9 @@ struct ReaderScrubberTrackBar: View {
             let trackHeight: CGFloat = isScrubbing ? 8.5 : 6.5
 
             ZStack(alignment: .leading) {
-                // 全透明扩大触控热区，保证指腹轻靠上下缘也可跟手响应
                 Color.clear
                     .contentShape(Rectangle())
 
-                // 底层半透明胶囊轨道
                 Capsule()
                     .fill(Color.white.opacity(0.28))
                     .frame(width: width, height: trackHeight)
@@ -95,7 +336,6 @@ struct ReaderScrubberTrackBar: View {
                     )
                     .position(x: width * 0.5, y: height * 0.5)
 
-                // 已读 / 进度彩色填充条（RTL 时从右端向左延伸）
                 let fillWidth: CGFloat = isRightToLeft
                     ? max(thumbDiameter * 0.5, width - thumbCenterX)
                     : max(thumbDiameter * 0.5, thumbCenterX)
@@ -108,7 +348,6 @@ struct ReaderScrubberTrackBar: View {
                     .frame(width: min(width, fillWidth), height: trackHeight)
                     .position(x: fillCenterX, y: height * 0.5)
 
-                // 起跳原点锚点小圆点（方便翻看伏笔时直观参照原位置）
                 if let anchor = originAnchorIndex, anchor >= 0, anchor < totalPages {
                     let anchorLogical = CGFloat(Double(anchor) / Double(maxIndex))
                     let anchorVisual = isRightToLeft ? (1.0 - anchorLogical) : anchorLogical
@@ -125,7 +364,6 @@ struct ReaderScrubberTrackBar: View {
                         .position(x: anchorCenterX, y: height * 0.5)
                 }
 
-                // 白色圆钮滑块
                 Circle()
                     .fill(Color.white)
                     .frame(width: thumbDiameter, height: thumbDiameter)
@@ -141,68 +379,67 @@ struct ReaderScrubberTrackBar: View {
                         let currentVisual = isRightToLeft ? (1.0 - currentRatio) : currentRatio
                         let restThumbCenterX = thumbRadius + currentVisual * usableWidth
 
-                        let computedFraction: Double
-                        if captureAnchorFraction == nil {
+                        let nextFraction: Double
+                        if !isDragging {
                             feedbackGenerator.prepare()
                             lastHapticPageIndex = currentPageIndex
+                            isDragging = true
+                            lastTranslationX = value.translation.width
+                            activeSpeed = .fast
+                            onSpeedChanged?(.fast)
 
-                            // 若手指贴近当前滑块（26pt 内），采用零跳变相对抓手；点在远处轨道则直接定位过去
                             if abs(value.startLocation.x - restThumbCenterX) <= 26 {
-                                isRelativeCapture = true
-                                computedFraction = Double(currentPageIndex)
+                                nextFraction = Double(currentPageIndex)
                             } else {
-                                isRelativeCapture = false
-                                computedFraction = fractionForTouchX(
+                                nextFraction = fractionForTouchX(
                                     value.location.x,
                                     thumbRadius: thumbRadius,
                                     usableWidth: usableWidth
                                 )
                             }
-                            captureAnchorFraction = computedFraction
-                            onScrubBegin(computedFraction)
-                        } else if isRelativeCapture {
-                            let deltaRatio = value.translation.width / usableWidth
-                            let signedRatio = isRightToLeft ? -deltaRatio : deltaRatio
-                            let base = captureAnchorFraction ?? Double(currentPageIndex)
-                            let next = base + Double(signedRatio) * Double(maxIndex)
-                            computedFraction = min(max(next, 0), Double(maxIndex))
+                            trackedFraction = nextFraction
+                            onScrubBegin(nextFraction)
                         } else {
-                            computedFraction = fractionForTouchX(
-                                value.location.x,
-                                thumbRadius: thumbRadius,
-                                usableWidth: usableWidth
-                            )
+                            let liftDistance = -value.translation.height
+                            let nextSpeed: ReaderScrubSpeed
+                            if liftDistance > 92 {
+                                nextSpeed = .fine
+                            } else if liftDistance > 42 {
+                                nextSpeed = .medium
+                            } else {
+                                nextSpeed = .fast
+                            }
+                            if nextSpeed != activeSpeed {
+                                activeSpeed = nextSpeed
+                                feedbackGenerator.selectionChanged()
+                                onSpeedChanged?(nextSpeed)
+                            }
+
+                            let dx = value.translation.width - lastTranslationX
+                            lastTranslationX = value.translation.width
+                            let deltaRatio = dx / usableWidth
+                            let signedRatio = isRightToLeft ? -deltaRatio : deltaRatio
+                            let deltaPages = Double(signedRatio) * Double(maxIndex) * nextSpeed.scale
+                            nextFraction = min(max(trackedFraction + deltaPages, 0), Double(maxIndex))
+                            trackedFraction = nextFraction
                         }
 
-                        let targetIdx = Int(computedFraction.rounded())
+                        let targetIdx = Int(nextFraction.rounded())
                         if let prevHaptic = lastHapticPageIndex, prevHaptic != targetIdx {
                             feedbackGenerator.selectionChanged()
                             lastHapticPageIndex = targetIdx
                         }
 
-                        onScrubChanged(computedFraction)
+                        onScrubChanged(nextFraction)
                     }
-                    .onEnded { value in
-                        let finalFraction: Double
-                        if isRelativeCapture {
-                            let deltaRatio = value.translation.width / usableWidth
-                            let signedRatio = isRightToLeft ? -deltaRatio : deltaRatio
-                            let base = captureAnchorFraction ?? Double(currentPageIndex)
-                            finalFraction = min(max(base + Double(signedRatio) * Double(maxIndex), 0), Double(maxIndex))
-                        } else if captureAnchorFraction != nil {
-                            finalFraction = fractionForTouchX(
-                                value.location.x,
-                                thumbRadius: thumbRadius,
-                                usableWidth: usableWidth
-                            )
-                        } else {
-                            finalFraction = Double(currentPageIndex)
-                        }
-
+                    .onEnded { _ in
+                        let finalFraction = isDragging ? trackedFraction : Double(currentPageIndex)
                         let finalIndex = min(max(Int(finalFraction.rounded()), 0), max(totalPages - 1, 0))
-                        captureAnchorFraction = nil
-                        isRelativeCapture = false
+                        isDragging = false
+                        lastTranslationX = 0
+                        activeSpeed = .fast
                         lastHapticPageIndex = nil
+                        onSpeedChanged?(.fast)
                         onScrubEnd(finalIndex)
                     }
             )
@@ -217,9 +454,739 @@ struct ReaderScrubberTrackBar: View {
     }
 }
 
-// MARK: - 全屏微弧扇面预览蒙层
+// MARK: - 风格 2：纸书切口厚度（拇指拨页叶阵）
 
-/// 拖动进度条时展开的全屏预览浮层（半透暗幕 + 居中高清预映/页码胶囊 + 微弧扇面缩略图卡片流）
+private struct ReaderForeEdgeActiveBar: View {
+    let totalPages: Int
+    let currentPageIndex: Int
+    let isScrubbing: Bool
+    let scrubFraction: Double
+    let isRightToLeft: Bool
+    let originAnchorIndex: Int?
+    let onScrubBegin: (Double) -> Void
+    let onScrubChanged: (Double) -> Void
+    let onScrubEnd: (Int) -> Void
+
+    @State private var isDragging = false
+    @State private var trackedFraction: Double = 0
+    @State private var lastHapticPageIndex: Int? = nil
+    private let feedbackGenerator = UISelectionFeedbackGenerator()
+    private let leafCount = 34
+
+    private var maxIndex: Int { max(totalPages - 1, 1) }
+
+    private var activeFraction: Double {
+        let raw = isScrubbing ? scrubFraction : Double(currentPageIndex)
+        return min(max(raw, 0), Double(maxIndex))
+    }
+
+    private var displayedPageIndex: Int {
+        min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
+    }
+
+    var body: some View {
+        let logicalRatio = activeFraction / Double(maxIndex)
+        let visualRatio = isRightToLeft ? (1.0 - logicalRatio) : logicalRatio
+        let activeLeaf = Int((visualRatio * Double(leafCount - 1)).rounded())
+
+        HStack(spacing: 10) {
+            if isRightToLeft {
+                Text("\(totalPages)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.65))
+                    .frame(minWidth: 26, alignment: .trailing)
+            } else {
+                Text("\(displayedPageIndex + 1)")
+                    .font(.caption.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 26, alignment: .trailing)
+            }
+
+            GeometryReader { geo in
+                let width = max(geo.size.width, 1)
+                HStack(alignment: .bottom, spacing: 2) {
+                    ForEach(0..<leafCount, id: \.self) { idx in
+                        let isRead = isRightToLeft ? (idx >= activeLeaf) : (idx <= activeLeaf)
+                        let dist = abs(idx - activeLeaf)
+                        let leafHeight: CGFloat = dist == 0 ? (isScrubbing ? 34 : 30) : (dist == 1 ? 24 : (dist == 2 ? 19 : 13))
+                        let leafColor: Color = dist == 0
+                            ? Color(red: 0.96, green: 0.36, blue: 0.28)
+                            : (isRead ? Color(red: 0.96, green: 0.80, blue: 0.52).opacity(0.82) : Color.white.opacity(0.24))
+
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                            .fill(leafColor)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: leafHeight)
+                    }
+                }
+                .frame(width: width, height: 36, alignment: .bottom)
+                .overlay(alignment: .topLeading) {
+                    if let anchor = originAnchorIndex, anchor >= 0, anchor < totalPages {
+                        let anchorLogical = CGFloat(Double(anchor) / Double(maxIndex))
+                        let anchorVisual = isRightToLeft ? (1.0 - anchorLogical) : anchorLogical
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 5, height: 5)
+                            .offset(x: max(0, min(width - 5, anchorVisual * width - 2.5)), y: 2)
+                    }
+                }
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                        .onChanged { value in
+                            let clamped = min(max(value.location.x / width, 0), 1)
+                            let logical = isRightToLeft ? (1.0 - clamped) : clamped
+                            let nextFraction = min(max(Double(logical) * Double(maxIndex), 0), Double(maxIndex))
+
+                            if !isDragging {
+                                feedbackGenerator.prepare()
+                                lastHapticPageIndex = currentPageIndex
+                                isDragging = true
+                                trackedFraction = nextFraction
+                                onScrubBegin(nextFraction)
+                            } else {
+                                trackedFraction = nextFraction
+                            }
+
+                            let targetIdx = Int(nextFraction.rounded())
+                            if let prev = lastHapticPageIndex, prev != targetIdx {
+                                feedbackGenerator.selectionChanged()
+                                lastHapticPageIndex = targetIdx
+                            }
+                            onScrubChanged(nextFraction)
+                        }
+                        .onEnded { _ in
+                            let finalFraction = isDragging ? trackedFraction : Double(currentPageIndex)
+                            let finalIndex = min(max(Int(finalFraction.rounded()), 0), max(totalPages - 1, 0))
+                            isDragging = false
+                            lastHapticPageIndex = nil
+                            onScrubEnd(finalIndex)
+                        }
+                )
+            }
+            .frame(height: 36)
+
+            if isRightToLeft {
+                Text("\(displayedPageIndex + 1)")
+                    .font(.caption.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 26, alignment: .leading)
+            } else {
+                Text("\(totalPages)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.65))
+                    .frame(minWidth: 26, alignment: .leading)
+            }
+        }
+        .frame(height: 36)
+    }
+}
+
+// MARK: - 风格 3：精密游标卡尺（Canvas 可视窗刻度尺 + 单手任意位拨动）
+
+private struct ReaderVernierDialActiveBar: View {
+    let totalPages: Int
+    let currentPageIndex: Int
+    let isScrubbing: Bool
+    let scrubFraction: Double
+    let isRightToLeft: Bool
+    @ObservedObject var cacheStatuses: ReaderPageCacheSnapshotStore
+    let onScrubBegin: (Double) -> Void
+    let onScrubChanged: (Double) -> Void
+    let onScrubEnd: (Int) -> Void
+
+    @State private var isDragging = false
+    @State private var dragStartFraction: Double = 0
+    @State private var trackedFraction: Double = 0
+    @State private var lastHapticPageIndex: Int? = nil
+    private let feedbackGenerator = UISelectionFeedbackGenerator()
+    private let tickSpacing: CGFloat = 13.0
+
+    private var maxIndex: Int { max(totalPages - 1, 1) }
+
+    private var activeFraction: Double {
+        let raw = isScrubbing ? scrubFraction : Double(currentPageIndex)
+        return min(max(raw, 0), Double(maxIndex))
+    }
+
+    private var displayedPageIndex: Int {
+        min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("P\(displayedPageIndex + 1)")
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(Color.accentColor)
+                .frame(minWidth: 38, alignment: .trailing)
+
+            GeometryReader { geo in
+                let width = max(geo.size.width, 1)
+                let height = geo.size.height
+
+                ZStack {
+                    Canvas { context, size in
+                        let centerX = size.width * 0.5
+                        let bottomY = size.height - 4
+                        let centerLogical = activeFraction
+                        let halfVisiblePages = Int(ceil((size.width * 0.5) / tickSpacing)) + 2
+                        let centerIdx = Int(centerLogical.rounded())
+                        let lower = max(0, centerIdx - halfVisiblePages)
+                        let upper = min(totalPages - 1, centerIdx + halfVisiblePages)
+
+                        if lower <= upper {
+                            for idx in lower...upper {
+                                let deltaPages = CGFloat(Double(idx) - centerLogical)
+                                let visualDelta = isRightToLeft ? -deltaPages : deltaPages
+                                let x = centerX + visualDelta * tickSpacing
+                                guard x >= -6, x <= size.width + 6 else { continue }
+
+                                let distRatio = min(1.0, abs(x - centerX) / max(centerX, 1))
+                                let edgeFade = max(0.08, 1.0 - pow(distRatio, 1.75))
+                                let isMajor = (idx + 1) % 10 == 0 || idx == 0 || idx == totalPages - 1
+                                let isCurrent = idx == centerIdx
+                                let barH: CGFloat = isMajor ? 18 : 10
+                                let barW: CGFloat = isMajor ? 1.8 : 1.2
+
+                                let tickColor: Color = isCurrent
+                                    ? Color.accentColor
+                                    : Color.white.opacity((isMajor ? 0.78 : 0.30) * edgeFade)
+
+                                let barRect = CGRect(
+                                    x: x - barW * 0.5,
+                                    y: bottomY - barH,
+                                    width: barW,
+                                    height: barH
+                                )
+                                context.fill(Path(roundedRect: barRect, cornerRadius: 1), with: .color(tickColor))
+
+                                let status = cacheStatuses.status(at: idx)
+                                if status != .remote {
+                                    let dotColor: Color = status == .upscaled
+                                        ? Color(red: 0.42, green: 0.78, blue: 1.0)
+                                        : Color.green
+                                    let dotRect = CGRect(x: x - 1.75, y: bottomY - barH - 5.5, width: 3.5, height: 3.5)
+                                    context.fill(Path(ellipseIn: dotRect), with: .color(dotColor.opacity(edgeFade)))
+                                }
+                            }
+                        }
+                    }
+
+                    // 固定中心读数蓝线指针
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: 2.5, height: height - 4)
+                        .shadow(color: Color.accentColor.opacity(0.8), radius: 4)
+                }
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                        .onChanged { value in
+                            if !isDragging {
+                                feedbackGenerator.prepare()
+                                lastHapticPageIndex = currentPageIndex
+                                isDragging = true
+                                dragStartFraction = Double(currentPageIndex)
+                                trackedFraction = dragStartFraction
+                                onScrubBegin(dragStartFraction)
+                            } else {
+                                let deltaPages = Double(-value.translation.width / tickSpacing)
+                                let signedDelta = isRightToLeft ? -deltaPages : deltaPages
+                                let next = min(max(dragStartFraction + signedDelta, 0), Double(maxIndex))
+                                trackedFraction = next
+
+                                let targetIdx = Int(next.rounded())
+                                if let prev = lastHapticPageIndex, prev != targetIdx {
+                                    feedbackGenerator.selectionChanged()
+                                    lastHapticPageIndex = targetIdx
+                                }
+                                onScrubChanged(next)
+                            }
+                        }
+                        .onEnded { _ in
+                            let finalFraction = isDragging ? trackedFraction : Double(currentPageIndex)
+                            let finalIndex = min(max(Int(finalFraction.rounded()), 0), max(totalPages - 1, 0))
+                            isDragging = false
+                            lastHapticPageIndex = nil
+                            onScrubEnd(finalIndex)
+                        }
+                )
+            }
+            .frame(height: 36)
+
+            Text("/ \(totalPages)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.68))
+                .frame(minWidth: 34, alignment: .leading)
+        }
+        .frame(height: 36)
+    }
+}
+
+// MARK: - 风格 5：缓冲与 AI 2x 超分热力分段轨
+
+private struct ReaderHeatmapActiveBar: View {
+    let totalPages: Int
+    let currentPageIndex: Int
+    let isScrubbing: Bool
+    let scrubFraction: Double
+    let isRightToLeft: Bool
+    let originAnchorIndex: Int?
+    @ObservedObject var cacheStatuses: ReaderPageCacheSnapshotStore
+    let onScrubBegin: (Double) -> Void
+    let onScrubChanged: (Double) -> Void
+    let onScrubEnd: (Int) -> Void
+
+    @State private var isDragging = false
+    @State private var trackedFraction: Double = 0
+    @State private var lastHapticPageIndex: Int? = nil
+    private let feedbackGenerator = UISelectionFeedbackGenerator()
+
+    private var maxIndex: Int { max(totalPages - 1, 1) }
+
+    private var activeFraction: Double {
+        let raw = isScrubbing ? scrubFraction : Double(currentPageIndex)
+        return min(max(raw, 0), Double(maxIndex))
+    }
+
+    private var displayedPageIndex: Int {
+        min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
+    }
+
+    var body: some View {
+        let buckets = cacheStatuses.bucketStatuses(totalPages: totalPages, bucketCount: 38)
+        let logicalRatio = CGFloat(activeFraction / Double(maxIndex))
+        let visualRatio = isRightToLeft ? (1.0 - logicalRatio) : logicalRatio
+
+        VStack(spacing: 4) {
+            HStack(spacing: 10) {
+                if isRightToLeft {
+                    Text("\(totalPages)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.70))
+                        .frame(minWidth: 26, alignment: .trailing)
+                } else {
+                    Text("\(displayedPageIndex + 1)")
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 26, alignment: .trailing)
+                }
+
+                GeometryReader { geo in
+                    let width = max(geo.size.width, 1)
+                    let height = geo.size.height
+                    let thumbDiameter: CGFloat = isScrubbing ? 24 : 18
+                    let thumbRadius = thumbDiameter * 0.5
+                    let usableWidth = max(width - thumbDiameter, 1)
+                    let thumbCenterX = thumbRadius + visualRatio * usableWidth
+
+                    ZStack(alignment: .leading) {
+                        HStack(spacing: 1.5) {
+                            ForEach(0..<buckets.count, id: \.self) { visualIdx in
+                                let logicalBucket = isRightToLeft ? (buckets.count - 1 - visualIdx) : visualIdx
+                                let status = buckets[logicalBucket]
+                                let repPage = (logicalBucket * totalPages) / max(buckets.count, 1)
+                                let isRead = repPage <= displayedPageIndex
+
+                                let cellColor: Color = {
+                                    switch status {
+                                    case .upscaled:
+                                        return Color(red: 0.72, green: 0.36, blue: 0.98).opacity(isRead ? 1.0 : 0.52)
+                                    case .cached:
+                                        return Color.green.opacity(isRead ? 0.95 : 0.45)
+                                    case .remote:
+                                        return isRead ? Color.accentColor : Color.white.opacity(0.22)
+                                    }
+                                }()
+
+                                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                    .fill(cellColor)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: isScrubbing ? 10 : 8)
+                            }
+                        }
+                        .padding(2)
+                        .background(Color.black.opacity(0.28), in: Capsule())
+
+                        if let anchor = originAnchorIndex, anchor >= 0, anchor < totalPages {
+                            let anchorLogical = CGFloat(Double(anchor) / Double(maxIndex))
+                            let anchorVisual = isRightToLeft ? (1.0 - anchorLogical) : anchorLogical
+                            let anchorX = thumbRadius + anchorVisual * usableWidth
+
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 6, height: 6)
+                                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 1))
+                                .position(x: anchorX, y: height * 0.5)
+                        }
+
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: thumbDiameter, height: thumbDiameter)
+                            .shadow(color: .black.opacity(0.42), radius: 3, y: 1)
+                            .position(x: thumbCenterX, y: height * 0.5)
+                    }
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                            .onChanged { value in
+                                let clampedX = min(max(value.location.x - thumbRadius, 0), usableWidth)
+                                let vRatio = clampedX / usableWidth
+                                let lRatio = isRightToLeft ? (1.0 - vRatio) : vRatio
+                                let next = min(max(Double(lRatio) * Double(maxIndex), 0), Double(maxIndex))
+
+                                if !isDragging {
+                                    feedbackGenerator.prepare()
+                                    lastHapticPageIndex = currentPageIndex
+                                    isDragging = true
+                                    trackedFraction = next
+                                    onScrubBegin(next)
+                                } else {
+                                    trackedFraction = next
+                                }
+
+                                let targetIdx = Int(next.rounded())
+                                if let prev = lastHapticPageIndex, prev != targetIdx {
+                                    feedbackGenerator.selectionChanged()
+                                    lastHapticPageIndex = targetIdx
+                                }
+                                onScrubChanged(next)
+                            }
+                            .onEnded { _ in
+                                let finalFraction = isDragging ? trackedFraction : Double(currentPageIndex)
+                                let finalIndex = min(max(Int(finalFraction.rounded()), 0), max(totalPages - 1, 0))
+                                isDragging = false
+                                lastHapticPageIndex = nil
+                                onScrubEnd(finalIndex)
+                            }
+                    )
+                }
+                .frame(height: 24)
+
+                if isRightToLeft {
+                    Text("\(displayedPageIndex + 1)")
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 26, alignment: .leading)
+                } else {
+                    Text("\(totalPages)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.70))
+                        .frame(minWidth: 26, alignment: .leading)
+                }
+            }
+
+            HStack(spacing: 12) {
+                heatmapLegendItem(color: Color(red: 0.72, green: 0.36, blue: 0.98), text: "2x 超分")
+                heatmapLegendItem(color: .green, text: "已缓存")
+                heatmapLegendItem(color: .white.opacity(0.32), text: "待加载")
+                Spacer()
+                let pct = Int(((Double(displayedPageIndex) / Double(maxIndex)) * 100).rounded())
+                Text("\(pct)%")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 4)
+        }
+        .frame(height: 40)
+    }
+
+    private func heatmapLegendItem(color: Color, text: String) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(text)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.72))
+        }
+    }
+}
+
+// MARK: - 2. 沉浸阅读态极简进度层 + 侧边隐形纵轨
+
+struct ReaderAmbientProgressOverlay: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let style: ReaderProgressStyle
+    let showChrome: Bool
+    let showAmbientProgress: Bool
+    let isScrubbing: Bool
+    let totalPages: Int
+    let currentPageIndex: Int
+    let isRightToLeft: Bool
+    let readerBackground: ReaderBackground
+    let safeAreaInsets: UIEdgeInsets
+    let onSideRailScrubBegin: (Double) -> Void
+    let onSideRailScrubChanged: (Double) -> Void
+    let onSideRailScrubEnd: (Int) -> Void
+
+    @State private var isDraggingSideRail = false
+    @State private var sideRailFraction: Double = 0
+    @State private var lastSideRailHapticIndex: Int? = nil
+    private let feedbackGenerator = UISelectionFeedbackGenerator()
+
+    private var isDarkCanvas: Bool {
+        switch readerBackground {
+        case .dark, .immersive:
+            return true
+        case .light, .texture:
+            return false
+        case .followSystem:
+            return colorScheme == .dark
+        }
+    }
+
+    private var primaryInk: Color {
+        isDarkCanvas ? Color.white.opacity(0.72) : Color.black.opacity(0.56)
+    }
+
+    private var trackInk: Color {
+        isDarkCanvas ? Color.white.opacity(0.18) : Color.black.opacity(0.13)
+    }
+
+    private var maxIndex: Int { max(totalPages - 1, 1) }
+
+    var body: some View {
+        if totalPages > 1 {
+            if style == .sideRail {
+                if showAmbientProgress || showChrome || isDraggingSideRail {
+                    sideEdgeVerticalRail
+                }
+            } else if showAmbientProgress && !showChrome && !isScrubbing {
+                bottomAmbientView
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bottomAmbientView: some View {
+        let ratio = min(max(Double(currentPageIndex) / Double(maxIndex), 0), 1)
+        let pct = Int((ratio * 100).rounded())
+        let bottomPad = max(safeAreaInsets.bottom, 10) + 6
+
+        VStack {
+            Spacer()
+
+            switch style {
+            case .edgeDock:
+                VStack(spacing: 4) {
+                    HStack {
+                        Text(isRightToLeft ? "\(pct)% · 剩 \(totalPages - currentPageIndex - 1) 页" : "第 \(currentPageIndex + 1) 页")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(primaryInk)
+                        Spacer()
+                        Text(isRightToLeft ? "\(currentPageIndex + 1) / \(totalPages)" : "\(pct)% · \(totalPages) 页")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(primaryInk)
+                    }
+
+                    GeometryReader { geo in
+                        let w = max(geo.size.width, 1)
+                        let fillW = max(3, w * ratio)
+                        ZStack(alignment: isRightToLeft ? .trailing : .leading) {
+                            Capsule().fill(trackInk)
+                            Capsule()
+                                .fill(Color.accentColor.opacity(isDarkCanvas ? 0.90 : 0.85))
+                                .frame(width: fillW)
+                        }
+                    }
+                    .frame(height: 2.5)
+                }
+                .padding(.horizontal, max(safeAreaInsets.left, safeAreaInsets.right, 18))
+                .padding(.bottom, bottomPad)
+
+            case .foreEdge:
+                let visualRatio = isRightToLeft ? (1.0 - ratio) : ratio
+                VStack(spacing: 4) {
+                    HStack {
+                        Text(isRightToLeft ? "← 翻阅方向" : "翻阅方向 →")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(primaryInk)
+                        Spacer()
+                        Text("P\(currentPageIndex + 1) / \(totalPages)")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(primaryInk)
+                    }
+
+                    GeometryReader { geo in
+                        let w = max(geo.size.width, 1)
+                        let fillW = w * ratio
+                        let ribbonX = min(max(3, visualRatio * w), w - 3)
+                        ZStack(alignment: isRightToLeft ? .trailing : .leading) {
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                                .fill(trackInk)
+
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                                .fill(
+                                    isDarkCanvas
+                                        ? Color.white.opacity(0.38)
+                                        : Color(red: 0.62, green: 0.48, blue: 0.30).opacity(0.55)
+                                )
+                                .frame(width: max(2, fillW))
+                        }
+                        .overlay(alignment: .topLeading) {
+                            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                                .fill(Color(red: 0.88, green: 0.28, blue: 0.22))
+                                .frame(width: 5, height: 10)
+                                .offset(x: ribbonX - 2.5, y: -2)
+                        }
+                    }
+                    .frame(height: 6)
+                }
+                .padding(.horizontal, max(safeAreaInsets.left, safeAreaInsets.right, 22))
+                .padding(.bottom, bottomPad)
+
+            case .vernierDial:
+                HStack(spacing: 6) {
+                    Text("P\(currentPageIndex + 1) / \(totalPages)")
+                    Text("·")
+                        .opacity(0.45)
+                    Text("\(pct)%")
+                }
+                .font(.system(size: 10.5, weight: .bold).monospacedDigit())
+                .foregroundStyle(primaryInk)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4.5)
+                .background(
+                    isDarkCanvas ? Color.white.opacity(0.12) : Color.black.opacity(0.06),
+                    in: Capsule()
+                )
+                .padding(.bottom, bottomPad)
+
+            case .heatmapSeg:
+                let segCount = 6
+                let pagesPerSeg = Double(totalPages) / Double(segCount)
+                HStack(spacing: 3) {
+                    ForEach(0..<segCount, id: \.self) { visualIdx in
+                        let segIdx = isRightToLeft ? (segCount - 1 - visualIdx) : visualIdx
+                        let start = Double(segIdx) * pagesPerSeg
+                        let end = Double(segIdx + 1) * pagesPerSeg
+                        let localFill = min(1.0, max(0.0, (Double(currentPageIndex + 1) - start) / max(end - start, 1)))
+
+                        GeometryReader { geo in
+                            let w = max(geo.size.width, 1)
+                            ZStack(alignment: isRightToLeft ? .trailing : .leading) {
+                                Capsule().fill(trackInk)
+                                if localFill > 0 {
+                                    Capsule()
+                                        .fill(Color.accentColor.opacity(0.88))
+                                        .frame(width: max(2, w * localFill))
+                                }
+                            }
+                        }
+                        .frame(height: 3)
+                    }
+                }
+                .padding(.horizontal, max(safeAreaInsets.left, safeAreaInsets.right, 16))
+                .padding(.bottom, bottomPad)
+
+            case .sideRail:
+                EmptyView()
+            }
+        }
+    }
+
+    private var sideEdgeVerticalRail: some View {
+        let activeFrac = isDraggingSideRail ? sideRailFraction : Double(currentPageIndex)
+        let ratio = min(max(activeFrac / Double(maxIndex), 0), 1)
+        let activeIdx = min(max(Int(activeFrac.rounded()), 0), totalPages - 1)
+        let pct = Int((ratio * 100).rounded())
+        let expanded = isDraggingSideRail || showChrome
+
+        return HStack {
+            Spacer()
+            GeometryReader { geo in
+                let railHeight = max(geo.size.height, 40)
+                let knobY = ratio * railHeight
+                let bubbleY = min(max(24, knobY), railHeight - 24)
+
+                ZStack(alignment: .trailing) {
+                    // 窄热区：右缘 24pt，配合 minimumDistance: 4 不误抢单页点按翻页
+                    Color.clear
+                        .frame(width: 24, height: railHeight)
+                        .contentShape(Rectangle())
+
+                    ZStack(alignment: .top) {
+                        Capsule()
+                            .fill(expanded ? Color.white.opacity(0.24) : trackInk)
+                            .frame(width: expanded ? 6.5 : 3.5, height: railHeight)
+
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(width: expanded ? 6.5 : 3.5, height: max(4, knobY))
+
+                        Capsule()
+                            .fill(expanded ? Color.white : Color.accentColor)
+                            .frame(width: expanded ? 14 : 9, height: expanded ? 28 : 18)
+                            .overlay(
+                                Capsule()
+                                    .stroke(expanded ? Color.accentColor : Color.white, lineWidth: 1.4)
+                            )
+                            .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
+                            .offset(y: min(max(0, knobY - (expanded ? 14 : 9)), railHeight - (expanded ? 28 : 18)))
+                    }
+                    .padding(.trailing, 4)
+
+                    if isDraggingSideRail {
+                        HStack(spacing: 5) {
+                            Text("P\(activeIdx + 1)")
+                                .font(.caption.weight(.bold).monospacedDigit())
+                                .foregroundStyle(.white)
+                            Text("/ \(totalPages) · \(pct)%")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.75))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.8))
+                        .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+                        .position(x: -54, y: bubbleY)
+                    }
+                }
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 4, coordinateSpace: .local)
+                        .onChanged { value in
+                            let clamped = min(max(value.location.y / railHeight, 0), 1)
+                            let next = min(max(Double(clamped) * Double(maxIndex), 0), Double(maxIndex))
+                            if !isDraggingSideRail {
+                                feedbackGenerator.prepare()
+                                lastSideRailHapticIndex = currentPageIndex
+                                isDraggingSideRail = true
+                                sideRailFraction = next
+                                onSideRailScrubBegin(next)
+                            } else {
+                                sideRailFraction = next
+                                onSideRailScrubChanged(next)
+                            }
+
+                            let targetIdx = Int(next.rounded())
+                            if let prev = lastSideRailHapticIndex, prev != targetIdx {
+                                feedbackGenerator.selectionChanged()
+                                lastSideRailHapticIndex = targetIdx
+                            }
+                        }
+                        .onEnded { _ in
+                            let finalIndex = min(max(Int(sideRailFraction.rounded()), 0), max(totalPages - 1, 0))
+                            isDraggingSideRail = false
+                            lastSideRailHapticIndex = nil
+                            onSideRailScrubEnd(finalIndex)
+                        }
+                )
+            }
+            .frame(width: 28)
+            .padding(.top, max(safeAreaInsets.top, 20) + 74)
+            .padding(.bottom, max(safeAreaInsets.bottom, 20) + 92)
+            .padding(.trailing, max(safeAreaInsets.right, 2))
+        }
+    }
+}
+
+// MARK: - 3. 全屏微弧扇面预览蒙层
+
+/// 拖动进度条时展开的全屏预览浮层（半透暗幕 + 顶部精细调速提示 + 居中高清预映/页码胶囊 + 微弧扇面缩略图卡片流）
 struct ReaderScrubberPreviewOverlay: View {
     let pages: [MangaPage]
     let scrubFraction: Double
@@ -229,6 +1196,8 @@ struct ReaderScrubberPreviewOverlay: View {
     let upscalerConfig: ImageUpscalerConfig
     let enableUpscaler: Bool
     let bottomReservedHeight: CGFloat
+    var progressStyle: ReaderProgressStyle = .edgeDock
+    var scrubSpeed: ReaderScrubSpeed = .fast
     @ObservedObject var thumbnailStore: ReaderThumbnailStore
 
     private var targetIndex: Int {
@@ -246,7 +1215,6 @@ struct ReaderScrubberPreviewOverlay: View {
             let stripHeight = cardHeight + 48
 
             ZStack {
-                // 全屏半透明压暗衬底，主画面保持原地冻结不扰动视线
                 LinearGradient(
                     colors: [
                         Color.black.opacity(0.46),
@@ -259,7 +1227,23 @@ struct ReaderScrubberPreviewOverlay: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    Spacer(minLength: 18)
+                    if progressStyle == .edgeDock {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(scrubSpeed.indicatorColor)
+                                .frame(width: 6, height: 6)
+                            Text(scrubSpeed.label)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5.5)
+                        .background(Color.black.opacity(0.76), in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                        .padding(.top, isLandscape ? 16 : 62)
+                    }
+
+                    Spacer(minLength: 14)
 
                     centerPreviewHUD(availableSize: geo.size, isLandscape: isLandscape)
 
@@ -290,7 +1274,6 @@ struct ReaderScrubberPreviewOverlay: View {
             let isHoverLoading = thumbnailStore.isInFlight(for: page.imageURL)
 
             VStack(spacing: isLandscape ? 8 : 14) {
-                // 居中放大的高清小画框（仅当存在缩略图或正在悬停下载时优雅浮现，避免快速划过时闪空白框）
                 if let thumb {
                     let maxPreviewHeight: CGFloat = isLandscape
                         ? max(96, availableSize.height * 0.30)
@@ -311,7 +1294,6 @@ struct ReaderScrubberPreviewOverlay: View {
                         .shadow(color: .black.opacity(0.55), radius: 16, y: 8)
                 }
 
-                // 居中页码与状态悬浮胶囊
                 VStack(spacing: 4) {
                     HStack(spacing: 8) {
                         Text("第 \(targetIndex + 1) 页")
@@ -401,7 +1383,6 @@ struct ReaderScrubberPreviewOverlay: View {
                 ForEach(lower...upper, id: \.self) { idx in
                     let page = pages[idx]
                     let delta = CGFloat(idx) - CGFloat(scrubFraction)
-                    // 日漫（RTL）模式下：较大页码出现在左侧，较小页码退往右侧
                     let visualDelta = isRightToLeft ? -delta : delta
                     let absDelta = abs(visualDelta)
 
@@ -460,7 +1441,6 @@ struct ReaderScrubberPreviewOverlay: View {
                     .frame(width: width, height: height)
                     .clipped()
             } else {
-                // 未加载时的简洁纸卡面，避免快速划过时出现大面积空黑块
                 VStack(spacing: 6) {
                     Text("\(pageIndex + 1)")
                         .font(.system(size: max(18, width * 0.24), weight: .bold, design: .rounded))
@@ -487,7 +1467,6 @@ struct ReaderScrubberPreviewOverlay: View {
                 )
             }
 
-            // 底部渐变护底 + 居中页码数字（对齐截图底部的 45 / 46 / 47 页标视觉）
             VStack {
                 HStack {
                     if isOrigin {
@@ -532,7 +1511,7 @@ struct ReaderScrubberPreviewOverlay: View {
     }
 }
 
-// MARK: - 跳走后的返回原点锚点胶囊
+// MARK: - 4. 跳走后的返回原点锚点胶囊
 
 /// 通过进度条跨页跳转后显示的快捷回跳胶囊，支持一键回到跳走前阅读页或手动收起
 struct ReaderReturnAnchorPill: View {
