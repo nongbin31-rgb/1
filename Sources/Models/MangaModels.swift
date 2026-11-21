@@ -122,6 +122,86 @@ public enum DiscoverLayoutStyle: String, Codable, CaseIterable, Identifiable, Se
     }
 }
 
+/// 书架视图排布样式（4 套原生高阶书架视图）
+public enum BookshelfLayoutStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    case focusShelf = "focus_shelf"           // 聚焦续读（默认：置顶续读焦点卡 + 筛选胶囊 + 三列精排）
+    case progressList = "progress_list"       // 进度列表（立体书封 + 独立元信息胶囊 + 线性进度条 + 续读按钮）
+    case geekMatrix = "geek_matrix"           // 极客矩阵（四列紧排 + 纯图/标题切换 + 微缩进度环）
+    case readingTimeline = "reading_timeline" // 阅读时间轴（按真实阅读与收藏时间分组 + 吸顶头 + 竖轨卡片）
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .focusShelf:
+            return "聚焦续读"
+        case .progressList:
+            return "进度列表"
+        case .geekMatrix:
+            return "极客矩阵"
+        case .readingTimeline:
+            return "阅读时间轴"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .focusShelf:
+            return "续读焦点卡 · 三列精排"
+        case .progressList:
+            return "元信息拆分 · 显式进度"
+        case .geekMatrix:
+            return "四列高密 · 单屏速览"
+        case .readingTimeline:
+            return "按阅读时间 · 脉络回溯"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .focusShelf:
+            return "square.grid.3x2"
+        case .progressList:
+            return "list.bullet.rectangle"
+        case .geekMatrix:
+            return "square.grid.4x3.fill"
+        case .readingTimeline:
+            return "clock.arrow.circlepath"
+        }
+    }
+}
+
+/// 书架排序方式（全部基于本地真实持久化的阅读时间、收藏时间与进度比例）
+public enum BookshelfSortOrder: String, Codable, CaseIterable, Identifiable, Sendable {
+    case recentRead = "recent_read"
+    case recentAdded = "recent_added"
+    case progress = "progress"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .recentRead:
+            return "按最近阅读"
+        case .recentAdded:
+            return "按最近收藏"
+        case .progress:
+            return "按阅读进度"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .recentRead:
+            return "clock"
+        case .recentAdded:
+            return "bookmark"
+        case .progress:
+            return "chart.bar"
+        }
+    }
+}
+
 /// 在线图源分类筛选选项
 public struct MangaCategoryOption: Identifiable, Hashable, Sendable {
     public let id: String
@@ -754,6 +834,23 @@ public struct ReadingProgress: Codable, Equatable, Sendable {
             return min(1.0, max(0.0, (Double(clampedChapter) + pageFraction) / Double(totalChapters)))
         }
         return pageFraction
+    }
+
+    /// 是否已读完（综合比例达到 100%）
+    public var isCompleted: Bool {
+        guard let ratio = progressRatio else { return false }
+        return ratio >= 0.999
+    }
+
+    /// 是否通过书架快捷操作手动标记为已读（无具体章节记录时避免界面展示 P1 / 1 假页码）
+    public var isManuallyMarkedCompleted: Bool {
+        chapterID.isEmpty && totalPages == 1 && pageIndex == 0
+    }
+
+    /// 整数百分比（0 ~ 100）
+    public var percentageInt: Int? {
+        guard let ratio = progressRatio else { return nil }
+        return Int((ratio * 100).rounded())
     }
 }
 

@@ -83,7 +83,7 @@ public struct SettingsView: View {
                     }
                 }
 
-                Section("图源浏览与分页模式") {
+                Section("浏览与视图排布") {
                     Picker("发现页默认浏览模式", selection: $store.discoverPaginationMode) {
                         ForEach(DiscoverPaginationMode.allCases) { mode in
                             Label(mode.displayName, systemImage: mode.iconName).tag(mode)
@@ -94,6 +94,18 @@ public struct SettingsView: View {
                     Picker("发现页默认视图排布", selection: $store.discoverLayoutStyle) {
                         ForEach(DiscoverLayoutStyle.allCases) { style in
                             Label(style.displayName, systemImage: style.iconName).tag(style)
+                        }
+                    }
+
+                    Picker("书架默认视图排布", selection: $store.bookshelfLayoutStyle) {
+                        ForEach(BookshelfLayoutStyle.allCases) { style in
+                            Label(style.displayName, systemImage: style.iconName).tag(style)
+                        }
+                    }
+
+                    Picker("书架默认排序方式", selection: $store.bookshelfSortOrder) {
+                        ForEach(BookshelfSortOrder.allCases) { order in
+                            Label(order.displayName, systemImage: order.iconName).tag(order)
                         }
                     }
                 }
