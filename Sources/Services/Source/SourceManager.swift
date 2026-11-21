@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 应用核心状态管理器：在线图源、书架收藏、阅读进度、超分与阅读器全局配置
 @MainActor
@@ -85,6 +88,12 @@ public final class AppStore: ObservableObject {
     @Published public var preloadNextChapter: Bool = true {
         didSet { save(preloadNextChapter, key: Keys.preloadNextChapter) }
     }
+    @Published public var appColorScheme: AppColorSchemePreference = .followSystem {
+        didSet {
+            save(appColorScheme, key: Keys.appColorScheme)
+            applyWindowInterfaceStyle()
+        }
+    }
     @Published public var selectedSourceID: String = ""
 
     private enum Keys {
@@ -115,6 +124,7 @@ public final class AppStore: ObservableObject {
         static let readerPreloadMode = "keda_online_reader_preload_mode_v1"
         static let enableUpscalerPreload = "keda_online_enable_upscaler_preload_v1"
         static let preloadNextChapter = "keda_online_preload_next_chapter_v1"
+        static let appColorScheme = "keda_online_app_color_scheme_v1"
     }
 
     public init() {
@@ -182,6 +192,32 @@ public final class AppStore: ObservableObject {
         self.readerPreloadMode = load(key: Keys.readerPreloadMode) ?? .standard
         self.enableUpscalerPreload = load(key: Keys.enableUpscalerPreload) ?? true
         self.preloadNextChapter = load(key: Keys.preloadNextChapter) ?? true
+        self.appColorScheme = load(key: Keys.appColorScheme) ?? .followSystem
+        applyWindowInterfaceStyle()
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UIWindow.didBecomeVisibleNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.applyWindowInterfaceStyle()
+            }
+        }
+        #endif
+    }
+
+    /// 同步全局所有窗口的浅色 / 深色 / 跟随系统外观风格（覆盖弹窗、全屏阅读器与 UIKit 容器）
+    public func applyWindowInterfaceStyle() {
+        #if canImport(UIKit)
+        let style = appColorScheme.userInterfaceStyle
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows where window.overrideUserInterfaceStyle != style {
+                window.overrideUserInterfaceStyle = style
+            }
+        }
+        #endif
     }
 
     public var enabledSources: [MangaSourceConfig] {

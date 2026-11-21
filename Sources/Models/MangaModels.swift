@@ -854,6 +854,49 @@ public enum ReaderPreloadMode: String, Codable, CaseIterable, Identifiable, Send
     }
 }
 
+/// 软件全局外观主题偏好（跟随系统 / 浅色 / 深色）
+public enum AppColorSchemePreference: String, Codable, CaseIterable, Identifiable, Sendable {
+    case followSystem = "follow_system"
+    case light        = "light"
+    case dark         = "dark"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .followSystem: return "跟随系统"
+        case .light:        return "浅色模式"
+        case .dark:         return "深色模式"
+        }
+    }
+
+    public var shortName: String {
+        switch self {
+        case .followSystem: return "跟随系统"
+        case .light:        return "浅色"
+        case .dark:         return "深色"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .followSystem: return "circle.lefthalf.filled"
+        case .light:        return "sun.max.fill"
+        case .dark:         return "moon.stars.fill"
+        }
+    }
+
+    #if canImport(UIKit)
+    public var userInterfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .followSystem: return .unspecified
+        case .light:        return .light
+        case .dark:         return .dark
+        }
+    }
+    #endif
+}
+
 /// 阅读背景模式（100% 对齐原版可达阅读器 ReaderBackground）
 public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable {
     case followSystem = 0   // 跟随系统主题
