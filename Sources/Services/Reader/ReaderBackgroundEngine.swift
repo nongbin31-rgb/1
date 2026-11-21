@@ -22,6 +22,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private let seamlessTileCache = NSCache<NSString, UIImage>()
     private let tiledImageCache = NSCache<NSString, UIImage>()
     private let patternColorCache = NSCache<NSString, UIColor>()
+    private let ambientBlurCache = NSCache<NSString, UIImage>()
     private var classicPlasterBaseImage: UIImage?
     private let loadLock = NSLock()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
@@ -41,6 +42,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
         cache.countLimit = 40
         seamlessTileCache.countLimit = 24
         tiledImageCache.countLimit = 28
+        ambientBlurCache.countLimit = 12
     }
 
     /// 将颗粒密度归一化到 10% ~ 100% 的 5% 离散步进百分比，确保缓存命中率高、滑块拖动跟手
@@ -677,6 +679,84 @@ public final class ReaderTextureCache: @unchecked Sendable {
             cache.setObject(img, forKey: key)
         }
         return loaded
+    }
+
+    /// 生成并缓存用于单页沉浸式背景的轻量下采样高斯模糊图（避免翻页 3D 卷曲动画对大图实时离屏模糊掉帧）
+    public func ambientBlurImage(for image: UIImage, cacheKey: String) -> UIImage? {
+        let key = cacheKey as NSString
+        if let cached = ambientBlurCache.object(forKey: key) {
+            return cached
+        }
+        guard let cgImg = image.cgImage, cgImg.width > 0, cgImg.height > 0 else {
+            return nil
+        }
+
+        let targetWidth: CGFloat = 180.0
+        let scale = min(1.0, targetWidth / CGFloat(cgImg.width))
+        let ciImage = CIImage(cgImage: cgImg)
+        let scaledCI = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let targetExtent = scaledCI.extent
+
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(scaledCI.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(max(6.0, 45.0 * Double(scale)), forKey: kCIInputRadiusKey)
+
+        guard let outputCI = filter.outputImage?.cropped(to: targetExtent),
+              let outCG = srgbContext.createCGImage(outputCI, from: targetExtent) else {
+            return nil
+        }
+
+        let blurred = UIImage(cgImage: outCG, scale: 1.0, orientation: image.imageOrientation)
+        ambientBlurCache.setObject(blurred, forKey: key)
+        return blurred
+    }
+
+    /// 计算纹理着色与纯白底混合后的不透明纸浆基准色（供单页 UIHostingController 底层防穿透兜底）
+    public static func blendedPaperUIColor(for texture: ReaderTextureType, tintOpacity: Double) -> UIColor {
+        let t = CGFloat(min(max(tintOpacity, 0.0), 1.0))
+        var r: CGFloat = 1.0
+        var g: CGFloat = 1.0
+        var b: CGFloat = 1.0
+        var a: CGFloat = 1.0
+        texture.basePaperColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return UIColor(
+            red: (1.0 - t) + t * r,
+            green: (1.0 - t) + t * g,
+            blue: (1.0 - t) + t * b,
+            alpha: 1.0
+        )
+    }
+
+    /// 解析当前阅读背景对应的不透明 UIKit 兜底色，杜绝翻页视图第 0 帧或安全区变动瞬间出现透明镂空
+    public static func resolvedHostUIColor(
+        background: ReaderBackground,
+        texture: ReaderTextureType,
+        tintOpacity: Double,
+        textureTarget: ReaderTextureTarget,
+        imageOnlyBackdrop: ReaderImageOnlyBackdrop
+    ) -> UIColor {
+        switch background {
+        case .followSystem:
+            return .systemBackground
+        case .light:
+            return .white
+        case .dark, .immersive:
+            return .black
+        case .texture:
+            if textureTarget == .imageOnly {
+                switch imageOnlyBackdrop {
+                case .paperTint:
+                    return blendedPaperUIColor(for: texture, tintOpacity: tintOpacity)
+                case .followSystem:
+                    return .systemBackground
+                case .light:
+                    return .white
+                case .dark, .immersive:
+                    return .black
+                }
+            }
+            return blendedPaperUIColor(for: texture, tintOpacity: tintOpacity)
+        }
     }
 
     private func loadTextureFromBundle(named name: String) -> UIImage? {
