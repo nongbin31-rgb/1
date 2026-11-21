@@ -41,6 +41,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     public let textureTarget: ReaderTextureTarget
     public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     @Binding public var currentPageIndex: Int
+    public var externalJumpNonce: Int = 0
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
@@ -64,6 +65,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         currentPageIndex: Binding<Int>,
+        externalJumpNonce: Int = 0,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
@@ -86,6 +88,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self.textureTarget = textureTarget
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self._currentPageIndex = currentPageIndex
+        self.externalJumpNonce = externalJumpNonce
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
@@ -125,17 +128,24 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
             imageOnlyBackdrop: imageOnlyBackdrop
         )
 
+        let isExternalJump = (context.coordinator.lastExternalJumpNonce != externalJumpNonce)
+        if isExternalJump {
+            context.coordinator.lastExternalJumpNonce = externalJumpNonce
+        }
+
         uiViewController.applyConfiguration(
             pages: pages,
             isRightToLeft: isRightToLeft,
             targetIndex: currentPageIndex,
-            animated: turningEffect == .snapPage
+            animated: isExternalJump ? false : (turningEffect == .snapPage),
+            forceImmediate: isExternalJump
         )
     }
 
     public final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
         var parent: SnapPageReaderView
         weak var viewController: SnapPageViewController?
+        var lastExternalJumpNonce: Int = 0
         private let feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
 
         init(parent: SnapPageReaderView) {
@@ -409,7 +419,13 @@ public final class SnapPageViewController: UIViewController {
         }
     }
 
-    func applyConfiguration(pages: [MangaPage], isRightToLeft: Bool, targetIndex: Int, animated: Bool) {
+    func applyConfiguration(
+        pages: [MangaPage],
+        isRightToLeft: Bool,
+        targetIndex: Int,
+        animated: Bool,
+        forceImmediate: Bool = false
+    ) {
         guard isViewLoaded else { return }
 
         let oldPages = self.pages
@@ -420,7 +436,7 @@ public final class SnapPageViewController: UIViewController {
             collectionView.semanticContentAttribute = semantic
             collectionView.reloadData()
             currentDisplayIndex = targetIndex
-            scrollToPage(at: targetIndex, animated: false)
+            scrollToPage(at: targetIndex, animated: false, forceReposition: true)
             return
         }
 
@@ -435,10 +451,18 @@ public final class SnapPageViewController: UIViewController {
             hasInitiallyPositioned = true
             currentDisplayIndex = targetIndex
             collectionView.layoutIfNeeded()
-            scrollToPage(at: targetIndex, animated: false)
+            scrollToPage(at: targetIndex, animated: false, forceReposition: true)
             DispatchQueue.main.async { [weak self] in
-                self?.scrollToPage(at: targetIndex, animated: false)
+                self?.scrollToPage(at: targetIndex, animated: false, forceReposition: true)
             }
+            return
+        }
+
+        // 外部进度条或锚点显式指令直接定位：强制清掉在途滚动状态无动画直达
+        if forceImmediate {
+            isProgrammaticScrolling = false
+            currentDisplayIndex = targetIndex
+            scrollToPage(at: targetIndex, animated: false, forceReposition: true)
             return
         }
 
@@ -456,7 +480,7 @@ public final class SnapPageViewController: UIViewController {
         scrollToPage(at: targetIndex, animated: animated)
     }
 
-    func scrollToPage(at index: Int, animated: Bool) {
+    func scrollToPage(at index: Int, animated: Bool, forceReposition: Bool = false) {
         guard pages.indices.contains(index) else { return }
         guard collectionView.bounds.width > 0, collectionView.bounds.height > 0 else {
             pendingTargetIndex = index
@@ -465,7 +489,7 @@ public final class SnapPageViewController: UIViewController {
 
         let indexPath = IndexPath(item: index, section: 0)
 
-        if let current = determineCurrentPageIndex(), current == index {
+        if !forceReposition, let current = determineCurrentPageIndex(), current == index {
             isProgrammaticScrolling = false
             return
         }

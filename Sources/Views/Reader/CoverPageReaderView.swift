@@ -31,6 +31,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
+    public var externalJumpNonce: Int = 0
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
@@ -54,6 +55,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
+        externalJumpNonce: Int = 0,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
@@ -76,6 +78,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
+        self.externalJumpNonce = externalJumpNonce
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
@@ -116,8 +119,12 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
             showDividingLine: showDividingLine
         )
 
-        // 3. 初始装载或当外部修改了页码（例如 Slider 拖拽）时，请求平滑或即时转场
-        uiViewController.ensureInitialPageOrNavigate(to: currentPageIndex)
+        // 3. 初始装载或当外部修改了页码（例如进度条跳转/返回原点锚点）时，请求即时直达或平滑转场
+        let isExternalJump = (context.coordinator.lastExternalJumpNonce != externalJumpNonce)
+        if isExternalJump {
+            context.coordinator.lastExternalJumpNonce = externalJumpNonce
+        }
+        uiViewController.ensureInitialPageOrNavigate(to: currentPageIndex, preferAnimated: !isExternalJump)
     }
 
     // MARK: - Coordinator
@@ -125,6 +132,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     public final class Coordinator: NSObject {
         var parent: CoverPageReaderView
         weak var viewController: CoverPageViewController?
+        var lastExternalJumpNonce: Int = 0
 
         init(parent: CoverPageReaderView) {
             self.parent = parent
@@ -739,12 +747,12 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
 
     // MARK: - 触觉与音效反馈
 
-    public func ensureInitialPageOrNavigate(to targetIndex: Int) {
+    public func ensureInitialPageOrNavigate(to targetIndex: Int, preferAnimated: Bool = true) {
         guard parentConfig.pages.indices.contains(targetIndex) else { return }
         if activeVC == nil {
             displayPage(at: targetIndex)
         } else if currentDisplayIndex != targetIndex {
-            requestNavigation(to: targetIndex, animated: true)
+            requestNavigation(to: targetIndex, animated: preferAnimated)
         }
     }
 

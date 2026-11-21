@@ -261,6 +261,9 @@ public actor OnlineImageLoader {
         memoryCache.removeAllObjects()
         try? FileManager.default.removeItem(at: diskDirectory)
         try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
+        Task { @MainActor in
+            ReaderThumbnailStore.shared.clearAll()
+        }
     }
 
     /// 同步零 IO 内存缓存查询（专供主线程 Slot 快路径与预载入调度使用）
@@ -291,6 +294,13 @@ public actor OnlineImageLoader {
             return true
         }
         return FileManager.default.fileExists(atPath: diskFileURL(for: identityKey).path)
+    }
+
+    /// 若图片已落盘缓存，返回磁盘文件路径（供缩略图解码器通过 ImageIO 按低像素尺寸按需降采样）
+    public nonisolated func cachedDiskFileURL(for urlString: String) -> URL? {
+        let identityKey = normalizedCacheKey(for: urlString)
+        let url = diskFileURL(for: identityKey)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     public func diskCacheSizeBytes() -> Int64 {

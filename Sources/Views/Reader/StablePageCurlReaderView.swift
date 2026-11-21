@@ -27,6 +27,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     public let imageOnlyBackdrop: ReaderImageOnlyBackdrop
     public let showDividingLine: Bool
     @Binding public var currentPageIndex: Int
+    public var externalJumpNonce: Int = 0
     public let onSingleTap: () -> Void
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
@@ -51,6 +52,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         currentPageIndex: Binding<Int>,
+        externalJumpNonce: Int = 0,
         onSingleTap: @escaping () -> Void,
         onStatusUpdate: @escaping (String) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
@@ -74,6 +76,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self._currentPageIndex = currentPageIndex
+        self.externalJumpNonce = externalJumpNonce
         self.onSingleTap = onSingleTap
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
@@ -144,7 +147,12 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             }
         }
 
-        // 当外部（例如 Slider 或上一话/下一话按钮）修改了页码时，通过安全队列平滑驱动底层翻页
+        // 当外部（例如进度条跳转、返回锚点或上一话/下一话按钮）修改了页码时，按需即时直达或平滑驱动底层翻页
+        let isExternalJump = (context.coordinator.lastExternalJumpNonce != externalJumpNonce)
+        if isExternalJump {
+            context.coordinator.lastExternalJumpNonce = externalJumpNonce
+        }
+
         let activeIndex = context.coordinator.currentDisplayIndex
         if (uiViewController.viewControllers?.isEmpty ?? true) && pages.indices.contains(currentPageIndex) {
             if let initialVC = context.coordinator.createViewController(for: currentPageIndex) {
@@ -152,7 +160,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 uiViewController.setViewControllers([initialVC], direction: .forward, animated: false)
             }
         } else if activeIndex != currentPageIndex && pages.indices.contains(currentPageIndex) {
-            context.coordinator.requestNavigation(to: currentPageIndex, animated: true)
+            context.coordinator.requestNavigation(to: currentPageIndex, animated: !isExternalJump)
         }
     }
 
@@ -161,6 +169,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         weak var pageViewController: UIPageViewController?
 
         var currentDisplayIndex: Int = 0
+        var lastExternalJumpNonce: Int = 0
         private var isTransitioning = false
         private var pendingTargetIndex: Int?
         private let feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
@@ -191,7 +200,9 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             let movingForward = parent.isRightToLeft ? (targetIndex < currentDisplayIndex) : (targetIndex > currentDisplayIndex)
             let direction: UIPageViewController.NavigationDirection = movingForward ? .forward : .reverse
 
-            playPageFeedback()
+            if animated {
+                playPageFeedback()
+            }
 
             pageViewController?.setViewControllers([targetVC], direction: direction, animated: animated) { [weak self] _ in
                 guard let self = self else { return }
