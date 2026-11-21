@@ -64,9 +64,21 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return 0.0
     }
 
-    /// 双层细节纸纹 (Detail Mipmap) 动态权重计算：
-    /// - 1.0x 常规阅读：100% 宏观层 (128pt 切片)，0% 微观层 (64pt 切片，零额外渲染开销)；
-    /// - 1.08x -> 2.35x 双指/双击放大：Smoothstep 平滑交叉过渡，2.0x 时由细一倍的微观层接管，精准还原 1:1 物理像素细腻度；
+    /// 非经典位图材质的分级物理无缝切片逻辑尺寸（取消全员 160pt 2×2 浓缩格子，恢复舒展真实的材质比例）
+    public static func macroTileLogicalSize(for texture: ReaderTextureType) -> CGFloat {
+        switch texture {
+        case .classic:      return 128.0
+        case .brownPaper:   return 220.0
+        case .whiteWall:    return 260.0
+        case .grungePaper:  return 240.0
+        case .tissueMarble: return 280.0
+        case .wood:         return 320.0
+        }
+    }
+
+    /// 双层细节纸纹 (Detail Mipmap) 动态权重计算（现已全量支持经典与全部 5 种非经典材质）：
+    /// - 1.0x 常规或缩小阅读：100% 宏观层，0% 微观层（零额外渲染开销）；
+    /// - 1.08x -> 2.35x 双指/双击放大：Smoothstep 平滑交叉过渡，宏观层渐退，高频微观层平滑接管，彻底消除放大颗粒变大发糊；
     /// - > 2.6x 超高倍放大：施加轻度高倍阻尼衰减，查看极小字或局部笔触时清爽不噪。
     public static func zoomMipmapOpacities(
         for texture: ReaderTextureType,
@@ -74,7 +86,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
         zoomScale: CGFloat
     ) -> (coarse: Double, fine: Double) {
         let effBase = perceptualOpacity(for: texture, rawOpacity: baseOpacity)
-        guard texture.usesFineTilePattern, effBase > 0.001, zoomScale > 1.08 else {
+        guard effBase > 0.001, zoomScale > 1.08 else {
             return (coarse: effBase, fine: 0.0)
         }
 
@@ -82,8 +94,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let u = min(max((z - 1.08) / (2.35 - 1.08), 0.0), 1.0)
         let t = u * u * (3.0 - 2.0 * u) // Smoothstep 三次平滑曲线，捏合过程零突变
 
-        // 能量守恒交叉权重：宏观层退居保留 28% 柔和纸浆底斑起伏，微观层接管 88% 精细微粒
-        let coarseWeight = 1.0 - t * 0.72
+        // 经典材质保留 28% 底斑起伏 + 88% 微粒；位图材质保留 34% 宏观肌理色调 + 88% 1:1 高频纤维
+        let coarseFloor = texture.usesFineTilePattern ? 0.28 : 0.34
+        let coarseWeight = 1.0 - t * (1.0 - coarseFloor)
         let fineWeight = t * 0.88
 
         // 超高倍率 (> 2.6x ~ 5.0x) 轻度衰减，避免极端放大时微观层也变粗
@@ -110,8 +123,11 @@ public final class ReaderTextureCache: @unchecked Sendable {
     }
 
     private func fineDetailCacheKey(for type: ReaderTextureType, grainDensity: Double) -> NSString {
-        let pct = Self.quantizedGrainDensityPercent(grainDensity)
-        return "\(type.rawValue)_fine64_d\(pct)" as NSString
+        if type.usesFineTilePattern {
+            let pct = Self.quantizedGrainDensityPercent(grainDensity)
+            return "\(type.rawValue)_fine64_d\(pct)" as NSString
+        }
+        return "\(type.rawValue)_fine88_highpass" as NSString
     }
 
     /// 获取指定纸张纹理图像（带内存二级缓存；经典材质支持按 10%~100% 颗粒数量缓存切片）
@@ -190,12 +206,12 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return tiled
     }
 
-    /// 获取其它位图材质的高密无缝平铺切片（消除接缝，并将瓦片逻辑大小缩放到细腻的 ~160pt，恢复真实物理纸质纤维）
+    /// 获取其它位图材质的舒展无接缝平铺切片（按材质分级至 220~320pt，采用偏移交叉羽化消除镜像格子感）
     public func seamlessDenseTileImage(for type: ReaderTextureType) -> UIImage? {
         if type.usesFineTilePattern {
             return textureImage(for: type)
         }
-        let key = "\(type.rawValue)_dense_tile" as NSString
+        let key = "\(type.rawValue)_offset_wrap_tile" as NSString
         if let cached = seamlessTileCache.object(forKey: key) {
             return cached
         }
@@ -203,22 +219,23 @@ public final class ReaderTextureCache: @unchecked Sendable {
             return nil
         }
 
+        let logicalSize = Self.macroTileLogicalSize(for: type)
         return queue.sync {
             if let cached = seamlessTileCache.object(forKey: key) {
                 return cached
             }
-            let generated = Self.buildSeamlessDenseTile(from: baseImg, targetLogicalSize: 160.0)
+            let generated = Self.buildSeamlessDenseTile(from: baseImg, targetLogicalSize: logicalSize)
             seamlessTileCache.setObject(generated, forKey: key)
             return generated
         }
     }
 
-    /// 获取其它位图材质去色中性版的高密无缝平铺切片
+    /// 获取其它位图材质去色中性版的舒展无接缝平铺切片
     public func seamlessNeutralDenseTileImage(for type: ReaderTextureType) -> UIImage? {
         if type.usesFineTilePattern {
             return textureImage(for: type)
         }
-        let key = "\(type.rawValue)_neutral_dense_tile" as NSString
+        let key = "\(type.rawValue)_neutral_offset_wrap_tile" as NSString
         if let cached = seamlessTileCache.object(forKey: key) {
             return cached
         }
@@ -226,59 +243,74 @@ public final class ReaderTextureCache: @unchecked Sendable {
             return nil
         }
 
+        let logicalSize = Self.macroTileLogicalSize(for: type)
         return queue.sync {
             if let cached = seamlessTileCache.object(forKey: key) {
                 return cached
             }
-            let generated = Self.buildSeamlessDenseTile(from: neutralImg, targetLogicalSize: 160.0)
+            let generated = Self.buildSeamlessDenseTile(from: neutralImg, targetLogicalSize: logicalSize)
             seamlessTileCache.setObject(generated, forKey: key)
             return generated
         }
     }
 
-    private static func buildSeamlessDenseTile(from image: UIImage, targetLogicalSize: CGFloat = 160.0) -> UIImage {
-        let mirrored = buildSeamlessMirroredTile(from: image)
+    private static func buildSeamlessDenseTile(from image: UIImage, targetLogicalSize: CGFloat = 240.0) -> UIImage {
         let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
-        let targetSize = CGSize(width: targetLogicalSize, height: targetLogicalSize)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = screenScale
-        format.opaque = true
-
-        return UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
-            mirrored.draw(in: CGRect(origin: .zero, size: targetSize))
-        }
+        return buildOffsetWrapSeamlessTile(
+            from: image,
+            targetLogicalSize: targetLogicalSize,
+            screenScale: screenScale
+        )
     }
 
-    /// 获取双层细节纸纹 (Mipmap Level 1) 的 2x 细度微观切片（64×64pt 逻辑尺寸，放大 2x 时还原 1:1 物理像素细腻颗粒）
+    /// 获取双层细节纸纹 (Mipmap Level 1) 的高频微观切片：
+    /// - 经典材质：64×64pt 程序化高密微粒
+    /// - 位图材质：88×88pt 原图 1:1 像素中心高通提取的高频纤维无缝切片（放大看细节时锐利不糊）
     public func fineDetailTextureImage(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIImage? {
-        guard type.usesFineTilePattern else { return nil }
         let key = fineDetailCacheKey(for: type, grainDensity: grainDensity)
         if let cached = cache.object(forKey: key) {
             return cached
         }
 
-        loadLock.lock()
-        defer { loadLock.unlock() }
-        if let cached = cache.object(forKey: key) {
-            return cached
+        if type.usesFineTilePattern {
+            loadLock.lock()
+            defer { loadLock.unlock() }
+            if let cached = cache.object(forKey: key) {
+                return cached
+            }
+            let pct = Self.quantizedGrainDensityPercent(grainDensity)
+            let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+            let generated = Self.buildProceduralClassicStuccoTile(
+                densityPercent: pct,
+                screenScale: screenScale,
+                plasterBase: nil,
+                tileSize: 64.0,
+                seed: 20261119
+            )
+            cache.setObject(generated, forKey: key)
+            return generated
         }
 
-        let pct = Self.quantizedGrainDensityPercent(grainDensity)
-        let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
-        let generated = Self.buildProceduralClassicStuccoTile(
-            densityPercent: pct,
-            screenScale: screenScale,
-            plasterBase: nil,
-            tileSize: 64.0,
-            seed: 20261119
-        )
-        cache.setObject(generated, forKey: key)
-        return generated
+        guard let baseImg = textureImage(for: type) else {
+            return nil
+        }
+        return queue.sync {
+            if let cached = cache.object(forKey: key) {
+                return cached
+            }
+            let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+            let generated = Self.buildBitmapFineDetailTile(
+                from: baseImg,
+                targetLogicalSize: 88.0,
+                screenScale: screenScale
+            )
+            cache.setObject(generated, forKey: key)
+            return generated
+        }
     }
 
     /// 获取缓存的微观层 GPU 原生无缝平铺图像（供放大状态下的第二层 Multiply 细节叠加使用）
     public func tiledFineDetailTextureImage(for type: ReaderTextureType, grainDensity: Double = 1.0) -> UIImage? {
-        guard type.usesFineTilePattern else { return nil }
         let key = fineDetailCacheKey(for: type, grainDensity: grainDensity)
         if let cached = tiledImageCache.object(forKey: key) {
             return cached
@@ -670,6 +702,226 @@ public final class ReaderTextureCache: @unchecked Sendable {
         mutating func nextBool() -> Bool {
             (nextUInt64() & 1) == 1
         }
+    }
+
+    /// 对位图纹理执行中心裁剪 + 半周期偏移交叉羽化（Offset-Wrap Cross-Fade）：
+    /// 相比 2×2 镜像翻转，既保证 100% 四边无缝循环，又保持完整单份纹理物理尺度，彻底消除对称格子感。
+    private static func buildOffsetWrapSeamlessTile(
+        from image: UIImage,
+        targetLogicalSize: CGFloat,
+        screenScale: CGFloat
+    ) -> UIImage {
+        let origW = image.size.width
+        let origH = image.size.height
+        guard origW > 32, origH > 32 else { return image }
+
+        let pixelDim = min(max(Int((targetLogicalSize * screenScale).rounded()), 160), 768)
+        let cropSize = CGSize(width: pixelDim, height: pixelDim)
+        let trimRatio: CGFloat = 0.03
+        let visibleRatio = 1.0 - trimRatio * 2.0
+
+        // 取原图中心最大内接正方形（保持 AspectFill 不拉伸变形）
+        let srcMinSide = min(origW, origH) * visibleRatio
+        let drawScale = CGFloat(pixelDim) / max(srcMinSide, 1.0)
+        let drawW = origW * drawScale
+        let drawH = origH * drawScale
+        let originX = (CGFloat(pixelDim) - drawW) * 0.5
+        let originY = (CGFloat(pixelDim) - drawH) * 0.5
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = true
+        let squareImg = UIGraphicsImageRenderer(size: cropSize, format: format).image { _ in
+            image.draw(in: CGRect(x: originX, y: originY, width: drawW, height: drawH))
+        }
+
+        guard let srcBytes = extractRGBABytes(from: squareImg, width: pixelDim, height: pixelDim) else {
+            return squareImg
+        }
+        let blended = applyOffsetWrapBlend(srcBytes, width: pixelDim, height: pixelDim)
+        return makeUIImage(fromRGBABytes: blended, width: pixelDim, height: pixelDim, scale: screenScale) ?? squareImg
+    }
+
+    /// 从高清位图原图中心 1:1 像素截取局部，经高通滤波提取纯白底细微纸纤并无缝偏移混合，专供放大 Mipmap Level 1 接管使用
+    private static func buildBitmapFineDetailTile(
+        from image: UIImage,
+        targetLogicalSize: CGFloat = 88.0,
+        screenScale: CGFloat
+    ) -> UIImage {
+        let pixelDim = min(max(Int((targetLogicalSize * screenScale).rounded()), 160), 320)
+        let tilePxSize = CGSize(width: pixelDim, height: pixelDim)
+
+        let rawPxW = image.cgImage.map { CGFloat($0.width) } ?? (image.size.width * image.scale)
+        let rawPxH = image.cgImage.map { CGFloat($0.height) } ?? (image.size.height * image.scale)
+        guard rawPxW > 32, rawPxH > 32 else { return image }
+
+        // 若原图分辨率足够大，按 1:1 原图物理像素从中心裁取 pixelDim×pixelDim 区域，完全不缩水
+        let sampleSpan = min(rawPxW, rawPxH, CGFloat(pixelDim))
+        let scaleFactor = CGFloat(pixelDim) / max(sampleSpan, 1.0)
+        let drawW = rawPxW * scaleFactor
+        let drawH = rawPxH * scaleFactor
+        let originX = (CGFloat(pixelDim) - drawW) * 0.5
+        let originY = (CGFloat(pixelDim) - drawH) * 0.5
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = true
+        let patchImg = UIGraphicsImageRenderer(size: tilePxSize, format: format).image { _ in
+            image.draw(in: CGRect(x: originX, y: originY, width: drawW, height: drawH))
+        }
+
+        guard let srcBytes = extractRGBABytes(from: patchImg, width: pixelDim, height: pixelDim) else {
+            return patchImg
+        }
+
+        // 转灰度并做可分离盒式低通分离，提取高频细微纤维落差
+        let totalCount = pixelDim * pixelDim
+        var gray = [Float](repeating: 0, count: totalCount)
+        for i in 0..<totalCount {
+            let idx = i * 4
+            let r = Float(srcBytes[idx])
+            let g = Float(srcBytes[idx + 1])
+            let b = Float(srcBytes[idx + 2])
+            gray[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+        }
+
+        let radius = 4
+        let horiz = boxBlur1DHorizontal(gray, width: pixelDim, height: pixelDim, radius: radius)
+        let lowFreq = boxBlur1DVertical(horiz, width: pixelDim, height: pixelDim, radius: radius)
+
+        var highPassBytes = [UInt8](repeating: 255, count: totalCount * 4)
+        for i in 0..<totalCount {
+            let diff = gray[i] - lowFreq[i]
+            // 中性高通白底 [0.74, 1.0]，均值落在 ~0.96，确保正片叠底放大时清晰细腻且绝不发灰变脏
+            let hp = min(max(0.96 + diff * 1.55, 0.74), 1.0)
+            let byte = UInt8((hp * 255.0).rounded())
+            let idx = i * 4
+            highPassBytes[idx] = byte
+            highPassBytes[idx + 1] = byte
+            highPassBytes[idx + 2] = byte
+            highPassBytes[idx + 3] = 255
+        }
+
+        let seamlessBytes = applyOffsetWrapBlend(highPassBytes, width: pixelDim, height: pixelDim)
+        return makeUIImage(fromRGBABytes: seamlessBytes, width: pixelDim, height: pixelDim, scale: screenScale) ?? patchImg
+    }
+
+    private static func extractRGBABytes(from image: UIImage, width: Int, height: Int) -> [UInt8]? {
+        guard let cgImg = image.cgImage else { return nil }
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let ctx = CGContext(
+            data: &bytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return bytes
+    }
+
+    private static func makeUIImage(fromRGBABytes bytes: [UInt8], width: Int, height: Int, scale: CGFloat) -> UIImage? {
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        var mutableBytes = bytes
+        guard let ctx = CGContext(
+            data: &mutableBytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ), let outCG = ctx.makeImage() else {
+            return nil
+        }
+        return UIImage(cgImage: outCG, scale: scale, orientation: .up)
+    }
+
+    private static func applyOffsetWrapBlend(_ src: [UInt8], width: Int, height: Int) -> [UInt8] {
+        var out = [UInt8](repeating: 255, count: width * height * 4)
+        let halfW = width / 2
+        let halfH = height / 2
+
+        @inline(__always)
+        func axisWeight(_ coord: Int, total: Int) -> Float {
+            let norm = (Float(coord) + 0.5) / Float(total)
+            let dist = abs(2.0 * norm - 1.0)
+            let t = min(max((dist - 0.35) / 0.65, 0.0), 1.0)
+            let s = t * t * (3.0 - 2.0 * t)
+            return 1.0 - s
+        }
+
+        var wx = [Float](repeating: 0, count: width)
+        for x in 0..<width { wx[x] = axisWeight(x, total: width) }
+        var wy = [Float](repeating: 0, count: height)
+        for y in 0..<height { wy[y] = axisWeight(y, total: height) }
+
+        for y in 0..<height {
+            let sy = (y + halfH) % height
+            let wyVal = wy[y]
+            for x in 0..<width {
+                let sx = (x + halfW) % width
+                let w = wx[x] * wyVal
+                let invW = 1.0 - w
+
+                let idxA = (y * width + x) * 4
+                let idxB = (sy * width + sx) * 4
+
+                out[idxA]     = UInt8(Float(src[idxA]) * w + Float(src[idxB]) * invW)
+                out[idxA + 1] = UInt8(Float(src[idxA + 1]) * w + Float(src[idxB + 1]) * invW)
+                out[idxA + 2] = UInt8(Float(src[idxA + 2]) * w + Float(src[idxB + 2]) * invW)
+                out[idxA + 3] = 255
+            }
+        }
+        return out
+    }
+
+    private static func boxBlur1DHorizontal(_ src: [Float], width: Int, height: Int, radius: Int) -> [Float] {
+        var out = [Float](repeating: 0, count: width * height)
+        let denom = Float(radius * 2 + 1)
+        for y in 0..<height {
+            let rowBase = y * width
+            var sum: Float = 0
+            for dx in -radius...radius {
+                let x = (dx % width + width) % width
+                sum += src[rowBase + x]
+            }
+            out[rowBase] = sum / denom
+            for x in 1..<width {
+                let addX = (x + radius) % width
+                let subX = (x - radius - 1 + width) % width
+                sum += src[rowBase + addX] - src[rowBase + subX]
+                out[rowBase + x] = sum / denom
+            }
+        }
+        return out
+    }
+
+    private static func boxBlur1DVertical(_ src: [Float], width: Int, height: Int, radius: Int) -> [Float] {
+        var out = [Float](repeating: 0, count: width * height)
+        let denom = Float(radius * 2 + 1)
+        for x in 0..<width {
+            var sum: Float = 0
+            for dy in -radius...radius {
+                let y = (dy % height + height) % height
+                sum += src[y * width + x]
+            }
+            out[x] = sum / denom
+            for y in 1..<height {
+                let addY = (y + radius) % height
+                let subY = (y - radius - 1 + height) % height
+                sum += src[addY * width + x] - src[subY * width + x]
+                out[y * width + x] = sum / denom
+            }
+        }
+        return out
     }
 
     private static func buildSeamlessMirroredTile(from image: UIImage) -> UIImage {
@@ -1274,7 +1526,6 @@ public struct PaperTextureOverlayView: View {
 
     public var body: some View {
         if let img = ReaderTextureCache.shared.textureImage(for: texture, grainDensity: grainDensity) {
-            let effectiveOpacity = ReaderTextureCache.perceptualOpacity(for: texture, rawOpacity: opacity)
             let mip = ReaderTextureCache.zoomMipmapOpacities(
                 for: texture,
                 baseOpacity: opacity,
@@ -1311,20 +1562,34 @@ public struct PaperTextureOverlayView: View {
                     let denseTile = ReaderTextureCache.shared.seamlessDenseTileImage(for: texture) ?? img
 
                     ZStack {
-                        if let neutralTile, clampedTint < 0.999 {
-                            Image(uiImage: neutralTile)
-                                .interpolation(.medium)
-                                .resizable(resizingMode: .tile)
+                        ZStack {
+                            if let neutralTile, clampedTint < 0.999 {
+                                Image(uiImage: neutralTile)
+                                    .interpolation(.medium)
+                                    .resizable(resizingMode: .tile)
+                            }
+                            if clampedTint > 0.001 || neutralTile == nil {
+                                Image(uiImage: denseTile)
+                                    .interpolation(.medium)
+                                    .resizable(resizingMode: .tile)
+                                    .opacity(neutralTile == nil ? 1.0 : clampedTint)
+                            }
                         }
-                        if clampedTint > 0.001 || neutralTile == nil {
-                            Image(uiImage: denseTile)
+                        .blendMode(.multiply)
+                        .opacity(mip.coarse)
+
+                        if mip.fine > 0.005,
+                           let fineImg = ReaderTextureCache.shared.fineDetailTextureImage(
+                               for: texture,
+                               grainDensity: grainDensity
+                           ) {
+                            Image(uiImage: fineImg)
                                 .interpolation(.medium)
                                 .resizable(resizingMode: .tile)
-                                .opacity(neutralTile == nil ? 1.0 : clampedTint)
+                                .opacity(mip.fine)
+                                .blendMode(.multiply)
                         }
                     }
-                    .blendMode(.multiply)
-                    .opacity(effectiveOpacity)
                     .allowsHitTesting(false)
                 }
 
@@ -1398,26 +1663,52 @@ public struct PaperTextureOverlayView: View {
                             let cols = min(max(1, Int(ceil((viewW + phaseX) / tileW))), 64)
                             let rows = min(max(1, Int(ceil((viewH + phaseY) / tileH))), 64)
 
-                            Color.clear
-                                .frame(width: viewW, height: viewH)
-                                .overlay(alignment: .topLeading) {
-                                    ZStack {
-                                        if let neutralTileImg, clampedTint < 0.999 {
-                                            tileGridView(tileImg: neutralTileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                            ZStack {
+                                Color.clear
+                                    .frame(width: viewW, height: viewH)
+                                    .overlay(alignment: .topLeading) {
+                                        ZStack {
+                                            if let neutralTileImg, clampedTint < 0.999 {
+                                                tileGridView(tileImg: neutralTileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                            }
+                                            if clampedTint > 0.001 || neutralTileImg == nil {
+                                                tileGridView(tileImg: tileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                                    .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
+                                            }
                                         }
-                                        if clampedTint > 0.001 || neutralTileImg == nil {
-                                            tileGridView(tileImg: tileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
-                                                .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
-                                        }
+                                        .compositingGroup()
+                                        .offset(x: -phaseX, y: -phaseY)
                                     }
-                                    .compositingGroup()
-                                    .offset(x: -phaseX, y: -phaseY)
+                                    .clipped()
+                                    .opacity(mip.coarse)
+                                    .blendMode(.multiply)
+
+                                if mip.fine > 0.005,
+                                   let fineImg = ReaderTextureCache.shared.fineDetailTextureImage(
+                                       for: texture,
+                                       grainDensity: grainDensity
+                                   ) {
+                                    let fineTileW = max(fineImg.size.width, 32.0)
+                                    let fineTileH = max(fineImg.size.height, 32.0)
+                                    let finePhaseX = Self.positiveModulo(contentFrame.minX, divisor: fineTileW)
+                                    let finePhaseY = Self.positiveModulo(contentFrame.minY, divisor: fineTileH)
+
+                                    Color.clear
+                                        .frame(width: viewW, height: viewH)
+                                        .overlay(alignment: .topLeading) {
+                                            Image(uiImage: fineImg)
+                                                .interpolation(.medium)
+                                                .resizable(resizingMode: .tile)
+                                                .frame(width: viewW + fineTileW, height: viewH + fineTileH)
+                                                .offset(x: -finePhaseX, y: -finePhaseY)
+                                        }
+                                        .clipped()
+                                        .opacity(mip.fine)
+                                        .blendMode(.multiply)
                                 }
-                                .clipped()
+                            }
                         }
                     }
-                    .blendMode(.multiply)
-                    .opacity(effectiveOpacity)
                     .allowsHitTesting(false)
                 }
             }
