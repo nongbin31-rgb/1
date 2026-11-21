@@ -42,6 +42,7 @@ public struct MangaDetailView: View {
             }
             .padding(.vertical, 12)
         }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("漫画详情")
         .navigationBarTitleDisplayMode(.inline)
         .compatNavigationBarHidden(false)
@@ -185,9 +186,16 @@ public struct MangaDetailView: View {
     }
 
     private var upscalerBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(.tint)
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                    .frame(width: 32, height: 32)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text("画质超分")
                     .font(.caption2)
@@ -198,9 +206,10 @@ public struct MangaDetailView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .insetCardStyle(cornerRadius: 12)
     }
 
     private var readingModeBanner: some View {
@@ -228,9 +237,16 @@ public struct MangaDetailView: View {
                 }
             }
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: currentMode == .verticalWebtoon ? "rectangle.portrait.and.arrow.forward" : "book.closed")
-                    .foregroundStyle(.tint)
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: currentMode == .verticalWebtoon ? "rectangle.portrait.and.arrow.forward" : "book.closed")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.blue)
+                }
+
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         Text("阅读排版")
@@ -239,14 +255,14 @@ public struct MangaDetailView: View {
                         if isCustomized {
                             Text("自定")
                                 .font(.system(size: 9, weight: .bold))
-                                .padding(.horizontal, 3)
+                                .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(Color.accentColor.opacity(0.12), in: Capsule())
                                 .foregroundStyle(Color.accentColor)
                         } else if store.autoDetectMangaLayout {
                             Text(category == .koreanWebtoon ? "韩漫" : (category == .japaneseManga ? "日漫" : "默认"))
                                 .font(.system(size: 9, weight: .bold))
-                                .padding(.horizontal, 3)
+                                .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(Color.green.opacity(0.15), in: Capsule())
                                 .foregroundStyle(Color.green)
@@ -257,15 +273,16 @@ public struct MangaDetailView: View {
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.tertiary)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+            .insetCardStyle(cornerRadius: 12)
             .foregroundStyle(Color.primary)
         }
     }
@@ -321,18 +338,18 @@ public struct MangaDetailView: View {
                                 if isCurrent {
                                     Text("上次读到")
                                         .font(.caption2.weight(.medium))
-                                        .foregroundStyle(.tint)
+                                        .foregroundStyle(Color.accentColor)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
                                         .background(Color.accentColor.opacity(0.12), in: Capsule())
                                 }
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
+                                    .font(.caption.weight(.semibold))
                                     .foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
-                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+                            .insetCardStyle(cornerRadius: 11)
                         }
                         .buttonStyle(.plain)
                     }
@@ -411,4 +428,40 @@ private struct ReaderLaunchPayload: Identifiable {
     let chapters: [MangaChapter]
     let initialChapter: MangaChapter
     let initialPageIndex: Int?
+}
+
+private struct InsetCardModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    var cornerRadius: CGFloat = 12
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                    .shadow(
+                        color: colorScheme == .dark
+                            ? Color.black.opacity(0.35)
+                            : Color.black.opacity(0.045),
+                        radius: colorScheme == .dark ? 3 : 5,
+                        x: 0,
+                        y: colorScheme == .dark ? 1.5 : 2
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        colorScheme == .dark
+                            ? Color.white.opacity(0.08)
+                            : Color.black.opacity(0.05),
+                        lineWidth: 0.8
+                    )
+            )
+    }
+}
+
+private extension View {
+    func insetCardStyle(cornerRadius: CGFloat = 12) -> some View {
+        modifier(InsetCardModifier(cornerRadius: cornerRadius))
+    }
 }
