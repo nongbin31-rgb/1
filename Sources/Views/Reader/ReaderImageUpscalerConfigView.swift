@@ -286,6 +286,7 @@ public struct ReaderImageUpscalerConfigView: View {
                         .stroke(Color.white.opacity(0.15), lineWidth: 1)
                 )
         )
+        .environment(\.colorScheme, .dark)
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
     }

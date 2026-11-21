@@ -31,6 +31,19 @@ public struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("软件外观", selection: $store.appColorScheme) {
+                        ForEach(AppColorSchemePreference.allCases) { mode in
+                            Text(mode.shortName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("外观与主题")
+                } footer: {
+                    Text("可全局指定软件使用浅色、深色或跟随系统自动切换；阅读器内纸张背景仍可独立调节。")
+                }
+
+                Section {
                     Toggle("启用 AI 画质增强（会有额外功耗）", isOn: $store.enableImageUpscaler)
 
                     if store.enableImageUpscaler {

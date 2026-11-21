@@ -41,6 +41,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
             }
+            .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("阅读背景与纸质")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -93,7 +94,7 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - 2. 真实物理纸张材质选择网格 (严格等宽对齐网格)
@@ -123,7 +124,7 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
     @ViewBuilder
@@ -316,7 +317,7 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - 4. 纹理浓度与纸张着色滑块
@@ -404,7 +405,7 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - 4. 沉浸式动态光晕提示
@@ -452,6 +453,6 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 }

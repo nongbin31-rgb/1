@@ -4,6 +4,7 @@ import UIKit
 /// 画面滤镜全屏配置视图（1:1 像素级还原漫画阅读器滤镜列表与实时渲染面板）
 public struct ReaderImageFilterView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var store: AppStore
 
     /// 外部传入的当前漫画页面预览原图
@@ -120,16 +121,17 @@ public struct ReaderImageFilterView: View {
 
     private var topNavigationBar: some View {
         HStack {
-            // 返回按钮（圆角半透明白底）
+            // 返回按钮（自适应浅/深色卡片底）
             Button {
                 dismiss()
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.primary)
                     .frame(width: 36, height: 36)
-                    .background(Color.white, in: Circle())
-                    .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: Circle())
+                    .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.06), radius: 4, x: 0, y: 2)
             }
 
             Spacer()
@@ -137,7 +139,7 @@ public struct ReaderImageFilterView: View {
             // 标题
             Text("画面滤镜")
                 .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.black)
+                .foregroundStyle(.primary)
 
             Spacer()
 
@@ -148,11 +150,12 @@ public struct ReaderImageFilterView: View {
             } label: {
                 Text("完成")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 8)
-                    .background(Color.white, in: Capsule())
-                    .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.06), radius: 4, x: 0, y: 2)
             }
         }
         .padding(.horizontal, 16)
@@ -225,47 +228,27 @@ public struct ReaderImageFilterView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         // 1. 已启用分区（若有启用的滤镜则展示）
                         if !localConfig.activeFilterTypes.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("已启用")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 16)
-
-                                VStack(spacing: 0) {
-                                    ForEach(Array(localConfig.activeFilterTypes.enumerated()), id: \.element) { index, type in
-                                        if index > 0 {
-                                            Divider()
-                                                .padding(.leading, 56)
-                                        }
-                                        activeFilterRow(for: type)
+                            filterSectionGroup(title: "已启用") {
+                                ForEach(Array(localConfig.activeFilterTypes.enumerated()), id: \.element) { index, type in
+                                    if index > 0 {
+                                        Divider()
+                                            .padding(.leading, 56)
                                     }
+                                    activeFilterRow(for: type)
                                 }
-                                .background(Color.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .shadow(color: .black.opacity(0.04), radius: 6, y: 3)
                             }
                         }
 
-                        // 2. 未启用分区（严格还原用户上传截图！）
+                        // 2. 未启用分区
                         if !localConfig.inactiveFilterTypes.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("未启用")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 16)
-
-                                VStack(spacing: 0) {
-                                    ForEach(Array(localConfig.inactiveFilterTypes.enumerated()), id: \.element) { index, type in
-                                        if index > 0 {
-                                            Divider()
-                                                .padding(.leading, 56)
-                                        }
-                                        inactiveFilterRow(for: type)
+                            filterSectionGroup(title: "未启用") {
+                                ForEach(Array(localConfig.inactiveFilterTypes.enumerated()), id: \.element) { index, type in
+                                    if index > 0 {
+                                        Divider()
+                                            .padding(.leading, 56)
                                     }
+                                    inactiveFilterRow(for: type)
                                 }
-                                .background(Color.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .shadow(color: .black.opacity(0.04), radius: 6, y: 3)
                             }
                         }
 
@@ -279,10 +262,39 @@ public struct ReaderImageFilterView: View {
         }
         .padding(.bottom, isSheetCollapsed ? safeAreaBottom : 0)
         .background(
-            Color(uiColor: .systemGroupedBackground)
+            (colorScheme == .dark ? Color(red: 0.075, green: 0.075, blue: 0.09) : Color(uiColor: .systemGroupedBackground))
                 .clipShape(RoundedCornerShape(radius: 22, corners: [.topLeft, .topRight]))
-                .shadow(color: .black.opacity(0.08), radius: 10, y: -3)
+                .overlay(
+                    RoundedCornerShape(radius: 22, corners: [.topLeft, .topRight])
+                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.05), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.08), radius: 10, y: -3)
         )
+    }
+
+    /// 抽屉分组卡片容器（自动适配浅/深色卡片背景与描边）
+    @ViewBuilder
+    private func filterSectionGroup<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.04), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.25 : 0.04), radius: 6, y: 3)
+        }
     }
 
     /// 抽屉标题栏
@@ -296,7 +308,7 @@ public struct ReaderImageFilterView: View {
             } label: {
                 Image(systemName: isSheetCollapsed ? "chevron.up" : "chevron.down")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.black.opacity(0.8))
+                    .foregroundStyle(.primary.opacity(0.85))
                     .frame(width: 32, height: 32)
             }
 
@@ -304,7 +316,7 @@ public struct ReaderImageFilterView: View {
 
             Text("滤镜列表")
                 .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.black)
+                .foregroundStyle(.primary)
 
             Spacer()
 
@@ -345,12 +357,12 @@ public struct ReaderImageFilterView: View {
                 HStack(spacing: 4) {
                     Text(type.title)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(.primary)
 
                     if !type.subtitle.isEmpty {
                         Text(type.subtitle)
                             .font(.system(size: 15))
-                            .foregroundStyle(.black.opacity(0.85))
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -389,7 +401,7 @@ public struct ReaderImageFilterView: View {
                 // 标题
                 Text(type.title)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.primary)
 
                 Spacer()
 
@@ -438,7 +450,7 @@ public struct ReaderImageFilterView: View {
                     .frame(width: 32, alignment: .leading)
 
                 Slider(value: binding.grayscaleIntensity, in: 0.0...1.0, step: 0.05)
-                    .tint(.black)
+                    .tint(.primary)
 
                 Text("\(Int(binding.grayscaleIntensity.wrappedValue * 100))%")
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
@@ -454,7 +466,7 @@ public struct ReaderImageFilterView: View {
                     .frame(width: 32, alignment: .leading)
 
                 Slider(value: binding.gammaValue, in: 0.4...2.4, step: 0.05)
-                    .tint(.black)
+                    .tint(.primary)
 
                 Text(String(format: "%.2f", binding.gammaValue.wrappedValue))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
@@ -470,7 +482,7 @@ public struct ReaderImageFilterView: View {
                     .frame(width: 32, alignment: .leading)
 
                 Slider(value: binding.sharpnessValue, in: 0.1...2.0, step: 0.05)
-                    .tint(.black)
+                    .tint(.primary)
 
                 Text(String(format: "%.2f", binding.sharpnessValue.wrappedValue))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
@@ -486,7 +498,7 @@ public struct ReaderImageFilterView: View {
                     .frame(width: 32, alignment: .leading)
 
                 Slider(value: binding.toneTemperature, in: -1.0...1.0, step: 0.05)
-                    .tint(.black)
+                    .tint(.primary)
 
                 let val = binding.toneTemperature.wrappedValue
                 Text(val > 0.05 ? "暖 \(Int(val * 100))" : (val < -0.05 ? "冷 \(Int(-val * 100))" : "中性"))
@@ -503,7 +515,7 @@ public struct ReaderImageFilterView: View {
                     .frame(width: 32, alignment: .leading)
 
                 Slider(value: binding.shadowAmount, in: -1.0...1.0, step: 0.05)
-                    .tint(.black)
+                    .tint(.primary)
 
                 let val = binding.shadowAmount.wrappedValue
                 Text(val < -0.05 ? "加深 \(Int(-val * 100))" : (val > 0.05 ? "提亮 \(Int(val * 100))" : "标准"))
