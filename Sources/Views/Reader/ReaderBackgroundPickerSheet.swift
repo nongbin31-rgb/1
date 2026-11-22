@@ -53,10 +53,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 }
             }
         }
-        .presentationDetents([.fraction(0.68), .fraction(0.92)])
-        .presentationDragIndicator(.visible)
-        .presentationBackground(.ultraThinMaterial)
-        .presentationCornerRadius(32)
+        .readerLiquidGlassSheet(fractions: [0.68, 0.92], cornerRadius: 32)
     }
 
     // MARK: - 1. 背景模式分段网格

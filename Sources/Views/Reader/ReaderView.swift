@@ -612,10 +612,7 @@ public struct ReaderView: View {
                 }
             )
             .environmentObject(store)
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(.ultraThinMaterial)
-            .presentationCornerRadius(32)
+            .readerLiquidGlassSheet(cornerRadius: 32)
         }
         .fullScreenCover(isPresented: $showConfigPreviewSheet) {
             ReaderImageUpscalerConfigView(
@@ -632,10 +629,7 @@ public struct ReaderView: View {
         .sheet(isPresented: $showBackgroundPickerSheet) {
             ReaderBackgroundPickerSheet()
                 .environmentObject(store)
-                .presentationDetents([.fraction(0.68), .fraction(0.92)])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.ultraThinMaterial)
-                .presentationCornerRadius(32)
+                .readerLiquidGlassSheet(fractions: [0.68, 0.92], cornerRadius: 32)
         }
     }
 
@@ -1909,6 +1903,43 @@ private struct WebtoonScrollIndicatorSyncView: UIViewRepresentable {
                     break
                 }
                 current = candidate.superview
+            }
+        }
+    }
+}
+
+// MARK: - 原生液态玻璃弹窗兼容修饰符
+extension View {
+    /// 原生液态玻璃弹窗背景修饰符（兼容 iOS 16.0 部署目标并在 iOS 16.4+ 自动启用官方原生超薄毛玻璃与大圆角）
+    @ViewBuilder
+    func readerLiquidGlassSheet(
+        fractions: [CGFloat]? = nil,
+        cornerRadius: CGFloat = 32
+    ) -> some View {
+        if let fractions = fractions {
+            let detents = Set(fractions.map { PresentationDetent.fraction($0) })
+            if #available(iOS 16.4, *) {
+                self
+                    .presentationDetents(detents)
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(.ultraThinMaterial)
+                    .presentationCornerRadius(cornerRadius)
+            } else {
+                self
+                    .presentationDetents(detents)
+                    .presentationDragIndicator(.visible)
+            }
+        } else {
+            if #available(iOS 16.4, *) {
+                self
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(.ultraThinMaterial)
+                    .presentationCornerRadius(cornerRadius)
+            } else {
+                self
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
     }
