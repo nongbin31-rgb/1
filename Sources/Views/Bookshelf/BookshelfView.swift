@@ -725,6 +725,7 @@ public struct BookshelfView: View {
                 }
             }
 
+            @MainActor
             func launchReader(resolvedManga: Manga, chapters: [MangaChapter]) {
                 guard let firstChapter = chapters.first else {
                     showHud("该漫画暂无可阅读章节")
