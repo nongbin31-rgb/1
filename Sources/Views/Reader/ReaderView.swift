@@ -425,6 +425,7 @@ public struct ReaderView: View {
                     isRightToLeft: activeLayoutMode == .pagedRTL,
                     readerBackground: store.preferredReaderBackground,
                     safeAreaInsets: safeAreaInsetsResolved,
+                    chapterTitle: currentChapter.title,
                     onSideRailScrubBegin: { initialFraction in
                         scrubSessionOriginIndex = currentPageIndex
                         scrubFraction = initialFraction
@@ -491,12 +492,15 @@ public struct ReaderView: View {
             initializeLayoutIfNeeded()
             syncPreloaderSettings()
             store.beginReadingSession()
+            ReaderDeviceInfoStore.shared.startMonitoring()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             store.endReadingSession()
+            ReaderDeviceInfoStore.shared.stopMonitoring()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             store.beginReadingSession()
+            ReaderDeviceInfoStore.shared.startMonitoring()
         }
         .task(id: currentChapter.id) {
             initializeLayoutIfNeeded()
@@ -517,6 +521,7 @@ public struct ReaderView: View {
                 )
             }
             store.endReadingSession()
+            ReaderDeviceInfoStore.shared.stopMonitoring()
         }
         .onChange(of: currentPageIndex) { newIndex in
             if pages.indices.contains(newIndex),

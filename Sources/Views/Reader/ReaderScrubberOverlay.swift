@@ -128,6 +128,79 @@ final class ReaderPageCacheSnapshotStore: ObservableObject {
     }
 }
 
+// MARK: - 设备环境信息状态（沉浸微晶胶囊所需：实时系统时钟、电池电量与充电状态）
+
+@MainActor
+public final class ReaderDeviceInfoStore: ObservableObject {
+    public static let shared = ReaderDeviceInfoStore()
+
+    @Published public private(set) var timeString: String = ""
+    @Published public private(set) var batteryPercentage: Int = 100
+    @Published public private(set) var isCharging: Bool = false
+
+    private var timer: Timer?
+    private let timeFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm"
+        return df
+    }()
+
+    private init() {
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        updateDeviceInfo()
+        NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryLevelDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateDeviceInfo()
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateDeviceInfo()
+        }
+    }
+
+    public func startMonitoring() {
+        updateDeviceInfo()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            self?.updateDeviceInfo()
+        }
+    }
+
+    public func stopMonitoring() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    public func updateDeviceInfo() {
+        timeString = timeFormatter.string(from: Date())
+        let level = UIDevice.current.batteryLevel
+        if level >= 0 {
+            batteryPercentage = min(100, max(0, Int((level * 100).rounded())))
+        }
+        let state = UIDevice.current.batteryState
+        isCharging = (state == .charging || state == .full)
+    }
+
+    public var batteryIconName: String {
+        if isCharging {
+            return "battery.100.bolt"
+        }
+        switch batteryPercentage {
+        case 75...100: return "battery.100"
+        case 50..<75:  return "battery.75"
+        case 25..<50:  return "battery.50"
+        case 10..<25:  return "battery.25"
+        default:       return "battery.0"
+        }
+    }
+}
+
 // MARK: - 1. 操控态底部进度条调度容器（5 套风格统一接口）
 
 struct ReaderActiveProgressBar: View {
@@ -208,6 +281,20 @@ struct ReaderActiveProgressBar: View {
                 onScrubChanged: onScrubChanged,
                 onScrubEnd: onScrubEnd
             )
+        case .microCapsule:
+            ReaderMicroCapsuleActiveBar(
+                totalPages: totalPages,
+                currentPageIndex: currentPageIndex,
+                isScrubbing: isScrubbing,
+                scrubFraction: scrubFraction,
+                isRightToLeft: isRightToLeft,
+                originAnchorIndex: originAnchorIndex,
+                cacheStatuses: cacheStatuses,
+                onScrubBegin: onScrubBegin,
+                onScrubChanged: onScrubChanged,
+                onSpeedChanged: onSpeedChanged,
+                onScrubEnd: onScrubEnd
+            )
         }
     }
 
@@ -237,6 +324,216 @@ struct ReaderActiveProgressBar: View {
         .padding(.vertical, 8)
         .background(Color.white.opacity(0.10), in: Capsule())
         .frame(height: 36)
+    }
+}
+
+// MARK: - 风格 6：沉浸微晶胶囊激活态控制舱（大字页码指示 + 缓存感知槽底 + 纵向拉离精调 + 原位回弹锚点）
+
+struct ReaderMicroCapsuleActiveBar: View {
+    let totalPages: Int
+    let currentPageIndex: Int
+    let isScrubbing: Bool
+    let scrubFraction: Double
+    let isRightToLeft: Bool
+    let originAnchorIndex: Int?
+    let cacheStatuses: ReaderPageCacheSnapshotStore
+    let onScrubBegin: (Double) -> Void
+    let onScrubChanged: (Double) -> Void
+    let onSpeedChanged: (ReaderScrubSpeed) -> Void
+    let onScrubEnd: (Int) -> Void
+
+    @State private var isDragging = false
+    @State private var dragStartFraction: Double = 0
+    @State private var currentFraction: Double = 0
+    @State private var activeSpeed: ReaderScrubSpeed = .fast
+    @State private var lastHapticPageIndex: Int? = nil
+    private let feedbackGenerator = UISelectionFeedbackGenerator()
+
+    private var maxIndex: Int {
+        max(totalPages - 1, 1)
+    }
+
+    private var activeFraction: Double {
+        let raw = isScrubbing ? scrubFraction : Double(currentPageIndex)
+        return min(max(raw, 0), Double(maxIndex))
+    }
+
+    private var displayedPageIndex: Int {
+        min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
+    }
+
+    var body: some View {
+        let pct = Int(((Double(displayedPageIndex) / Double(maxIndex)) * 100).rounded())
+        VStack(spacing: 6) {
+            // 顶层：大字等宽微晶指示条与回弹锚点
+            HStack(spacing: 8) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(isScrubbing ? 1.3 : 1.0)
+                        .animation(.easeInOut(duration: 0.2), value: isScrubbing)
+                    Text("第 \(displayedPageIndex + 1) / \(totalPages) 页")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                    Text("· \(pct)%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4.5)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                        .overlay(
+                            Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                        )
+                )
+
+                Spacer()
+
+                if let anchor = originAnchorIndex, abs(displayedPageIndex - anchor) > 4 {
+                    Button {
+                        onScrubEnd(anchor)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.system(size: 9.5, weight: .bold))
+                            Text("回 P\(anchor + 1)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.85), in: Capsule())
+                        .foregroundStyle(.white)
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+
+            // 中层：触控滑轨
+            trackCanvas
+                .frame(height: 32)
+        }
+    }
+
+    private var trackCanvas: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let height = geo.size.height
+            let thumbDiameter: CGFloat = isScrubbing ? 24 : 18
+            let thumbRadius = thumbDiameter * 0.5
+            let usableWidth = max(width - thumbDiameter, 1)
+
+            let logicalRatio = CGFloat(activeFraction / Double(maxIndex))
+            let visualRatio = isRightToLeft ? (1.0 - logicalRatio) : logicalRatio
+            let thumbCenterX = thumbRadius + visualRatio * usableWidth
+            let trackHeight: CGFloat = isScrubbing ? 7.5 : 5.5
+
+            ZStack(alignment: .leading) {
+                // 透明扩展触摸感应热区
+                Color.clear
+                    .contentShape(Rectangle())
+
+                // 槽底多段缓存热力微槽
+                let bucketCount = min(totalPages, 36)
+                let buckets = cacheStatuses.bucketStatuses(totalPages: totalPages, bucketCount: bucketCount)
+                HStack(spacing: 2) {
+                    ForEach(0..<buckets.count, id: \.self) { idx in
+                        let status = buckets[idx]
+                        Capsule()
+                            .fill(bucketFillColor(status))
+                            .frame(height: trackHeight)
+                    }
+                }
+                .frame(width: width)
+                .position(x: width * 0.5, y: height * 0.5)
+
+                // 当前阅读进度填充亮蓝发光细轨
+                let fillWidth: CGFloat = isRightToLeft
+                    ? max(thumbDiameter * 0.5, width - thumbCenterX)
+                    : max(thumbDiameter * 0.5, thumbCenterX)
+                let fillCenterX: CGFloat = isRightToLeft
+                    ? width - fillWidth * 0.5
+                    : fillWidth * 0.5
+
+                Capsule()
+                    .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
+                    .frame(width: min(width, fillWidth), height: trackHeight)
+                    .position(x: fillCenterX, y: height * 0.5)
+
+                // 灵动滑块 Thumb
+                ZStack {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: thumbDiameter, height: thumbDiameter)
+                        .shadow(color: Color.black.opacity(0.35), radius: 4, y: 1.5)
+                    Circle()
+                        .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
+                        .frame(width: thumbDiameter * 0.45, height: thumbDiameter * 0.45)
+                }
+                .position(x: thumbCenterX, y: height * 0.5)
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isDragging {
+                            isDragging = true
+                            dragStartFraction = activeFraction
+                            currentFraction = activeFraction
+                            activeSpeed = .fast
+                            lastHapticPageIndex = displayedPageIndex
+                            onScrubBegin(activeFraction)
+                        }
+
+                        // 纵向拉离检视调速档位
+                        let verticalLift = value.translation.height
+                        let nextSpeed: ReaderScrubSpeed
+                        if verticalLift < -70 {
+                            nextSpeed = .fine
+                        } else if verticalLift < -35 {
+                            nextSpeed = .medium
+                        } else {
+                            nextSpeed = .fast
+                        }
+
+                        if nextSpeed != activeSpeed {
+                            activeSpeed = nextSpeed
+                            onSpeedChanged(nextSpeed)
+                            feedbackGenerator.selectionChanged()
+                        }
+
+                        let rawDelta = Double(value.translation.width / usableWidth) * Double(maxIndex)
+                        let directionalDelta = isRightToLeft ? -rawDelta : rawDelta
+                        let scaledDelta = directionalDelta * activeSpeed.scale
+                        let targetFraction = min(max(dragStartFraction + scaledDelta, 0), Double(maxIndex))
+                        currentFraction = targetFraction
+                        onScrubChanged(targetFraction)
+
+                        let targetIndex = min(max(Int(targetFraction.rounded()), 0), max(totalPages - 1, 0))
+                        if targetIndex != lastHapticPageIndex {
+                            lastHapticPageIndex = targetIndex
+                            feedbackGenerator.selectionChanged()
+                        }
+                    }
+                    .onEnded { value in
+                        isDragging = false
+                        let finalIndex = min(max(Int(currentFraction.rounded()), 0), max(totalPages - 1, 0))
+                        onScrubEnd(finalIndex)
+                    }
+            )
+        }
+    }
+
+    private func bucketFillColor(_ status: ReaderPageHealthStatus) -> Color {
+        switch status {
+        case .remote:
+            return Color.white.opacity(0.18)
+        case .cached:
+            return Color(red: 0.15, green: 0.58, blue: 1.0).opacity(0.38)
+        case .upscaled:
+            return Color.green.opacity(0.48)
+        }
     }
 }
 
@@ -907,6 +1204,7 @@ private struct ReaderHeatmapActiveBar: View {
 
 struct ReaderAmbientProgressOverlay: View {
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var deviceInfo = ReaderDeviceInfoStore.shared
 
     let style: ReaderProgressStyle
     let showChrome: Bool
@@ -917,6 +1215,7 @@ struct ReaderAmbientProgressOverlay: View {
     let isRightToLeft: Bool
     let readerBackground: ReaderBackground
     let safeAreaInsets: UIEdgeInsets
+    var chapterTitle: String = ""
     let onSideRailScrubBegin: (Double) -> Void
     let onSideRailScrubChanged: (Double) -> Void
     let onSideRailScrubEnd: (Int) -> Void
@@ -1084,6 +1383,74 @@ struct ReaderAmbientProgressOverlay: View {
 
             case .sideRail:
                 EmptyView()
+
+            case .microCapsule:
+                let isCompleted = (currentPageIndex + 1 >= totalPages)
+                let statusText = isCompleted ? "已读完" : (chapterTitle.isEmpty ? "第 \(currentPageIndex + 1) 页" : chapterTitle)
+
+                HStack(spacing: 5) {
+                    Text(statusText)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isDarkCanvas ? Color.white.opacity(0.85) : Color.white.opacity(0.92))
+                        .lineLimit(1)
+
+                    Text("·")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.40))
+
+                    Text("\(currentPageIndex + 1)/\(totalPages)")
+                        .font(.system(size: 11, weight: .bold).monospacedDigit())
+                        .foregroundStyle(.white)
+
+                    Text("·")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.40))
+
+                    Text(deviceInfo.timeString.isEmpty ? "00:00" : deviceInfo.timeString)
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+
+                    Text("·")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.40))
+
+                    HStack(spacing: 3) {
+                        Image(systemName: deviceInfo.batteryIconName)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(deviceInfo.isCharging ? Color.green : Color.white)
+                        Text("\(deviceInfo.batteryPercentage)%")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.white)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(
+                    ZStack(alignment: .bottomLeading) {
+                        Capsule()
+                            .fill(Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.85))
+
+                        GeometryReader { geo in
+                            let w = max(geo.size.width, 1)
+                            let fillW = max(3, w * ratio)
+                            ZStack(alignment: isRightToLeft ? .trailing : .leading) {
+                                Capsule().fill(Color.white.opacity(0.18))
+                                Capsule()
+                                    .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
+                                    .frame(width: fillW)
+                            }
+                            .frame(height: 2.5)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                        }
+                    }
+                )
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+                )
+                .clipShape(Capsule())
+                .shadow(color: Color.black.opacity(0.35), radius: 8, y: 3)
+                .padding(.bottom, bottomPad)
             }
         }
     }

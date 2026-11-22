@@ -906,53 +906,58 @@ public enum ReaderLayoutMode: String, Codable, CaseIterable, Identifiable, Senda
     }
 }
 
-/// 阅读器进度条交互与视觉风格（5 套双模态设计）
+/// 阅读器进度条交互与视觉风格（6 套双模态设计）
 public enum ReaderProgressStyle: String, Codable, CaseIterable, Identifiable, Sendable {
-    case edgeDock    = "edge_dock"     // 灵动纸缘微轨（默认：沉浸发丝轨 + 纵向拉离精调）
-    case foreEdge    = "fore_edge"     // 纸书切口厚度（书底纸页切口 + 红丝带 + 拇指拨页叶阵）
-    case vernierDial = "vernier_dial"  // 精密游标卡尺（沉浸微胶囊 + 游标刻度尺 + 缓存超分微点）
-    case sideRail    = "side_rail"     // 侧边隐形纵轨（右缘呼吸竖轨 + 拖动页码气泡，零占底部画幅）
-    case heatmapSeg  = "heatmap_seg"   // 缓冲与超分热力轨（多段微轨 + 缓存/2x超分可视化热力段）
+    case edgeDock     = "edge_dock"      // 灵动纸缘微轨（默认：沉浸发丝轨 + 纵向拉离精调）
+    case microCapsule = "micro_capsule"  // 沉浸微晶胶囊（章节+页码+时间+电量+内嵌微轨，唤出控制栏流体流转）
+    case foreEdge     = "fore_edge"      // 纸书切口厚度（书底纸页切口 + 红丝带 + 拇指拨页叶阵）
+    case vernierDial  = "vernier_dial"   // 精密游标卡尺（沉浸微胶囊 + 游标刻度尺 + 缓存超分微点）
+    case sideRail     = "side_rail"      // 侧边隐形纵轨（右缘呼吸竖轨 + 拖动页码气泡，零占底部画幅）
+    case heatmapSeg   = "heatmap_seg"    // 缓冲与超分热力轨（多段微轨 + 缓存/2x超分可视化热力段）
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
-        case .edgeDock:    return "灵动纸缘微轨"
-        case .foreEdge:    return "纸书切口厚度"
-        case .vernierDial: return "精密游标卡尺"
-        case .sideRail:    return "侧边隐形纵轨"
-        case .heatmapSeg:  return "缓冲与超分热力轨"
+        case .edgeDock:     return "灵动纸缘微轨"
+        case .microCapsule: return "沉浸微晶胶囊"
+        case .foreEdge:     return "纸书切口厚度"
+        case .vernierDial:  return "精密游标卡尺"
+        case .sideRail:     return "侧边隐形纵轨"
+        case .heatmapSeg:   return "缓冲与超分热力轨"
         }
     }
 
     public var shortName: String {
         switch self {
-        case .edgeDock:    return "灵动微轨"
-        case .foreEdge:    return "纸书切口"
-        case .vernierDial: return "精密游标"
-        case .sideRail:    return "侧边纵轨"
-        case .heatmapSeg:  return "热力分段"
+        case .edgeDock:     return "灵动微轨"
+        case .microCapsule: return "微晶胶囊"
+        case .foreEdge:     return "纸书切口"
+        case .vernierDial:  return "精密游标"
+        case .sideRail:     return "侧边纵轨"
+        case .heatmapSeg:   return "热力分段"
         }
     }
 
     public var subtitle: String {
         switch self {
-        case .edgeDock:    return "底缘发丝轨 + 上拉精细逐页调速"
-        case .foreEdge:    return "纸页厚度切口 + 拇指拨页叶阵"
-        case .vernierDial: return "居中游标刻度尺，单手零死角拨动"
-        case .sideRail:    return "右侧隐形竖轨，条漫零占上下画幅"
-        case .heatmapSeg:  return "实时展示已缓存与 2x 超分页段"
+        case .edgeDock:     return "底缘发丝轨 + 上拉精细逐页调速"
+        case .microCapsule: return "状态·页码·时钟·电量五合一微晶轨"
+        case .foreEdge:     return "纸页厚度切口 + 拇指拨页叶阵"
+        case .vernierDial:  return "居中游标刻度尺，单手零死角拨动"
+        case .sideRail:     return "右侧隐形竖轨，条漫零占上下画幅"
+        case .heatmapSeg:   return "实时展示已缓存与 2x 超分页段"
         }
     }
 
     public var iconName: String {
         switch self {
-        case .edgeDock:    return "slider.horizontal.below.rectangle"
-        case .foreEdge:    return "book.pages"
-        case .vernierDial: return "ruler"
-        case .sideRail:    return "rectangle.righthalf.inset.filled"
-        case .heatmapSeg:  return "chart.bar.xaxis"
+        case .edgeDock:     return "slider.horizontal.below.rectangle"
+        case .microCapsule: return "capsule.bottomhalf.filled"
+        case .foreEdge:     return "book.pages"
+        case .vernierDial:  return "ruler"
+        case .sideRail:     return "rectangle.righthalf.inset.filled"
+        case .heatmapSeg:   return "chart.bar.xaxis"
         }
     }
 }
