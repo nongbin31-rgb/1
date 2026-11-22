@@ -34,6 +34,14 @@ enum ReaderScrubSpeed: Equatable {
     }
 }
 
+/// 进度条话数徽标格式化（多话连载显示 "3/24话"，单话作品返回 nil 避免冗余）
+private func formatCompactChapterBadge(chapterIndex: Int?, totalChapters: Int) -> String? {
+    guard totalChapters > 1, let idx = chapterIndex, idx >= 0, idx < totalChapters else {
+        return nil
+    }
+    return "\(idx + 1)/\(totalChapters)话"
+}
+
 /// 单页缓存与 AI 超分就绪状态
 enum ReaderPageHealthStatus: Equatable, Sendable {
     case remote
@@ -212,6 +220,8 @@ struct ReaderActiveProgressBar: View {
     let isRightToLeft: Bool
     let originAnchorIndex: Int?
     let cacheStatuses: ReaderPageCacheSnapshotStore
+    var chapterIndex: Int? = nil
+    var totalChapters: Int = 1
     let onScrubBegin: (Double) -> Void
     let onScrubChanged: (Double) -> Void
     let onSpeedChanged: (ReaderScrubSpeed) -> Void
@@ -225,6 +235,10 @@ struct ReaderActiveProgressBar: View {
 
     private var displayedPageIndex: Int {
         min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
+    }
+
+    private var chapterBadge: String? {
+        formatCompactChapterBadge(chapterIndex: chapterIndex, totalChapters: totalChapters)
     }
 
     var body: some View {
@@ -290,6 +304,8 @@ struct ReaderActiveProgressBar: View {
                 isRightToLeft: isRightToLeft,
                 originAnchorIndex: originAnchorIndex,
                 cacheStatuses: cacheStatuses,
+                chapterIndex: chapterIndex,
+                totalChapters: totalChapters,
                 onScrubBegin: onScrubBegin,
                 onScrubChanged: onScrubChanged,
                 onSpeedChanged: onSpeedChanged,
@@ -306,6 +322,14 @@ struct ReaderActiveProgressBar: View {
                 Circle()
                     .fill(Color.accentColor)
                     .frame(width: 6, height: 6)
+                if let chapterBadge {
+                    Text(chapterBadge)
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.82))
+                    Text("·")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white.opacity(0.45))
+                }
                 Text("第 \(displayedPageIndex + 1) / \(totalPages) 页")
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundStyle(.white)
@@ -337,6 +361,8 @@ struct ReaderMicroCapsuleActiveBar: View {
     let isRightToLeft: Bool
     let originAnchorIndex: Int?
     let cacheStatuses: ReaderPageCacheSnapshotStore
+    var chapterIndex: Int? = nil
+    var totalChapters: Int = 1
     let onScrubBegin: (Double) -> Void
     let onScrubChanged: (Double) -> Void
     let onSpeedChanged: (ReaderScrubSpeed) -> Void
@@ -362,6 +388,10 @@ struct ReaderMicroCapsuleActiveBar: View {
         min(max(Int(activeFraction.rounded()), 0), max(totalPages - 1, 0))
     }
 
+    private var chapterBadge: String? {
+        formatCompactChapterBadge(chapterIndex: chapterIndex, totalChapters: totalChapters)
+    }
+
     var body: some View {
         let pct = Int(((Double(displayedPageIndex) / Double(maxIndex)) * 100).rounded())
         VStack(spacing: 6) {
@@ -369,26 +399,29 @@ struct ReaderMicroCapsuleActiveBar: View {
             HStack(spacing: 8) {
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
-                        .frame(width: 6, height: 6)
+                        .fill(Color.white.opacity(isScrubbing ? 0.95 : 0.65))
+                        .frame(width: 5.5, height: 5.5)
                         .scaleEffect(isScrubbing ? 1.3 : 1.0)
                         .animation(.easeInOut(duration: 0.2), value: isScrubbing)
+                    if let chapterBadge {
+                        Text(chapterBadge)
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text("·")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
                     Text("第 \(displayedPageIndex + 1) / \(totalPages) 页")
                         .font(.caption.weight(.bold).monospacedDigit())
                         .foregroundStyle(.white)
                     Text("· \(pct)%")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 4.5)
-                .background(
-                    Capsule()
-                        .fill(Color.white.opacity(0.12))
-                        .overlay(
-                            Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
-                        )
-                )
+                .padding(.vertical, 5)
+                .liquidGlassCapsule()
+                .environment(\.colorScheme, .dark)
 
                 Spacer()
 
@@ -403,9 +436,10 @@ struct ReaderMicroCapsuleActiveBar: View {
                                 .font(.caption2.weight(.semibold).monospacedDigit())
                         }
                         .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.85), in: Capsule())
+                        .padding(.vertical, 5)
                         .foregroundStyle(.white)
+                        .liquidGlassCapsule(interactive: true)
+                        .environment(\.colorScheme, .dark)
                     }
                     .transition(.scale.combined(with: .opacity))
                 }
@@ -435,7 +469,7 @@ struct ReaderMicroCapsuleActiveBar: View {
                 Color.clear
                     .contentShape(Rectangle())
 
-                // 槽底多段缓存热力微槽
+                // 槽底多段缓存微槽（去除蓝色进度条，保持通透极简轨道）
                 let bucketCount = min(totalPages, 36)
                 let buckets = cacheStatuses.bucketStatuses(totalPages: totalPages, bucketCount: bucketCount)
                 HStack(spacing: 2) {
@@ -449,30 +483,12 @@ struct ReaderMicroCapsuleActiveBar: View {
                 .frame(width: width)
                 .position(x: width * 0.5, y: height * 0.5)
 
-                // 当前阅读进度填充亮蓝发光细轨
-                let fillWidth: CGFloat = isRightToLeft
-                    ? max(thumbDiameter * 0.5, width - thumbCenterX)
-                    : max(thumbDiameter * 0.5, thumbCenterX)
-                let fillCenterX: CGFloat = isRightToLeft
-                    ? width - fillWidth * 0.5
-                    : fillWidth * 0.5
-
-                Capsule()
-                    .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
-                    .frame(width: min(width, fillWidth), height: trackHeight)
-                    .position(x: fillCenterX, y: height * 0.5)
-
-                // 灵动滑块 Thumb
-                ZStack {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: thumbDiameter, height: thumbDiameter)
-                        .shadow(color: Color.black.opacity(0.35), radius: 4, y: 1.5)
-                    Circle()
-                        .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
-                        .frame(width: thumbDiameter * 0.45, height: thumbDiameter * 0.45)
-                }
-                .position(x: thumbCenterX, y: height * 0.5)
+                // 灵动滑块 Thumb（纯白玻璃感滑块，无蓝点/蓝条）
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: thumbDiameter, height: thumbDiameter)
+                    .shadow(color: Color.black.opacity(0.35), radius: 4, y: 1.5)
+                    .position(x: thumbCenterX, y: height * 0.5)
             }
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -530,9 +546,9 @@ struct ReaderMicroCapsuleActiveBar: View {
         case .remote:
             return Color.white.opacity(0.18)
         case .cached:
-            return Color(red: 0.15, green: 0.58, blue: 1.0).opacity(0.38)
+            return Color.white.opacity(0.34)
         case .upscaled:
-            return Color.green.opacity(0.48)
+            return Color.white.opacity(0.52)
         }
     }
 }
@@ -914,7 +930,7 @@ private struct ReaderVernierDialActiveBar: View {
         HStack(spacing: 10) {
             Text("P\(displayedPageIndex + 1)")
                 .font(.caption.weight(.bold).monospacedDigit())
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.white)
                 .frame(minWidth: 38, alignment: .trailing)
 
             GeometryReader { geo in
@@ -946,7 +962,7 @@ private struct ReaderVernierDialActiveBar: View {
                                 let barW: CGFloat = isMajor ? 1.8 : 1.2
 
                                 let tickColor: Color = isCurrent
-                                    ? Color.accentColor
+                                    ? Color.white
                                     : Color.white.opacity((isMajor ? 0.78 : 0.30) * edgeFade)
 
                                 let barRect = CGRect(
@@ -960,8 +976,8 @@ private struct ReaderVernierDialActiveBar: View {
                                 let status = cacheStatuses.status(at: idx)
                                 if status != .remote {
                                     let dotColor: Color = status == .upscaled
-                                        ? Color(red: 0.42, green: 0.78, blue: 1.0)
-                                        : Color.green
+                                        ? Color.white.opacity(0.85)
+                                        : Color.white.opacity(0.45)
                                     let dotRect = CGRect(x: x - 1.75, y: bottomY - barH - 5.5, width: 3.5, height: 3.5)
                                     context.fill(Path(ellipseIn: dotRect), with: .color(dotColor.opacity(edgeFade)))
                                 }
@@ -969,11 +985,11 @@ private struct ReaderVernierDialActiveBar: View {
                         }
                     }
 
-                    // 固定中心读数蓝线指针
+                    // 固定中心读数指针
                     Capsule()
-                        .fill(Color.accentColor)
+                        .fill(Color.white)
                         .frame(width: 2.5, height: height - 4)
-                        .shadow(color: Color.accentColor.opacity(0.8), radius: 4)
+                        .shadow(color: Color.white.opacity(0.55), radius: 3)
                 }
                 .contentShape(Rectangle())
                 .highPriorityGesture(
@@ -1009,14 +1025,17 @@ private struct ReaderVernierDialActiveBar: View {
                         }
                 )
             }
-            .frame(height: 36)
+            .frame(height: 34)
 
             Text("/ \(totalPages)")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.68))
+                .foregroundStyle(.white.opacity(0.72))
                 .frame(minWidth: 34, alignment: .leading)
         }
-        .frame(height: 36)
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .liquidGlassCapsule(interactive: true)
+        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -1216,6 +1235,8 @@ struct ReaderAmbientProgressOverlay: View {
     let readerBackground: ReaderBackground
     let safeAreaInsets: UIEdgeInsets
     var chapterTitle: String = ""
+    var chapterIndex: Int? = nil
+    var totalChapters: Int = 1
     let onSideRailScrubBegin: (Double) -> Void
     let onSideRailScrubChanged: (Double) -> Void
     let onSideRailScrubEnd: (Int) -> Void
@@ -1224,6 +1245,10 @@ struct ReaderAmbientProgressOverlay: View {
     @State private var sideRailFraction: Double = 0
     @State private var lastSideRailHapticIndex: Int? = nil
     private let feedbackGenerator = UISelectionFeedbackGenerator()
+
+    private var chapterBadge: String? {
+        formatCompactChapterBadge(chapterIndex: chapterIndex, totalChapters: totalChapters)
+    }
 
     private var isDarkCanvas: Bool {
         switch readerBackground {
@@ -1270,13 +1295,20 @@ struct ReaderAmbientProgressOverlay: View {
 
             switch style {
             case .edgeDock:
+                let leftEdgeText = isRightToLeft
+                    ? "\(pct)% · 剩 \(totalPages - currentPageIndex - 1) 页"
+                    : (chapterBadge.map { "\($0) · 第 \(currentPageIndex + 1) 页" } ?? "第 \(currentPageIndex + 1) 页")
+                let rightEdgeText = isRightToLeft
+                    ? (chapterBadge.map { "\(currentPageIndex + 1) / \(totalPages) · \($0)" } ?? "\(currentPageIndex + 1) / \(totalPages)")
+                    : "\(pct)% · \(totalPages) 页"
+
                 VStack(spacing: 4) {
                     HStack {
-                        Text(isRightToLeft ? "\(pct)% · 剩 \(totalPages - currentPageIndex - 1) 页" : "第 \(currentPageIndex + 1) 页")
+                        Text(leftEdgeText)
                             .font(.system(size: 10, weight: .semibold).monospacedDigit())
                             .foregroundStyle(primaryInk)
                         Spacer()
-                        Text(isRightToLeft ? "\(currentPageIndex + 1) / \(totalPages)" : "\(pct)% · \(totalPages) 页")
+                        Text(rightEdgeText)
                             .font(.system(size: 10, weight: .semibold).monospacedDigit())
                             .foregroundStyle(primaryInk)
                     }
@@ -1298,9 +1330,16 @@ struct ReaderAmbientProgressOverlay: View {
 
             case .foreEdge:
                 let visualRatio = isRightToLeft ? (1.0 - ratio) : ratio
+                let foreEdgeLabel: String = {
+                    if let chapterBadge {
+                        return isRightToLeft ? "← 翻阅方向 · \(chapterBadge)" : "\(chapterBadge) · 翻阅方向 →"
+                    }
+                    return isRightToLeft ? "← 翻阅方向" : "翻阅方向 →"
+                }()
+
                 VStack(spacing: 4) {
                     HStack {
-                        Text(isRightToLeft ? "← 翻阅方向" : "翻阅方向 →")
+                        Text(foreEdgeLabel)
                             .font(.system(size: 9.5, weight: .medium))
                             .foregroundStyle(primaryInk)
                         Spacer()
@@ -1339,19 +1378,23 @@ struct ReaderAmbientProgressOverlay: View {
 
             case .vernierDial:
                 HStack(spacing: 6) {
+                    if let chapterBadge {
+                        Text(chapterBadge)
+                            .opacity(0.75)
+                        Text("·")
+                            .opacity(0.45)
+                    }
                     Text("P\(currentPageIndex + 1) / \(totalPages)")
                     Text("·")
                         .opacity(0.45)
                     Text("\(pct)%")
                 }
                 .font(.system(size: 10.5, weight: .bold).monospacedDigit())
-                .foregroundStyle(primaryInk)
+                .foregroundStyle(isDarkCanvas ? Color.white.opacity(0.90) : Color.black.opacity(0.80))
                 .padding(.horizontal, 12)
-                .padding(.vertical, 4.5)
-                .background(
-                    isDarkCanvas ? Color.white.opacity(0.12) : Color.black.opacity(0.06),
-                    in: Capsule()
-                )
+                .padding(.vertical, 5)
+                .liquidGlassCapsule()
+                .environment(\.colorScheme, isDarkCanvas ? .dark : .light)
                 .padding(.bottom, bottomPad)
 
             case .heatmapSeg:
@@ -1385,71 +1428,60 @@ struct ReaderAmbientProgressOverlay: View {
                 EmptyView()
 
             case .microCapsule:
-                let isCompleted = (currentPageIndex + 1 >= totalPages)
-                let statusText = isCompleted ? "已读完" : (chapterTitle.isEmpty ? "第 \(currentPageIndex + 1) 页" : chapterTitle)
+                let isLastPage = (currentPageIndex + 1 >= totalPages)
+                let isLastChapter = (chapterIndex ?? 0) + 1 >= totalChapters
+                let statusText: String = {
+                    if let chapterBadge {
+                        if isLastPage {
+                            return isLastChapter ? "\(chapterBadge) · 已读完" : "\(chapterBadge) · 本话完"
+                        }
+                        return chapterBadge
+                    }
+                    return isLastPage ? "已读完" : (chapterTitle.isEmpty ? "第 \(currentPageIndex + 1) 页" : chapterTitle)
+                }()
+                let fgPrimary = isDarkCanvas ? Color.white.opacity(0.92) : Color.black.opacity(0.84)
+                let fgSecondary = isDarkCanvas ? Color.white.opacity(0.76) : Color.black.opacity(0.68)
+                let fgDot = isDarkCanvas ? Color.white.opacity(0.36) : Color.black.opacity(0.28)
 
                 HStack(spacing: 5) {
                     Text(statusText)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isDarkCanvas ? Color.white.opacity(0.85) : Color.white.opacity(0.92))
+                        .foregroundStyle(fgSecondary)
                         .lineLimit(1)
 
                     Text("·")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.white.opacity(0.40))
+                        .foregroundStyle(fgDot)
 
                     Text("\(currentPageIndex + 1)/\(totalPages)")
                         .font(.system(size: 11, weight: .bold).monospacedDigit())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(fgPrimary)
 
                     Text("·")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.white.opacity(0.40))
+                        .foregroundStyle(fgDot)
 
                     Text(deviceInfo.timeString.isEmpty ? "00:00" : deviceInfo.timeString)
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(fgPrimary)
 
                     Text("·")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.white.opacity(0.40))
+                        .foregroundStyle(fgDot)
 
                     HStack(spacing: 3) {
                         Image(systemName: deviceInfo.batteryIconName)
                             .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(deviceInfo.isCharging ? Color.green : Color.white)
+                            .foregroundStyle(deviceInfo.isCharging ? Color.green : fgSecondary)
                         Text("\(deviceInfo.batteryPercentage)%")
                             .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(.white)
+                            .foregroundStyle(fgPrimary)
                     }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-                .background(
-                    ZStack(alignment: .bottomLeading) {
-                        Capsule()
-                            .fill(Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.85))
-
-                        GeometryReader { geo in
-                            let w = max(geo.size.width, 1)
-                            let fillW = max(3, w * ratio)
-                            ZStack(alignment: isRightToLeft ? .trailing : .leading) {
-                                Capsule().fill(Color.white.opacity(0.18))
-                                Capsule()
-                                    .fill(Color(red: 0.15, green: 0.58, blue: 1.0))
-                                    .frame(width: fillW)
-                            }
-                            .frame(height: 2.5)
-                            .frame(maxHeight: .infinity, alignment: .bottom)
-                        }
-                    }
-                )
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
-                )
-                .clipShape(Capsule())
-                .shadow(color: Color.black.opacity(0.35), radius: 8, y: 3)
+                .liquidGlassCapsule()
+                .environment(\.colorScheme, isDarkCanvas ? .dark : .light)
                 .padding(.bottom, bottomPad)
             }
         }
@@ -1495,9 +1527,18 @@ struct ReaderAmbientProgressOverlay: View {
                             .offset(y: min(max(0, knobY - (expanded ? 14 : 9)), railHeight - (expanded ? 28 : 18)))
                     }
                     .padding(.trailing, 4)
-
+                }
+                .overlay(alignment: .topTrailing) {
                     if isDraggingSideRail {
                         HStack(spacing: 5) {
+                            if let chapterBadge {
+                                Text(chapterBadge)
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(.white.opacity(0.82))
+                                Text("·")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.white.opacity(0.42))
+                            }
                             Text("P\(activeIdx + 1)")
                                 .font(.caption.weight(.bold).monospacedDigit())
                                 .foregroundStyle(.white)
@@ -1505,10 +1546,13 @@ struct ReaderAmbientProgressOverlay: View {
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.white.opacity(0.75))
                         }
+                        .fixedSize()
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .liquidGlassCapsule()
-                        .position(x: -54, y: bubbleY)
+                        .environment(\.colorScheme, .dark)
+                        .offset(x: -32, y: bubbleY - 15)
+                        .allowsHitTesting(false)
                     }
                 }
                 .highPriorityGesture(
