@@ -3,8 +3,10 @@ import SwiftUI
 /// 全局设置页（默认超分管线、翻页特效、缓存管理、开源许可说明）
 public struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
+    @ObservedObject private var downloadManager = OfflineDownloadManager.shared
 
     @State private var cacheSizeText = "计算中..."
+    @State private var offlineSizeText = "0.0 MB"
     @State private var showingClearAlert = false
 
     public var body: some View {
@@ -242,9 +244,31 @@ public struct SettingsView: View {
                     }
                 }
 
-                Section("存储与显存缓存") {
+                Section {
+                    NavigationLink {
+                        OfflineDownloadsView()
+                    } label: {
+                        HStack {
+                            Label("离线缓存漫画", systemImage: "arrow.down.circle")
+                            Spacer()
+                            if downloadManager.totalActiveDownloadCount > 0 {
+                                Text("下载中 \(downloadManager.totalActiveDownloadCount)")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.accentColor)
+                            } else if downloadManager.totalDownloadedChapterCount > 0 {
+                                Text("\(downloadManager.totalDownloadedChapterCount) 话 · \(offlineSizeText)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("暂无")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     HStack {
-                        Text("在线图片磁盘缓存")
+                        Text("临时浏览图片缓存")
                         Spacer()
                         Text(cacheSizeText)
                             .foregroundStyle(.secondary)
@@ -253,15 +277,22 @@ public struct SettingsView: View {
                     Button(role: .destructive) {
                         showingClearAlert = true
                     } label: {
-                        Text("清理全部图片与超分管线缓存")
+                        Text("清理临时图片与超分管线缓存")
                     }
+                } header: {
+                    Text("存储与显存缓存")
+                } footer: {
+                    Text("离线缓存漫画独立存储在永久目录中，清理临时浏览缓存不会影响已下载的离线章节。")
                 }
             }
             .navigationTitle("设置")
             .task {
                 await refreshCacheSize()
             }
-            .alert("清理缓存", isPresented: $showingClearAlert) {
+            .onChange(of: downloadManager.totalDownloadedChapterCount) { _ in
+                Task { await refreshCacheSize() }
+            }
+            .alert("清理临时缓存", isPresented: $showingClearAlert) {
                 Button("取消", role: .cancel) {}
                 Button("清空", role: .destructive) {
                     Task {
@@ -272,7 +303,7 @@ public struct SettingsView: View {
                     }
                 }
             } message: {
-                Text("将清空所有已下载章节图片与近期生成的 2x 高清超分位图，释放设备存储空间。")
+                Text("将清空在线浏览产生的临时图片缓存与近期 2x 高清超分位图，不会删除已离线下载的漫画章节。")
             }
         }
         .navigationViewStyle(.stack)
@@ -280,7 +311,8 @@ public struct SettingsView: View {
 
     private func refreshCacheSize() async {
         let bytes = await OnlineImageLoader.shared.diskCacheSizeBytes()
-        let mb = Double(bytes) / 1024.0 / 1024.0
-        cacheSizeText = String(format: "%.1f MB", mb)
+        cacheSizeText = OfflineDownloadManager.formatBytes(bytes)
+        let offlineBytes = await OnlineImageLoader.shared.offlineDiskSizeBytes()
+        offlineSizeText = OfflineDownloadManager.formatBytes(offlineBytes)
     }
 }

@@ -700,7 +700,11 @@ public struct BookshelfView: View {
     /// 一键续读：异步拉取最新章节列表并直达 ReaderView，规避必须先点进详情页的两步跳转
     private func quickResume(_ manga: Manga) {
         guard quickLaunchingMangaKey != manga.compositeKey else { return }
-        guard let adapter = store.adapter(for: manga.sourceID) else {
+
+        let adapter = store.adapter(for: manga.sourceID)
+        let cachedOfflineChapters = OfflineDownloadManager.shared.offlineChapters(for: manga.compositeKey)
+
+        guard adapter != nil || !cachedOfflineChapters.isEmpty else {
             showHud("未找到对应在线图源")
             return
         }
@@ -715,18 +719,12 @@ public struct BookshelfView: View {
                     quickLaunchingMangaKey = nil
                 }
             }
-            do {
-                let detail = try await adapter.fetchDetail(for: manga)
-                guard !Task.isCancelled else { return }
 
-                let resolvedManga = detail.manga
-                let chapters = detail.chapters
+            func launchReader(resolvedManga: Manga, chapters: [MangaChapter]) {
                 guard let firstChapter = chapters.first else {
                     showHud("该漫画暂无可阅读章节")
                     return
                 }
-
-                store.updateBookshelfManga(resolvedManga)
 
                 let progress = store.progress(for: resolvedManga) ?? store.progress(for: manga)
                 let targetChapter: MangaChapter
@@ -748,9 +746,30 @@ public struct BookshelfView: View {
                     initialChapter: targetChapter,
                     initialPageIndex: targetPageIndex
                 )
+            }
+
+            guard let adapter else {
+                launchReader(resolvedManga: manga, chapters: cachedOfflineChapters)
+                return
+            }
+
+            do {
+                let detail = try await adapter.fetchDetail(for: manga)
+                guard !Task.isCancelled else { return }
+
+                let resolvedManga = detail.manga
+                let chapters = detail.chapters
+                store.updateBookshelfManga(resolvedManga)
+                launchReader(resolvedManga: resolvedManga, chapters: chapters)
             } catch {
                 guard !Task.isCancelled else { return }
-                showHud("章节载入失败：\(error.localizedDescription)", duration: 3.0)
+                let offlineChapters = OfflineDownloadManager.shared.offlineChapters(for: manga.compositeKey)
+                if !offlineChapters.isEmpty {
+                    showHud("网络不可用，已切入离线缓存章节", duration: 2.2)
+                    launchReader(resolvedManga: manga, chapters: offlineChapters)
+                } else {
+                    showHud("章节载入失败：\(error.localizedDescription)", duration: 3.0)
+                }
             }
         }
     }

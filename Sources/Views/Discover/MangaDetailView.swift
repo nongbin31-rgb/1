@@ -3,14 +3,18 @@ import SwiftUI
 /// 漫画详情与章节列表页
 public struct MangaDetailView: View {
     @EnvironmentObject private var store: AppStore
+    @ObservedObject private var downloadManager = OfflineDownloadManager.shared
 
     let manga: Manga
 
     @State private var resolvedManga: Manga?
     @State private var chapters: [MangaChapter] = []
     @State private var isLoading = false
+    @State private var isOfflineFallback = false
     @State private var errorMessage: String?
     @State private var launchPayload: ReaderLaunchPayload?
+    @State private var chapterToDelete: MangaChapter?
+    @State private var showingDeleteMangaDownloadsAlert = false
 
     private var currentManga: Manga {
         resolvedManga ?? manga
@@ -57,6 +61,34 @@ public struct MangaDetailView: View {
                 initialPageIndex: payload.initialPageIndex
             )
             .environmentObject(store)
+        }
+        .alert("删除该话离线缓存？", isPresented: Binding(
+            get: { chapterToDelete != nil },
+            set: { if !$0 { chapterToDelete = nil } }
+        )) {
+            Button("取消", role: .cancel) { chapterToDelete = nil }
+            Button("删除", role: .destructive) {
+                if let target = chapterToDelete {
+                    downloadManager.deleteChapter(mangaKey: currentManga.compositeKey, chapterID: target.id)
+                    if isOfflineFallback {
+                        chapters = downloadManager.offlineChapters(for: currentManga.compositeKey)
+                    }
+                }
+                chapterToDelete = nil
+            }
+        } message: {
+            Text("将移除「\(chapterToDelete?.title ?? "")」的本地离线图片并释放空间，阅读进度不受影响。")
+        }
+        .alert("清空本漫离线缓存？", isPresented: $showingDeleteMangaDownloadsAlert) {
+            Button("取消", role: .cancel) {}
+            Button("清空", role: .destructive) {
+                downloadManager.deleteManga(mangaKey: currentManga.compositeKey)
+                if isOfflineFallback {
+                    chapters = []
+                }
+            }
+        } message: {
+            Text("将删除《\(currentManga.title)》的所有已下载离线章节，释放设备存储空间。")
         }
     }
 
@@ -288,13 +320,83 @@ public struct MangaDetailView: View {
     }
 
     private var chaptersSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        let mangaKey = currentManga.compositeKey
+        let downloadedCount = downloadManager.downloadedCount(for: mangaKey)
+        let activeCount = downloadManager.activeTaskCount(for: mangaKey)
+        let allDownloaded = !chapters.isEmpty && chapters.allSatisfy {
+            downloadManager.isDownloaded(mangaKey: mangaKey, chapterID: $0.id)
+        }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
                 Text("章节列表 (\(chapters.count))")
                     .font(.headline)
+
+                if isOfflineFallback {
+                    Text("离线模式")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.14), in: Capsule())
+                } else if downloadedCount > 0 {
+                    Text("已缓存 \(downloadedCount)")
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.14), in: Capsule())
+                }
+
                 Spacer()
+
                 if isLoading {
                     ProgressView()
+                } else if !chapters.isEmpty {
+                    if activeCount > 0 {
+                        Button {
+                            downloadManager.cancelDownloads(for: mangaKey)
+                        } label: {
+                            Label("取消缓存 (\(activeCount))", systemImage: "stop.circle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.orange.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    } else if !isOfflineFallback {
+                        if !allDownloaded {
+                            Button {
+                                guard let adapter = store.adapter(for: currentManga.sourceID) else { return }
+                                downloadManager.enqueueAll(
+                                    manga: currentManga,
+                                    chapters: chapters,
+                                    adapter: adapter
+                                )
+                            } label: {
+                                Label("缓存全部", systemImage: "arrow.down.circle")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Button {
+                                showingDeleteMangaDownloadsAlert = true
+                            } label: {
+                                Label("已全部离线", systemImage: "checkmark.circle.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.green)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.green.opacity(0.12), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -316,42 +418,44 @@ public struct MangaDetailView: View {
                     ForEach(chapters) { chapter in
                         let saved = store.progress(for: currentManga)
                         let isCurrent = saved?.chapterID == chapter.id
-                        Button {
-                            launchPayload = ReaderLaunchPayload(
-                                chapters: chapters,
-                                initialChapter: chapter,
-                                initialPageIndex: isCurrent ? saved?.pageIndex : 0
-                            )
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(chapter.title)
-                                        .font(.subheadline.weight(isCurrent ? .semibold : .regular))
-                                        .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
-                                    if !chapter.updatedAt.isEmpty {
-                                        Text(chapter.updatedAt)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Button {
+                                launchPayload = ReaderLaunchPayload(
+                                    chapters: chapters,
+                                    initialChapter: chapter,
+                                    initialPageIndex: isCurrent ? saved?.pageIndex : 0
+                                )
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(chapter.title)
+                                            .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                                            .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
+                                        if !chapter.updatedAt.isEmpty {
+                                            Text(chapter.updatedAt)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    if isCurrent {
+                                        Text("上次读到")
+                                            .font(.caption2.weight(.medium))
+                                            .foregroundStyle(Color.accentColor)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color.accentColor.opacity(0.12), in: Capsule())
                                     }
                                 }
-                                Spacer()
-                                if isCurrent {
-                                    Text("上次读到")
-                                        .font(.caption2.weight(.medium))
-                                        .foregroundStyle(Color.accentColor)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(Color.accentColor.opacity(0.12), in: Capsule())
-                                }
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
+                                .contentShape(Rectangle())
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .insetCardStyle(cornerRadius: 11)
+                            .buttonStyle(.plain)
+
+                            chapterTrailingAction(chapter: chapter, isCurrent: isCurrent)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .insetCardStyle(cornerRadius: 11)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -359,21 +463,140 @@ public struct MangaDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private func chapterTrailingAction(chapter: MangaChapter, isCurrent: Bool) -> some View {
+        let mangaKey = currentManga.compositeKey
+        let isDone = downloadManager.isDownloaded(mangaKey: mangaKey, chapterID: chapter.id)
+        let activeTask = downloadManager.taskInfo(mangaKey: mangaKey, chapterID: chapter.id)
+
+        if isDone {
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.subheadline)
+            }
+            .padding(.trailing, 2)
+            .contextMenu {
+                Button(role: .destructive) {
+                    chapterToDelete = chapter
+                } label: {
+                    Label("删除该话离线缓存", systemImage: "trash")
+                }
+            }
+        } else if let activeTask, activeTask.state.isInProgress {
+            switch activeTask.state {
+            case .queued:
+                Button {
+                    downloadManager.cancelDownload(mangaKey: mangaKey, chapterID: chapter.id)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.caption)
+                        Text("排队")
+                            .font(.caption2.weight(.medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("排队中，点击取消")
+
+            case .fetchingPages, .downloading:
+                Button {
+                    downloadManager.cancelDownload(mangaKey: mangaKey, chapterID: chapter.id)
+                } label: {
+                    HStack(spacing: 5) {
+                        ZStack {
+                            Circle()
+                                .stroke(Color.accentColor.opacity(0.22), lineWidth: 2)
+                                .frame(width: 18, height: 18)
+                            Circle()
+                                .trim(from: 0, to: max(0.08, activeTask.state.progressRatio))
+                                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                                .frame(width: 18, height: 18)
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.accentColor)
+                                .frame(width: 5, height: 5)
+                        }
+                        Text(activeTask.state.shortStatusText)
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.10), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("正在缓存，点击取消")
+
+            case .failed:
+                Button {
+                    guard let adapter = store.adapter(for: currentManga.sourceID) else { return }
+                    downloadManager.enqueue(manga: currentManga, chapter: chapter, adapter: adapter)
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "exclamationmark.arrow.circlepath")
+                            .font(.caption)
+                        Text("重试")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.red.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        } else if !isOfflineFallback {
+            Button {
+                guard let adapter = store.adapter(for: currentManga.sourceID) else { return }
+                downloadManager.enqueue(manga: currentManga, chapter: chapter, adapter: adapter)
+            } label: {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("缓存该话")
+        }
+    }
+
     private func loadChapters() async {
+        let cachedOffline = downloadManager.offlineChapters(for: manga.compositeKey)
+
         guard let adapter = store.adapter(for: manga.sourceID) else {
-            errorMessage = "未找到对应在线图源"
+            if !cachedOffline.isEmpty {
+                chapters = cachedOffline
+                isOfflineFallback = true
+                errorMessage = nil
+            } else {
+                errorMessage = "未找到对应在线图源"
+            }
             return
         }
         isLoading = true
         errorMessage = nil
+        isOfflineFallback = false
         defer { isLoading = false }
 
         do {
             let detail = try await adapter.fetchDetail(for: manga)
             resolvedManga = detail.manga
             chapters = detail.chapters
+            isOfflineFallback = false
         } catch {
-            errorMessage = error.localizedDescription
+            if !cachedOffline.isEmpty {
+                chapters = cachedOffline
+                isOfflineFallback = true
+                errorMessage = nil
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

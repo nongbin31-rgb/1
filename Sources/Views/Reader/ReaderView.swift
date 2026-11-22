@@ -441,6 +441,8 @@ public struct ReaderView: View {
                     readerBackground: store.preferredReaderBackground,
                     safeAreaInsets: safeAreaInsetsResolved,
                     chapterTitle: currentChapter.title,
+                    chapterIndex: currentChapterArrayIndex,
+                    totalChapters: chapters.count,
                     onSideRailScrubBegin: { initialFraction in
                         scrubSessionOriginIndex = currentPageIndex
                         scrubFraction = initialFraction
@@ -937,10 +939,22 @@ public struct ReaderView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(currentChapter.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(currentChapter.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+
+                            if chapters.count > 1, let chIdx = currentChapterArrayIndex {
+                                Text("\(chIdx + 1)/\(chapters.count)话")
+                                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                                    .foregroundStyle(.white.opacity(0.92))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(Color.white.opacity(0.18), in: Capsule())
+                                    .fixedSize()
+                            }
+                        }
                         Text(currentHUDText.isEmpty ? (store.enableImageUpscaler ? store.upscalerConfig.summaryText : "原图显示") : currentHUDText)
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.8))
@@ -1007,6 +1021,8 @@ public struct ReaderView: View {
                                 ? (returnAnchorPageIndex ?? scrubSessionOriginIndex)
                                 : returnAnchorPageIndex,
                             cacheStatuses: pageCacheSnapshot,
+                            chapterIndex: currentChapterArrayIndex,
+                            totalChapters: chapters.count,
                             onScrubBegin: { initialFraction in
                                 scrubSessionOriginIndex = currentPageIndex
                                 scrubFraction = initialFraction
@@ -1365,6 +1381,16 @@ public struct ReaderView: View {
             targetIndex = saved.pageIndex
         } else {
             targetIndex = 0
+        }
+
+        // 优先命中永久离线缓存页面清单（断网/弱网下实现零网络等待秒开）
+        if let offlinePages = OfflineDownloadManager.shared.offlinePages(
+            mangaKey: manga.compositeKey,
+            chapterID: currentChapter.id
+        ), !offlinePages.isEmpty {
+            applyLoadedChapterPages(offlinePages, targetIndex: targetIndex)
+            isLoadingChapter = false
+            return
         }
 
         // 若 L3 已预取本话页面列表，直接瞬时切入免去章节 Loading 等待

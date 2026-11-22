@@ -123,6 +123,7 @@ public actor OnlineImageLoader {
     )
 
     private let diskDirectory: URL
+    private let offlineImagesDirectory: URL
     private var inFlightEntries: [String: InFlightImageEntry] = [:]
 
     private init() {
@@ -131,6 +132,17 @@ public actor OnlineImageLoader {
         let dir = caches.appendingPathComponent("OnlineMangaImages", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.diskDirectory = dir
+
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? caches
+        var offlineDir = appSupport
+            .appendingPathComponent("OfflineMangaDownloads", isDirectory: true)
+            .appendingPathComponent("ImageStore", isDirectory: true)
+        try? FileManager.default.createDirectory(at: offlineDir, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? offlineDir.setResourceValues(values)
+        self.offlineImagesDirectory = offlineDir
     }
 
     public func loadImage(urlString: String, headers: [String: String] = [:]) async throws -> UIImage {
@@ -147,6 +159,14 @@ public actor OnlineImageLoader {
         }
 
         try Task.checkCancellation()
+
+        // 优先命中永久离线下载目录（不受系统 Caches 清理影响），其次查临时浏览磁盘缓存
+        let offlinePath = offlineFileURL(for: identityKey)
+        if let data = try? Data(contentsOf: offlinePath), let offlineImage = UIImage(data: data) {
+            let cost = max(data.count, Self.memoryCost(of: offlineImage))
+            memoryCache.setObject(offlineImage, forKey: cacheKey, cost: cost)
+            return offlineImage
+        }
 
         let diskPath = diskFileURL(for: identityKey)
         if let data = try? Data(contentsOf: diskPath), let diskImage = UIImage(data: data) {
@@ -272,11 +292,17 @@ public actor OnlineImageLoader {
         return memoryCache.object(forKey: identityKey as NSString)
     }
 
-    /// 同步快速获取已缓存的图片（优先内存，次选磁盘）
+    /// 同步快速获取已缓存的图片（优先内存，次选离线下载目录，再次临时磁盘）
     public nonisolated func cachedImage(for urlString: String) -> UIImage? {
         let identityKey = normalizedCacheKey(for: urlString)
         if let memoryImage = memoryCache.object(forKey: identityKey as NSString) {
             return memoryImage
+        }
+        let offlineURL = offlineFileURL(for: identityKey)
+        if let offlineData = try? Data(contentsOf: offlineURL), let offlineImage = UIImage(data: offlineData) {
+            let cost = max(offlineData.count, Self.memoryCost(of: offlineImage))
+            memoryCache.setObject(offlineImage, forKey: identityKey as NSString, cost: cost)
+            return offlineImage
         }
         let diskURL = diskFileURL(for: identityKey)
         if let diskData = try? Data(contentsOf: diskURL), let diskImage = UIImage(data: diskData) {
@@ -287,20 +313,121 @@ public actor OnlineImageLoader {
         return nil
     }
 
-    /// 快速判断图片是否已存在于内存或磁盘（不触发图片解码）
+    /// 快速判断图片是否已存在于内存、离线下载目录或临时磁盘（不触发图片解码）
     public nonisolated func hasCachedImage(for urlString: String) -> Bool {
         let identityKey = normalizedCacheKey(for: urlString)
         if memoryCache.object(forKey: identityKey as NSString) != nil {
             return true
         }
+        if FileManager.default.fileExists(atPath: offlineFileURL(for: identityKey).path) {
+            return true
+        }
         return FileManager.default.fileExists(atPath: diskFileURL(for: identityKey).path)
     }
 
-    /// 若图片已落盘缓存，返回磁盘文件路径（供缩略图解码器通过 ImageIO 按低像素尺寸按需降采样）
+    /// 若图片已落盘缓存，返回磁盘文件路径（优先返回离线目录路径，供缩略图解码器按需降采样）
     public nonisolated func cachedDiskFileURL(for urlString: String) -> URL? {
         let identityKey = normalizedCacheKey(for: urlString)
+        let offlineURL = offlineFileURL(for: identityKey)
+        if FileManager.default.fileExists(atPath: offlineURL.path) {
+            return offlineURL
+        }
         let url = diskFileURL(for: identityKey)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// 将单张漫画图片下载并持久化至永久离线目录（自动复用已缓存文件与 JM 反混淆，支持断点续传）
+    public func downloadImageToOfflineStore(
+        urlString: String,
+        headers: [String: String] = [:]
+    ) async throws -> (hash: String, sizeBytes: Int64) {
+        try Task.checkCancellation()
+
+        let identityKey = normalizedCacheKey(for: urlString)
+        let hash = cacheHash(for: identityKey)
+        let targetURL = offlineImagesDirectory.appendingPathComponent(hash)
+
+        // 1. 离线目录已存在（断点续传秒跳过）
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: targetURL.path),
+           let fileSize = (attrs[.size] as? NSNumber)?.int64Value,
+           fileSize > 0 {
+            return (hash, fileSize)
+        }
+
+        // 2. 内置 synthetic:// 演示图直接渲染落盘
+        if urlString.hasPrefix("synthetic://") {
+            let synthetic = Self.renderSyntheticMangaImage(urlString: urlString)
+            let data = synthetic.jpegData(compressionQuality: 0.9) ?? synthetic.pngData() ?? Data()
+            try data.write(to: targetURL, options: .atomic)
+            memoryCache.setObject(synthetic, forKey: identityKey as NSString, cost: max(data.count, Self.memoryCost(of: synthetic)))
+            return (hash, Int64(data.count))
+        }
+
+        // 3. 若临时 Caches 已有成品文件（已完成反混淆），零流量直接迁移拷贝
+        let tempDiskURL = diskDirectory.appendingPathComponent(hash)
+        if let cachedData = try? Data(contentsOf: tempDiskURL), !cachedData.isEmpty, UIImage(data: cachedData) != nil {
+            try cachedData.write(to: targetURL, options: .atomic)
+            return (hash, Int64(cachedData.count))
+        }
+
+        // 4. 走多图床容灾竞速下载 + JM 反混淆后原子落盘至离线目录
+        let jmMeta = JmImageMeta.tryParse(urlString)
+        let candidates = await buildCandidateUrls(rawUrl: urlString)
+        guard !candidates.isEmpty else {
+            throw MangaSourceError.invalidURL(urlString)
+        }
+
+        let fetched = try await fetchFirstValidImage(candidates: candidates, extraHeaders: headers)
+        try Task.checkCancellation()
+
+        if let group = imageDomainGroup(for: urlString),
+           let winningHost = URL(string: fetched.winningURL)?.host {
+            await OnlineEndpointStore.shared.setHealthyImageDomain(winningHost, for: group)
+        }
+
+        guard let processed = JmImageDescrambler.descrambleIfNeeded(data: fetched.data, meta: jmMeta) else {
+            throw MangaSourceError.decodingFailed("响应内容不是有效的图片数据")
+        }
+
+        try processed.cacheData.write(to: targetURL, options: .atomic)
+        let cost = max(processed.cacheData.count, Self.memoryCost(of: processed.image))
+        memoryCache.setObject(processed.image, forKey: identityKey as NSString, cost: cost)
+        return (hash, Int64(processed.cacheData.count))
+    }
+
+    /// 精确删除不再被任何离线章节引用的孤立图片文件
+    public func removeOfflineImages(hashes: Set<String>) {
+        guard !hashes.isEmpty else { return }
+        let fm = FileManager.default
+        for hash in hashes {
+            let url = offlineImagesDirectory.appendingPathComponent(hash)
+            try? fm.removeItem(at: url)
+        }
+    }
+
+    /// 清空全部永久离线图片文件
+    public func clearAllOfflineImages() {
+        let fm = FileManager.default
+        try? fm.removeItem(at: offlineImagesDirectory)
+        try? fm.createDirectory(at: offlineImagesDirectory, withIntermediateDirectories: true)
+        var dir = offlineImagesDirectory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
+    }
+
+    /// 统计永久离线图片目录总字节数
+    public func offlineDiskSizeBytes() -> Int64 {
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: offlineImagesDirectory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        ) else {
+            return 0
+        }
+        return items.reduce(0) { sum, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return sum + Int64(size)
+        }
     }
 
     public func diskCacheSizeBytes() -> Int64 {
@@ -320,9 +447,16 @@ public actor OnlineImageLoader {
         diskCacheSizeBytes()
     }
 
+    private nonisolated func cacheHash(for key: String) -> String {
+        SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     private nonisolated func diskFileURL(for key: String) -> URL {
-        let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-        return diskDirectory.appendingPathComponent(hash)
+        diskDirectory.appendingPathComponent(cacheHash(for: key))
+    }
+
+    private nonisolated func offlineFileURL(for key: String) -> URL {
+        offlineImagesDirectory.appendingPathComponent(cacheHash(for: key))
     }
 
     private nonisolated static func memoryCost(of image: UIImage) -> Int {

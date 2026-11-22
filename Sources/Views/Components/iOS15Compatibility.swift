@@ -112,4 +112,61 @@ extension View {
             self
         }
     }
+
+    // MARK: - iOS 15 系统原生毛玻璃（.ultraThinMaterial）兼容修饰符
+
+    /// 胶囊形系统原生毛玻璃背景（iOS 15 原生基于 .ultraThinMaterial）
+    public func liquidGlassCapsule(
+        interactive: Bool = false,
+        tint: Color? = nil
+    ) -> some View {
+        self
+            .background(
+                Capsule()
+                    .fill(tint?.opacity(0.35) ?? Color.clear)
+                    .background(.ultraThinMaterial, in: Capsule())
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.6)
+            )
+            .shadow(color: Color.black.opacity(0.18), radius: 8, y: 3)
+    }
+
+    /// 圆形系统原生毛玻璃背景
+    public func liquidGlassCircle(
+        interactive: Bool = false,
+        tint: Color? = nil
+    ) -> some View {
+        self
+            .background(
+                Circle()
+                    .fill(tint?.opacity(0.35) ?? Color.clear)
+                    .background(.ultraThinMaterial, in: Circle())
+            )
+            .overlay(
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.6)
+            )
+            .shadow(color: Color.black.opacity(0.18), radius: 8, y: 3)
+    }
+
+    /// 连续圆角矩形系统原生毛玻璃背景
+    public func liquidGlassRoundedRect(
+        cornerRadius: CGFloat = 18,
+        interactive: Bool = false,
+        tint: Color? = nil
+    ) -> some View {
+        self
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(tint?.opacity(0.35) ?? Color.clear)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.6)
+            )
+            .shadow(color: Color.black.opacity(0.18), radius: 8, y: 3)
+    }
 }
