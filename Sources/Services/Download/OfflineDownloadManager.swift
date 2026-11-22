@@ -279,6 +279,16 @@ public final class OfflineDownloadManager: ObservableObject {
         return added
     }
 
+    /// 别名方法：缓存全部指定章节
+    @discardableResult
+    public func enqueueAll(
+        manga: Manga,
+        chapters: [MangaChapter],
+        adapter: any MangaSourceProtocol
+    ) -> Int {
+        enqueueBatch(manga: manga, chapters: chapters, adapter: adapter)
+    }
+
     /// 取消单话下载或清除失败状态
     public func cancelDownload(mangaKey: String, chapterID: String) {
         let key = recordKey(mangaKey: mangaKey, chapterID: chapterID)

@@ -214,8 +214,8 @@ public struct OfflineDownloadsView: View {
         .navigationTitle("离线缓存管理")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if !downloadManager.downloadedChapters.isEmpty || !activeTaskList.isEmpty {
-                ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if !downloadManager.downloadedChapters.isEmpty || !activeTaskList.isEmpty {
                     Button("清空", role: .destructive) {
                         showingClearAllAlert = true
                     }
