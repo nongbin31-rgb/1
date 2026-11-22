@@ -953,12 +953,7 @@ private struct BookshelfGeekMatrixView: View {
                                         }
                                     }
                                     .padding(.trailing, 5)
-                                    .padding(.bottom, 6)
-                                }
-                            }
-                            .overlay(alignment: .bottom) {
-                                if let progress {
-                                    BookshelfCoverBottomProgressBar(progress: progress, height: 2.5)
+                                    .padding(.bottom, 5)
                                 }
                             }
                             .overlay {

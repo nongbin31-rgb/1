@@ -16,36 +16,30 @@ public struct ReaderBackgroundPickerSheet: View {
 
     public var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 22) {
-                    // 1. 顶部模式选择器 (5 大模式)
-                    backgroundModeSection
+            Form {
+                // 1. 顶部模式选择器 (5 大模式)
+                backgroundModeSection
 
-                    // 2. 纸张纹理专属配置卡片 (仅在纹理模式下呈现)
-                    if store.preferredReaderBackground == .texture {
-                        texturePickerSection
-                        textureScopeSection
-                        textureOpacitySection
-                    }
-
-                    // 3. 沉浸式模式说明卡片 (仅在沉浸模式下呈现)
-                    if store.preferredReaderBackground == .immersive {
-                        immersiveInfoSection
-                    }
-
-                    // 4. 书脊中缝立体光影控制
-                    spineShadowSection
-
-                    Spacer(minLength: 20)
+                // 2. 纸张纹理专属配置卡片 (仅在纹理模式下呈现)
+                if store.preferredReaderBackground == .texture {
+                    texturePickerSection
+                    textureScopeSection
+                    textureOpacitySection
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
+
+                // 3. 沉浸式模式说明卡片 (仅在沉浸模式下呈现)
+                if store.preferredReaderBackground == .immersive {
+                    immersiveInfoSection
+                }
+
+                // 4. 书脊中缝立体光影控制
+                spineShadowSection
             }
-            .background(Color.clear)
+            .scrollContentBackground(.hidden)
             .navigationTitle("阅读背景与纸质")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
                         dismiss()
                     }
@@ -58,11 +52,7 @@ public struct ReaderBackgroundPickerSheet: View {
 
     // MARK: - 1. 背景模式分段网格
     private var backgroundModeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("背景模式")
-                .font(.headline)
-                .foregroundStyle(.primary)
-
+        Section {
             HStack(spacing: 8) {
                 ForEach(ReaderBackground.allCases) { mode in
                     let isSelected = store.preferredReaderBackground == mode
@@ -80,39 +70,26 @@ public struct ReaderBackgroundPickerSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color(uiColor: .secondarySystemBackground))
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06))
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 10)
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.8)
                         )
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .padding(.vertical, 4)
+        } header: {
+            Text("背景模式")
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 
     // MARK: - 2. 真实物理纸张材质选择网格 (严格等宽对齐网格)
     private var texturePickerSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("真实材质纹理")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text("6 款真实纸张与材质")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
+        Section {
             LazyVGrid(
                 columns: [
                     GridItem(.flexible(), spacing: 10),
@@ -125,13 +102,16 @@ public struct ReaderBackgroundPickerSheet: View {
                     textureCardView(for: item)
                 }
             }
+            .padding(.vertical, 4)
+        } header: {
+            HStack {
+                Text("真实材质纹理")
+                Spacer()
+                Text("6 款真实纸张与材质")
+                    .font(.caption2)
+                    .textCase(nil)
+            }
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 
     @ViewBuilder
@@ -186,7 +166,7 @@ public struct ReaderBackgroundPickerSheet: View {
                             .blendMode(.multiply)
                         }
                     } else {
-                        Color(uiColor: .secondarySystemBackground)
+                        Color.primary.opacity(0.06)
                             .frame(minWidth: 0, maxWidth: .infinity)
                             .frame(height: 72)
                     }
@@ -231,17 +211,7 @@ public struct ReaderBackgroundPickerSheet: View {
 
     // MARK: - 3. 纹理作用目标范围 (全屏覆盖 / 仅图片本身 / 仅阅读器背景)
     private var textureScopeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("纹理作用目标")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text("控制材质渗透范围")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
+        Section {
             HStack(spacing: 8) {
                 ForEach(ReaderTextureTarget.allCases) { target in
                     let isSelected = store.readerTextureTarget == target
@@ -259,27 +229,20 @@ public struct ReaderBackgroundPickerSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color(uiColor: .secondarySystemBackground))
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06))
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 10)
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.8)
                         )
                     }
                     .buttonStyle(.plain)
                 }
             }
-
-            Text(store.readerTextureTarget.subtitle)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
+            .padding(.vertical, 4)
 
             if store.readerTextureTarget == .imageOnly {
-                Divider()
-                    .padding(.vertical, 4)
-
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("四周拼接背景")
@@ -309,11 +272,11 @@ public struct ReaderBackgroundPickerSheet: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 9)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(isSelected ? Color.accentColor.opacity(0.15) : Color(uiColor: .secondarySystemBackground))
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06))
                                 )
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                                         .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.8)
                                 )
                             }
@@ -321,19 +284,24 @@ public struct ReaderBackgroundPickerSheet: View {
                         }
                     }
                 }
+                .padding(.vertical, 4)
             }
+        } header: {
+            HStack {
+                Text("纹理作用目标")
+                Spacer()
+                Text("控制材质渗透范围")
+                    .font(.caption2)
+                    .textCase(nil)
+            }
+        } footer: {
+            Text(store.readerTextureTarget.subtitle)
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 
     // MARK: - 4. 纹理浓度与纸张着色滑块
     private var textureOpacitySection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("纸质透光与纤维浓度")
@@ -358,8 +326,7 @@ public struct ReaderBackgroundPickerSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-
-            Divider()
+            .padding(.vertical, 2)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -385,10 +352,9 @@ public struct ReaderBackgroundPickerSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            .padding(.vertical, 2)
 
             if store.readerTextureType.usesFineTilePattern {
-                Divider()
-
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("纸张颗粒数量")
@@ -413,38 +379,34 @@ public struct ReaderBackgroundPickerSheet: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                .padding(.vertical, 2)
             }
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 
     // MARK: - 4. 沉浸式动态光晕提示
     private var immersiveInfoSection: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.title2)
-                .foregroundStyle(.purple)
+        Section {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.title2)
+                    .foregroundStyle(.purple)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("动态氛围沉浸模式")
-                    .font(.subheadline.weight(.semibold))
-                Text("后台实时提取当前页边缘色系并执行 GPU 高斯模糊，在全屏营造弥散流动光晕，翻页平滑淡入。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("动态氛围沉浸模式")
+                        .font(.subheadline.weight(.semibold))
+                    Text("后台实时提取当前页边缘色系并执行 GPU 高斯模糊，在全屏营造弥散流动光晕，翻页平滑淡入。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.vertical, 4)
         }
-        .padding(14)
-        .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - 5. 书脊立体光影开关
     private var spineShadowSection: some View {
-        VStack(spacing: 12) {
+        Section {
             Toggle(isOn: $store.showSpineShadowInCurl) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("书脊立体中缝阴影")
@@ -455,8 +417,6 @@ public struct ReaderBackgroundPickerSheet: View {
                 }
             }
 
-            Divider()
-
             Toggle(isOn: $store.showSpineDividingLine) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("书脊中缝细分割线")
@@ -466,12 +426,8 @@ public struct ReaderBackgroundPickerSheet: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        } header: {
+            Text("书脊光影")
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
     }
 }
