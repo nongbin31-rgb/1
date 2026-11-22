@@ -482,9 +482,7 @@ public struct ReaderView: View {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
-                                .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+                                .liquidGlassCapsule(interactive: true)
                             }
                             .padding(.trailing, max(windowGeo.safeAreaInsets.trailing, 16))
                             .padding(.top, max(windowGeo.safeAreaInsets.top, 16) + 4)
@@ -934,7 +932,7 @@ public struct ReaderView: View {
                             .font(.headline)
                             .foregroundStyle(.white)
                             .frame(width: 36, height: 36)
-                            .background(.ultraThinMaterial, in: Circle())
+                            .liquidGlassCircle(interactive: true)
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
@@ -950,27 +948,31 @@ public struct ReaderView: View {
 
                     Spacer()
 
-                    readerProgressStyleMenuButton
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 8) {
+                            readerProgressStyleMenuButton
 
-                    Button {
-                        if !store.enableImageUpscaler {
-                            currentHUDText = "请先开启画质增强"
-                            showUpscalerSheet = true
-                        } else {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isCompareMode.toggle()
+                            Button {
+                                if !store.enableImageUpscaler {
+                                    currentHUDText = "请先开启画质增强"
+                                    showUpscalerSheet = true
+                                } else {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        isCompareMode.toggle()
+                                    }
+                                }
+                            } label: {
+                                Label(isCompareMode ? "退出对比" : "对比", systemImage: "rectangle.split.2x1")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .foregroundStyle(.white)
+                                    .liquidGlassCapsule(
+                                        interactive: true,
+                                        tint: isCompareMode ? Color.accentColor : nil
+                                    )
                             }
                         }
-                    } label: {
-                        Label(isCompareMode ? "退出对比" : "对比", systemImage: "rectangle.split.2x1")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                isCompareMode ? Color.accentColor : Color.white.opacity(0.18),
-                                in: Capsule()
-                            )
-                            .foregroundStyle(.white)
                     }
                 }
                 .padding(.leading, max(insets.left, 16))
@@ -1250,7 +1252,7 @@ public struct ReaderView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 34, height: 34)
-                .background(.ultraThinMaterial, in: Circle())
+                .liquidGlassCircle(interactive: true)
         }
         .accessibilityLabel("切换进度条风格与沉浸态显示，当前为\(store.readerProgressStyle.displayName)")
     }
@@ -1903,43 +1905,6 @@ private struct WebtoonScrollIndicatorSyncView: UIViewRepresentable {
                     break
                 }
                 current = candidate.superview
-            }
-        }
-    }
-}
-
-// MARK: - 原生液态玻璃弹窗兼容修饰符
-extension View {
-    /// 原生液态玻璃弹窗背景修饰符（兼容 iOS 16.0 部署目标并在 iOS 16.4+ 自动启用官方原生超薄毛玻璃与大圆角）
-    @ViewBuilder
-    func readerLiquidGlassSheet(
-        fractions: [CGFloat]? = nil,
-        cornerRadius: CGFloat = 32
-    ) -> some View {
-        if let fractions = fractions {
-            let detents = Set(fractions.map { PresentationDetent.fraction($0) })
-            if #available(iOS 16.4, *) {
-                self
-                    .presentationDetents(detents)
-                    .presentationDragIndicator(.visible)
-                    .presentationBackground(.ultraThinMaterial)
-                    .presentationCornerRadius(cornerRadius)
-            } else {
-                self
-                    .presentationDetents(detents)
-                    .presentationDragIndicator(.visible)
-            }
-        } else {
-            if #available(iOS 16.4, *) {
-                self
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-                    .presentationBackground(.ultraThinMaterial)
-                    .presentationCornerRadius(cornerRadius)
-            } else {
-                self
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
             }
         }
     }

@@ -1507,9 +1507,7 @@ struct ReaderAmbientProgressOverlay: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.8))
-                        .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+                        .liquidGlassCapsule()
                         .position(x: -54, y: bubbleY)
                     }
                 }
@@ -1724,12 +1722,7 @@ struct ReaderScrubberPreviewOverlay: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.42), radius: 12, y: 6)
+                .liquidGlassRoundedRect(cornerRadius: 16)
             }
             .padding(.horizontal, 24)
         }
@@ -1916,11 +1909,6 @@ struct ReaderReturnAnchorPill: View {
             }
             .buttonStyle(.plain)
         }
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(Color.white.opacity(0.24), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+        .liquidGlassCapsule(interactive: true)
     }
 }

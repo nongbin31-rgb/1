@@ -96,5 +96,5 @@ jobs:
           gh release delete "${TAG}" --yes 2>/dev/null || true
           git push origin ":refs/tags/${TAG}" 2>/dev/null || true
           gh release create "${TAG}" KedaOnlineReader-unsigned.ipa \
-            --title "Latest Build (${GITHUB_SHA::7})" \
-            --notes "自动构建的无签名 iOS IPA（提交 ${GITHUB_SHA::7}），已适配全系全面屏 iPhone / iPad。"
+            --title "Latest Build - iOS 26 Liquid Glass (${GITHUB_SHA::7})" \
+            --notes "自动构建的无签名 iOS 26 原生液态玻璃版 IPA（提交 ${GITHUB_SHA::7}），需 iOS 26.0+ 设备安装。"

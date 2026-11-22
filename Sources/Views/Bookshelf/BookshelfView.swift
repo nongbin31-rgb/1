@@ -491,12 +491,7 @@ public struct BookshelfView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6)
-        )
-        .shadow(color: .black.opacity(0.16), radius: 14, y: 6)
+        .liquidGlassRoundedRect(cornerRadius: 20, interactive: true)
         .padding(.horizontal, 16)
         .padding(.bottom, 10)
     }

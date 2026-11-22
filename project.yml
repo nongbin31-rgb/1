@@ -2,7 +2,7 @@ name: KedaOnlineReader
 options:
   bundleIdPrefix: com.selfsigned
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "26.0"
   xcodeVersion: "15.0"
   createIntermediateGroups: true
 
@@ -14,7 +14,7 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     TARGETED_DEVICE_FAMILY: "1,2"
     ENABLE_BITCODE: NO
     CODE_SIGNING_ALLOWED: NO
@@ -25,7 +25,7 @@ targets:
   KedaOnlineReader:
     type: application
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "26.0"
     info:
       path: Sources/App/Info.plist
       properties:
