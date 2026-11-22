@@ -157,7 +157,7 @@ public struct BookshelfView: View {
                         } else if sortedBooks.isEmpty {
                             emptySearchResultView
                         } else {
-                            ScrollView {
+                            ScrollView(showsIndicators: store.bookshelfLayoutStyle != .readingTimeline) {
                                 BookshelfLayoutCollectionView(
                                     style: store.bookshelfLayoutStyle,
                                     allBooks: store.bookshelf,
@@ -173,6 +173,7 @@ public struct BookshelfView: View {
                                 )
                                 .padding(.bottom, isEditing ? 78 : 8)
                             }
+                            .compatScrollIndicatorsHidden(store.bookshelfLayoutStyle == .readingTimeline)
                             .background(
                                 (store.bookshelfLayoutStyle == .readingTimeline
                                     ? Color(uiColor: .systemGroupedBackground)

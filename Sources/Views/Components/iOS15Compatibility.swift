@@ -84,6 +84,16 @@ extension View {
         }
     }
 
+    /// 兼容 iOS 16+ 的 scrollIndicators（iOS 15 配合 ScrollView(showsIndicators:) 使用）
+    @ViewBuilder
+    public func compatScrollIndicatorsHidden(_ hidden: Bool) -> some View {
+        if #available(iOS 16.0, *) {
+            self.scrollIndicators(hidden ? .hidden : .automatic)
+        } else {
+            self.id(hidden)
+        }
+    }
+
     /// 兼容 iOS 16+ 的 toolbar(.hidden, for: .navigationBar)
     @ViewBuilder
     public func compatNavigationBarHidden(_ hidden: Bool) -> some View {
