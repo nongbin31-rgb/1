@@ -11,6 +11,7 @@ private final class ReaderPageSlot: ObservableObject {
     @Published var upscaleProgress: String = ""
     @Published var errorMessage: String?
 
+    private var currentLoadedURL: String?
     private var lastAppliedConfig: ImageUpscalerConfig?
     private var lastIsEnabled: Bool?
     private var lastAppliedFilterSignature: String?
@@ -26,6 +27,19 @@ private final class ReaderPageSlot: ObservableObject {
         errorMessage = nil
 
         let targetFilterSig = filterConfig.cacheSignature
+
+        // 若当前 Slot 被复用于不同页面或不同章节 URL，彻底重置旧图像与状态，坚决防止复用上一话旧图
+        if currentLoadedURL != page.imageURL {
+            originalImage = nil
+            processed = nil
+            displayImage = nil
+            lastAppliedConfig = nil
+            lastIsEnabled = nil
+            lastAppliedFilterSignature = nil
+            isUpscaling = false
+            upscaleProgress = ""
+            currentLoadedURL = page.imageURL
+        }
 
         // 动态调滤镜极速响应快路径：原图已在内存，且超分配置/开启状态未变，仅调整滤镜参数时直接对现有成品跑 CoreImage 滤镜
         if let existingOriginal = originalImage {
@@ -277,6 +291,7 @@ private final class ReaderPageSlot: ObservableObject {
         lastAppliedConfig = nil
         lastIsEnabled = nil
         lastAppliedFilterSignature = nil
+        currentLoadedURL = nil
     }
 }
 
@@ -769,6 +784,7 @@ public struct ReaderView: View {
                             .coordinateSpace(name: "webtoon_scroll_content")
                             .background(WebtoonScrollIndicatorSyncView(showsIndicator: showsSystemIndicator))
                         }
+                        .id("webtoon_scroll_\(currentChapter.id)")
                         .onAppear {
                             if isRestoringInitialPage && currentPageIndex > 0 {
                                 restoreWebtoonInitialPage(proxy: scrollProxy)
@@ -1278,6 +1294,10 @@ public struct ReaderView: View {
             chapterIndex: currentIndex,
             totalChapters: chapters.count
         )
+        // 关键防御：切换章节时立即清空旧页面并置位加载状态，杜绝上一话内容在切换瞬间残留闪烁
+        self.pages = []
+        self.currentPageIndex = 0
+        self.isLoadingChapter = true
         currentChapter = nextChapter
     }
 
@@ -1381,9 +1401,7 @@ public struct ReaderView: View {
         self.cachedPageAspectRatios.removeAll()
         let resolvedIndex = min(targetIndex, max(0, loadedPages.count - 1))
         self.currentPageIndex = resolvedIndex
-        if resolvedIndex > 0 {
-            self.isRestoringInitialPage = true
-        }
+        self.isRestoringInitialPage = (resolvedIndex > 0)
         if !loadedPages.isEmpty {
             store.updateProgress(
                 manga: manga,
