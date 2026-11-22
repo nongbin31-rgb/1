@@ -613,6 +613,9 @@ public struct ReaderView: View {
             )
             .environmentObject(store)
             .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.ultraThinMaterial)
+            .presentationCornerRadius(32)
         }
         .fullScreenCover(isPresented: $showConfigPreviewSheet) {
             ReaderImageUpscalerConfigView(
@@ -629,6 +632,10 @@ public struct ReaderView: View {
         .sheet(isPresented: $showBackgroundPickerSheet) {
             ReaderBackgroundPickerSheet()
                 .environmentObject(store)
+                .presentationDetents([.fraction(0.68), .fraction(0.92)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.ultraThinMaterial)
+                .presentationCornerRadius(32)
         }
     }
 
@@ -1868,6 +1875,7 @@ private struct ReaderUpscalerSheet: View {
                     )
                 }
             }
+            .scrollContentBackground(.hidden)
             .navigationTitle("画质超分与阅读设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

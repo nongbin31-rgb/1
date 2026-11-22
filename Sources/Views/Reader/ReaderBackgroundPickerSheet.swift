@@ -41,7 +41,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
             }
-            .background(Color(uiColor: .systemGroupedBackground))
+            .background(Color.clear)
             .navigationTitle("阅读背景与纸质")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -55,6 +55,8 @@ public struct ReaderBackgroundPickerSheet: View {
         }
         .presentationDetents([.fraction(0.68), .fraction(0.92)])
         .presentationDragIndicator(.visible)
+        .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(32)
     }
 
     // MARK: - 1. 背景模式分段网格
@@ -94,7 +96,11 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 
     // MARK: - 2. 真实物理纸张材质选择网格 (严格等宽对齐网格)
@@ -124,7 +130,11 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 
     @ViewBuilder
@@ -317,7 +327,11 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 
     // MARK: - 4. 纹理浓度与纸张着色滑块
@@ -405,7 +419,11 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 
     // MARK: - 4. 沉浸式动态光晕提示
@@ -453,6 +471,10 @@ public struct ReaderBackgroundPickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 }
