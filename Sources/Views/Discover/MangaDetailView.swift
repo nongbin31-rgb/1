@@ -137,9 +137,9 @@ public struct MangaDetailView: View {
                     }
                 }
 
-                let status = currentStatusText
-                if !status.isEmpty {
-                    mangaStatusBadge(status)
+                let statusDescriptor = detailStatusDescriptor
+                if !statusDescriptor.badgeText.isEmpty {
+                    mangaStatusBadge(statusDescriptor)
                 }
 
                 let tags = cleanTags
@@ -628,35 +628,41 @@ public struct MangaDetailView: View {
         MangaSerialStatusHelper.sanitizeTags(currentManga.tags)
     }
 
-    private var currentStatusText: String {
-        let status = currentManga.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !status.isEmpty {
-            return status
-        }
-        return MangaSerialStatusHelper.inferStatusText(
-            title: currentManga.title,
-            tags: currentManga.tags,
-            chapterCount: chapters.count
+    private var detailStatusDescriptor: MangaDetailStatusDescriptor {
+        MangaSerialStatusHelper.resolveDetailStatus(
+            manga: currentManga,
+            chapters: chapters,
+            category: store.detectedCategory(for: currentManga)
         )
     }
 
     @ViewBuilder
-    private func mangaStatusBadge(_ status: String) -> some View {
-        let isOngoing = MangaSerialStatusHelper.isOngoingStatus(status)
-        let isCompleted = MangaSerialStatusHelper.isCompletedStatus(status)
-        let color: Color = isOngoing ? .green : (isCompleted ? .orange : .blue)
+    private func mangaStatusBadge(_ descriptor: MangaDetailStatusDescriptor) -> some View {
+        let color: Color
+        switch descriptor.statusKind {
+        case .ongoing:
+            color = .green
+        case .completed:
+            color = .orange
+        case .singleVolume:
+            color = Color(red: 0.38, green: 0.45, blue: 0.95)
+        case .general:
+            color = .accentColor
+        }
 
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Circle()
                 .fill(color)
-                .frame(width: 5, height: 5)
-            Text(status)
+                .frame(width: 5.5, height: 5.5)
+            Text(descriptor.badgeText)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
         }
-        .font(.caption2.weight(.medium))
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.vertical, 3.5)
         .background(color.opacity(0.14), in: Capsule())
         .foregroundStyle(color)
+        .animation(.easeInOut(duration: 0.2), value: descriptor.badgeText)
     }
 
     @ViewBuilder

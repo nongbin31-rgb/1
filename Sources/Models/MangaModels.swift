@@ -755,6 +755,209 @@ public enum MangaSerialStatusHelper {
 
         return ""
     }
+
+    // MARK: - 详情页高密度状态与话数推导 (紧凑自适应徽标)
+
+    private static let chapterNumRegex = try! NSRegularExpression(
+        pattern: #"(?:第\s*|ch(?:apter)?[\.\s]*|ep[\.\s]*|#\s*)(\d+(?:\.\d+)?)"#,
+        options: [.caseInsensitive]
+    )
+
+    /// 识别单本/同人志的自适应类型名称（同人志 / 单行本 / 短篇 / 画集 / 写真）
+    public static func detectSingleVolumeType(
+        tags: [String],
+        title: String,
+        category: MangaLayoutCategory
+    ) -> String? {
+        let loweredTags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let fullTitle = title.lowercased()
+
+        // 1. 优先匹配同人志
+        if loweredTags.contains(where: { $0.contains("同人") || $0.contains("doujin") }) || fullTitle.contains("同人") {
+            return "同人志"
+        }
+        // 2. 短篇
+        if loweredTags.contains(where: { $0.contains("短篇") }) || fullTitle.contains("短篇") {
+            return "短篇"
+        }
+        // 3. 画集 / CG
+        if loweredTags.contains(where: { $0.contains("画集") || $0.contains("畫集") || $0.contains("cg") })
+            || fullTitle.contains("画集") || fullTitle.contains("畫集") || fullTitle.contains("cg") {
+            return "画集"
+        }
+        // 4. 写真 / Cosplay
+        if loweredTags.contains(where: { $0.contains("写真") || $0.contains("寫真") || $0.contains("cosplay") })
+            || fullTitle.contains("写真") || fullTitle.contains("寫真") {
+            return "写真"
+        }
+        // 5. 单行本 / 单本
+        if loweredTags.contains(where: { $0.contains("单行本") || $0.contains("單行本") || $0.contains("单本") || $0.contains("單本") || $0.contains("tankoubon") })
+            || fullTitle.contains("单行本") || fullTitle.contains("單行本") {
+            return "单行本"
+        }
+
+        // 6. 日漫分类默认归为单行本
+        if category == .japaneseManga {
+            return "单行本"
+        }
+
+        return nil
+    }
+
+    /// 结合漫画元数据、标签、排版分类以及章节列表，解析详情页顶部高密度状态与话数描述
+    public static func resolveDetailStatus(
+        manga: Manga,
+        chapters: [MangaChapter] = [],
+        category: MangaLayoutCategory? = nil
+    ) -> MangaDetailStatusDescriptor {
+        let baseStatus = inferStatusText(
+            title: manga.title,
+            tags: manga.tags,
+            rawStatus: manga.statusText,
+            isSeries: chapters.count > 1,
+            chapterCount: chapters.count
+        )
+        let isOngoing = isOngoingStatus(baseStatus)
+        let isCompleted = isCompletedStatus(baseStatus)
+        let resolvedCategory = category ?? MangaLayoutDetector.detectCategory(for: manga)
+        let singleVolumeType = detectSingleVolumeType(tags: manga.tags, title: manga.title, category: resolvedCategory)
+
+        // 1. 章节列表已加载就绪
+        if !chapters.isEmpty {
+            // 1.1 只有 1 话的情况：日漫单行本、同人志、短篇、画集等单本
+            if chapters.count == 1 {
+                let firstChapterTitle = chapters.first?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let unitName: String
+                if firstChapterTitle.contains("卷") || firstChapterTitle.contains("冊") || firstChapterTitle.contains("册") {
+                    unitName = "全 1 卷"
+                } else {
+                    unitName = "全 1 话"
+                }
+
+                let typeName = singleVolumeType ?? "单行本"
+                return MangaDetailStatusDescriptor(
+                    badgeText: "\(typeName) · \(unitName)",
+                    statusKind: .singleVolume
+                )
+            }
+
+            // 1.2 连载中：提取最新话数展示「连载中 · 更新至第 X 话」
+            if isOngoing {
+                let latestText: String
+                if let num = resolveLatestChapterNumber(from: chapters) {
+                    latestText = "更新至第 \(num) 话"
+                } else if let lastTitle = resolveLatestChapterTitle(from: chapters) {
+                    latestText = "更新至 \(lastTitle)"
+                } else {
+                    latestText = "更新至第 \(chapters.count) 话"
+                }
+                return MangaDetailStatusDescriptor(
+                    badgeText: "连载中 · \(latestText)",
+                    statusKind: .ongoing
+                )
+            }
+
+            // 1.3 完结作品（或具有单行本/同人志属性的多话系列，如上下卷）
+            if let typeName = singleVolumeType {
+                let hasVolume = chapters.contains { $0.title.contains("卷") || $0.title.contains("册") }
+                let unit = hasVolume ? "卷" : "话"
+                return MangaDetailStatusDescriptor(
+                    badgeText: "\(typeName) · 全 \(chapters.count) \(unit)",
+                    statusKind: .singleVolume
+                )
+            }
+
+            return MangaDetailStatusDescriptor(
+                badgeText: "已完结 · 全 \(chapters.count) 话",
+                statusKind: .completed
+            )
+        }
+
+        // 2. 章节列表尚未拉取完成或离线为空时的优雅过渡推导
+        if isOngoing {
+            return MangaDetailStatusDescriptor(badgeText: "连载中", statusKind: .ongoing)
+        }
+        if let typeName = singleVolumeType {
+            return MangaDetailStatusDescriptor(badgeText: "\(typeName) · 全 1 话", statusKind: .singleVolume)
+        }
+        if isCompleted {
+            return MangaDetailStatusDescriptor(badgeText: "已完结", statusKind: .completed)
+        }
+        if !baseStatus.isEmpty {
+            return MangaDetailStatusDescriptor(badgeText: baseStatus, statusKind: .general)
+        }
+        return MangaDetailStatusDescriptor(badgeText: "全本", statusKind: .singleVolume)
+    }
+
+    /// 从章节列表中提取最大章节序号（支持整数 45 或小数 45.5）
+    private static func resolveLatestChapterNumber(from chapters: [MangaChapter]) -> String? {
+        guard !chapters.isEmpty else { return nil }
+
+        // 1. 尝试从 chapter.number 取最大有效值
+        var maxNum = chapters.map(\.number).filter { $0 > 0 }.max()
+
+        // 2. 若 number 均为默认的 1，尝试从章节标题通过正则提取
+        if maxNum == nil || (maxNum == 1.0 && chapters.count > 1) {
+            var extractedNumbers: [Double] = []
+            for ch in chapters {
+                if let num = extractChapterNumber(from: ch.title) {
+                    extractedNumbers.append(num)
+                }
+            }
+            if let maxExtracted = extractedNumbers.max() {
+                maxNum = maxExtracted
+            }
+        }
+
+        let finalNum = maxNum ?? Double(chapters.count)
+        guard finalNum > 0 else { return nil }
+
+        if finalNum.truncatingRemainder(dividingBy: 1) == 0 {
+            return "\(Int(finalNum))"
+        } else {
+            return String(format: "%.1f", finalNum)
+        }
+    }
+
+    /// 从章节标题提取数字（例如 "第45话" -> 45, "Ch.12.5" -> 12.5）
+    private static func extractChapterNumber(from title: String) -> Double? {
+        let ns = title as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        if let match = chapterNumRegex.firstMatch(in: title, range: range),
+           match.numberOfRanges > 1 {
+            let numStr = ns.substring(with: match.range(at: 1))
+            return Double(numStr)
+        }
+        return nil
+    }
+
+    /// 提取最新章节标题简写（排除非有效章节名）
+    private static func resolveLatestChapterTitle(from chapters: [MangaChapter]) -> String? {
+        guard let latest = chapters.max(by: { $0.number < $1.number }) ?? chapters.last else { return nil }
+        let trimmed = latest.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "全一话" || trimmed == "全本阅览" {
+            return nil
+        }
+        return trimmed
+    }
+}
+
+/// 漫画详情页复合连载/话数展示描述模型
+public struct MangaDetailStatusDescriptor: Equatable, Sendable {
+    public enum StatusKind: Equatable, Sendable {
+        case ongoing       // 连载中 (绿色)
+        case completed     // 已完结 (橙色)
+        case singleVolume  // 单行本 / 同人志 / 短篇等单话日漫 (蓝紫色)
+        case general       // 其他常规 (强调色)
+    }
+
+    public let badgeText: String
+    public let statusKind: StatusKind
+
+    public init(badgeText: String, statusKind: StatusKind) {
+        self.badgeText = badgeText
+        self.statusKind = statusKind
+    }
 }
 
 /// 漫画章节
