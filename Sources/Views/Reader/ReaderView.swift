@@ -1835,6 +1835,12 @@ private struct ReaderUpscalerSheet: View {
     var onOpenAdvancedConfig: () -> Void
     var onOpenImageFilter: () -> Void
 
+    private var tapTurnDirectionSummary: String {
+        let baseLeftIsNext = (layoutMode == .pagedRTL)
+        let effectiveLeftIsNext = store.invertTapPageTurn ? !baseLeftIsNext : baseLeftIsNext
+        return effectiveLeftIsNext ? "左→下一页 · 右→上一页" : "左→上一页 · 右→下一页"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1920,13 +1926,11 @@ private struct ReaderUpscalerSheet: View {
                         Toggle("点击左右两侧翻页", isOn: $store.enableTapPageTurn)
 
                         if store.enableTapPageTurn {
-                            let baseLeftIsNext = (layoutMode == .pagedRTL)
-                            let effectiveLeftIsNext = store.invertTapPageTurn ? !baseLeftIsNext : baseLeftIsNext
                             HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("点击翻页方向")
                                         .font(.body)
-                                    Text(effectiveLeftIsNext ? "左→下一页 · 右→上一页" : "左→上一页 · 右→下一页")
+                                    Text(tapTurnDirectionSummary)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

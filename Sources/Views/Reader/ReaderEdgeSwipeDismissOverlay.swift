@@ -69,22 +69,46 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
         .allowsHitTesting(false)
     }
 
-    @ViewBuilder
     private func edgeIndicator(side: ReaderEdgeSwipeSide, containerSize: CGSize) -> some View {
-        let clampedY = min(max(swipeState.anchorY, 110), max(containerSize.height - 110, 110))
-        let pullOffset = min(swipeState.progress, 1.0) * 26
-        let isLeft = (side == .left)
+        let clampedY: CGFloat = min(max(swipeState.anchorY, 110), max(containerSize.height - 110, 110))
+        let clampedProgress: CGFloat = min(max(swipeState.progress, 0), 1)
+        let pullOffset: CGFloat = clampedProgress * 26
+        let isLeft: Bool = (side == .left)
+        let isReady: Bool = swipeState.isReadyToDismiss
 
+        let fgColor: Color = isReady ? .white : Color.white.opacity(0.92)
+        let fillColor: Color = isReady ? Color.accentColor.opacity(0.92) : Color.black.opacity(0.62)
+        let borderColor: Color = Color.white.opacity(isReady ? 0.35 : 0.18)
+        let hPadding: CGFloat = isReady ? 12 : 10
+        let posX: CGFloat = isLeft ? (18 + pullOffset) : (containerSize.width - 18 - pullOffset)
+        let scaleVal: CGFloat = 0.86 + clampedProgress * 0.14
+        let opacityVal: Double = Double(min(clampedProgress * 1.4, 1.0))
+
+        return edgeIndicatorLabel(isLeft: isLeft, isReady: isReady)
+            .foregroundColor(fgColor)
+            .padding(.horizontal, hPadding)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(fillColor))
+            .overlay(Capsule().strokeBorder(borderColor, lineWidth: 0.75))
+            .shadow(color: Color.black.opacity(0.28), radius: 8, x: 0, y: 3)
+            .scaleEffect(scaleVal)
+            .opacity(opacityVal)
+            .position(x: posX, y: clampedY)
+            .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.85), value: isReady)
+    }
+
+    @ViewBuilder
+    private func edgeIndicatorLabel(isLeft: Bool, isReady: Bool) -> some View {
         HStack(spacing: 4) {
             if isLeft {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 13, weight: .bold))
-                if swipeState.isReadyToDismiss {
+                if isReady {
                     Text("松手退出")
                         .font(.system(size: 11, weight: .semibold))
                 }
             } else {
-                if swipeState.isReadyToDismiss {
+                if isReady {
                     Text("松手退出")
                         .font(.system(size: 11, weight: .semibold))
                 }
@@ -92,25 +116,6 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
                     .font(.system(size: 13, weight: .bold))
             }
         }
-        .foregroundStyle(swipeState.isReadyToDismiss ? Color.white : Color.white.opacity(0.92))
-        .padding(.horizontal, swipeState.isReadyToDismiss ? 12 : 10)
-        .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(swipeState.isReadyToDismiss ? Color.accentColor.opacity(0.92) : Color.black.opacity(0.62))
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(Color.white.opacity(swipeState.isReadyToDismiss ? 0.35 : 0.18), lineWidth: 0.75)
-        )
-        .shadow(color: Color.black.opacity(0.28), radius: 8, x: 0, y: 3)
-        .scaleEffect(0.86 + min(swipeState.progress, 1.0) * 0.14)
-        .opacity(Double(min(swipeState.progress * 1.4, 1.0)))
-        .position(
-            x: isLeft ? (18 + pullOffset) : (containerSize.width - 18 - pullOffset),
-            y: clampedY
-        )
-        .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.85), value: swipeState.isReadyToDismiss)
     }
 }
 

@@ -636,19 +636,22 @@ public struct MangaDetailView: View {
         )
     }
 
+    private func statusBadgeColor(for kind: MangaDetailStatusDescriptor.StatusKind) -> Color {
+        switch kind {
+        case .ongoing:
+            return .green
+        case .completed:
+            return .orange
+        case .singleVolume:
+            return Color(red: 0.38, green: 0.45, blue: 0.95)
+        case .general:
+            return .accentColor
+        }
+    }
+
     @ViewBuilder
     private func mangaStatusBadge(_ descriptor: MangaDetailStatusDescriptor) -> some View {
-        let color: Color
-        switch descriptor.statusKind {
-        case .ongoing:
-            color = .green
-        case .completed:
-            color = .orange
-        case .singleVolume:
-            color = Color(red: 0.38, green: 0.45, blue: 0.95)
-        case .general:
-            color = .accentColor
-        }
+        let color = statusBadgeColor(for: descriptor.statusKind)
 
         HStack(spacing: 5) {
             Circle()
