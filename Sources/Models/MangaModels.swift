@@ -22,9 +22,9 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendab
         case .genericJSON:
             return "自定义 JSON 接口源"
         case .jm:
-            return "漫画源 J"
+            return "禁漫天堂 (JMComic)"
         case .wnacg:
-            return "漫画源 W"
+            return "绅士漫画 (WNACG)"
         }
     }
 
@@ -563,8 +563,8 @@ public enum MangaTitleMetadataParser {
             guard !tag.isEmpty,
                   tag.count <= 14,
                   !MangaSerialStatusHelper.isStatusTag(tag),
-                  tag != "精选",
-                  tag != "单行本" else {
+                  tag != "绅士漫画",
+                  tag != "禁漫单行本" else {
                 return
             }
             let key = tag.lowercased()
@@ -618,7 +618,7 @@ public enum MangaSerialStatusHelper {
     )
     private static let singleVolumeCategoryKeywords: [String] = [
         "单本", "單本", "单行本", "單行本", "同人", "短篇", "杂志", "雜誌",
-        "画集", "畫集", "cg", "cosplay", "写真", "寫真", "精选"
+        "画集", "畫集", "cg", "cosplay", "写真", "寫真", "禁漫单行本", "绅士漫画", "紳士漫畫"
     ]
     private static let ongoingCategoryKeywords: [String] = [
         "韩漫", "韓漫", "连载", "連載"

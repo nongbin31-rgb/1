@@ -109,7 +109,7 @@ public struct MangaDetailView: View {
 
                 let displayAuthor = currentManga.displayAuthor
                 if !displayAuthor.isEmpty {
-                    let isSearchableAuthor = displayAuthor != "佚名"
+                    let isSearchableAuthor = displayAuthor != "佚名" && displayAuthor != "绅士本"
                     if isSearchableAuthor {
                         NavigationLink(
                             value: MangaSearchRoute(

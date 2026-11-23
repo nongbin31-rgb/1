@@ -47,8 +47,8 @@ public struct DiscoverView: View {
                 guard !tag.isEmpty,
                       tag.count <= 12,
                       !MangaSerialStatusHelper.isStatusTag(tag),
-                      tag != "精选",
-                      tag != "单行本" else {
+                      tag != "绅士漫画",
+                      tag != "禁漫单行本" else {
                     continue
                 }
                 counts[tag, default: 0] += 1

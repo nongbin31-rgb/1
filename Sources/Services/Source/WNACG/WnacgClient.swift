@@ -681,7 +681,7 @@ public actor WnacgClient {
             let date = cleanString(entry["time"])
             let chapterText = pages > 0 ? "\(pages) P\(date.isEmpty ? "" : " · \(date)")" : date
             let category = WnacgParser.normalizeCategory(cleanString(entry["category"]))
-            let finalCategoryTag = category.isEmpty ? "精选" : category
+            let finalCategoryTag = category.isEmpty ? "绅士漫画" : category
             let statusText = MangaSerialStatusHelper.inferStatusText(
                 title: title,
                 latestChapter: chapterText,
@@ -696,7 +696,7 @@ public actor WnacgClient {
                     id: id,
                     sourceID: sourceID,
                     title: title,
-                    author: "佚名",
+                    author: "绅士本",
                     coverURL: WnacgParser.cleanWnacgUrl(cleanString(entry["cover"]), baseUrl: currentBaseUrl),
                     coverHeaders: ["Referer": "https://www.wnacg.com/"],
                     summary: chapterText,
