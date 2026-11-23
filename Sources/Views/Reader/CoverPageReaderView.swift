@@ -33,6 +33,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
     @Binding public var currentPageIndex: Int
     public var externalJumpNonce: Int = 0
     public let onSingleTap: () -> Void
+    public var onTapLocation: ((CGFloat, Bool) -> Void)? = nil
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
     public var onPageReady: ((Int) -> Void)? = nil
@@ -57,6 +58,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         currentPageIndex: Binding<Int>,
         externalJumpNonce: Int = 0,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onStatusUpdate: @escaping (String) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
         onPageReady: ((Int) -> Void)? = nil
@@ -80,6 +82,7 @@ public struct CoverPageReaderView: UIViewControllerRepresentable {
         self._currentPageIndex = currentPageIndex
         self.externalJumpNonce = externalJumpNonce
         self.onSingleTap = onSingleTap
+        self.onTapLocation = onTapLocation
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
         self.onPageReady = onPageReady
@@ -355,7 +358,16 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
             textureTarget: parentConfig.textureTarget,
             imageOnlyBackdrop: parentConfig.imageOnlyBackdrop,
             showDividingLine: parentConfig.showDividingLine,
-            onSingleTap: parentConfig.onSingleTap,
+            onSingleTap: { [weak self] in
+                self?.parentConfig.onSingleTap()
+            },
+            onTapLocation: { [weak self] normalizedX, isZoomed in
+                if let handler = self?.parentConfig.onTapLocation {
+                    handler(normalizedX, isZoomed)
+                } else {
+                    self?.parentConfig.onSingleTap()
+                }
+            },
             onStatusUpdate: parentConfig.onStatusUpdate,
             onZoomChanged: { [weak self] scale in
                 // 核心手势隔离：单页处于放大模式时禁用翻页手势，防止手势抢占

@@ -134,6 +134,11 @@ public struct SettingsView: View {
                     }
 
                     Toggle("隐藏控制栏时显示极简进度", isOn: $store.showAmbientProgressInReader)
+                    Toggle("点击左右两侧翻页", isOn: $store.enableTapPageTurn)
+                    if store.enableTapPageTurn {
+                        Toggle("翻转点击翻页方向", isOn: $store.invertTapPageTurn)
+                    }
+                    Toggle("两侧边缘快滑退出漫画", isOn: $store.enableEdgeSwipeDismiss)
                     Toggle("翻页音效与轻触震动", isOn: $store.pageTurnSoundEnabled)
                     Toggle("仿真卷页书脊立体中缝阴影", isOn: $store.showSpineShadowInCurl)
                 } header: {

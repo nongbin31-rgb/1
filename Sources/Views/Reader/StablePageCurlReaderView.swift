@@ -29,6 +29,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
     @Binding public var currentPageIndex: Int
     public var externalJumpNonce: Int = 0
     public let onSingleTap: () -> Void
+    public var onTapLocation: ((CGFloat, Bool) -> Void)? = nil
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
     public var onPageReady: ((Int) -> Void)? = nil
@@ -54,6 +55,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         currentPageIndex: Binding<Int>,
         externalJumpNonce: Int = 0,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onStatusUpdate: @escaping (String) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
         onPageReady: ((Int) -> Void)? = nil
@@ -78,6 +80,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         self._currentPageIndex = currentPageIndex
         self.externalJumpNonce = externalJumpNonce
         self.onSingleTap = onSingleTap
+        self.onTapLocation = onTapLocation
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
         self.onPageReady = onPageReady
@@ -99,6 +102,12 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         pageVC.view.backgroundColor = (background == .immersive || background == .texture) ? .clear : .black
         pageVC.dataSource = context.coordinator
         pageVC.delegate = context.coordinator
+
+        // 禁用 UIPageViewController(.pageCurl) 内置的左右边缘点击翻页手势，
+        // 保留 UIPanGestureRecognizer 拖拽卷页，将点击热区与方向翻转权统一收口到 ReaderView。
+        for recognizer in pageVC.gestureRecognizers where recognizer is UITapGestureRecognizer {
+            recognizer.isEnabled = false
+        }
 
         context.coordinator.pageViewController = pageVC
 
@@ -289,7 +298,16 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
                 textureTarget: parent.textureTarget,
                 imageOnlyBackdrop: parent.imageOnlyBackdrop,
                 showDividingLine: parent.showDividingLine,
-                onSingleTap: parent.onSingleTap,
+                onSingleTap: { [weak self] in
+                    self?.parent.onSingleTap()
+                },
+                onTapLocation: { [weak self] normalizedX, isZoomed in
+                    if let handler = self?.parent.onTapLocation {
+                        handler(normalizedX, isZoomed)
+                    } else {
+                        self?.parent.onSingleTap()
+                    }
+                },
                 onStatusUpdate: parent.onStatusUpdate,
                 onImageLoaded: { [weak self] img in
                     if index == self?.parent.currentPageIndex {

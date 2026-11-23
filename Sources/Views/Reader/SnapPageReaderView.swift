@@ -43,6 +43,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
     @Binding public var currentPageIndex: Int
     public var externalJumpNonce: Int = 0
     public let onSingleTap: () -> Void
+    public var onTapLocation: ((CGFloat, Bool) -> Void)? = nil
     public let onStatusUpdate: (String) -> Void
     public var onImageLoaded: ((UIImage) -> Void)? = nil
     public var onPageReady: ((Int) -> Void)? = nil
@@ -67,6 +68,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         currentPageIndex: Binding<Int>,
         externalJumpNonce: Int = 0,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onStatusUpdate: @escaping (String) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
         onPageReady: ((Int) -> Void)? = nil
@@ -90,6 +92,7 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
         self._currentPageIndex = currentPageIndex
         self.externalJumpNonce = externalJumpNonce
         self.onSingleTap = onSingleTap
+        self.onTapLocation = onTapLocation
         self.onStatusUpdate = onStatusUpdate
         self.onImageLoaded = onImageLoaded
         self.onPageReady = onPageReady
@@ -185,7 +188,16 @@ public struct SnapPageReaderView: UIViewControllerRepresentable {
                 textureGrainDensity: parent.textureGrainDensity,
                 textureTarget: parent.textureTarget,
                 imageOnlyBackdrop: parent.imageOnlyBackdrop,
-                onSingleTap: parent.onSingleTap,
+                onSingleTap: { [weak self] in
+                    self?.parent.onSingleTap()
+                },
+                onTapLocation: { [weak self] normalizedX, isZoomed in
+                    if let handler = self?.parent.onTapLocation {
+                        handler(normalizedX, isZoomed)
+                    } else {
+                        self?.parent.onSingleTap()
+                    }
+                },
                 onStatusUpdate: parent.onStatusUpdate,
                 onZoomChanged: { [weak collectionView] scale in
                     // 核心手势隔离：当单页处于放大状态时，锁死外层水平翻页手势，杜绝冲突！
@@ -568,6 +580,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
     private var currentTextureTarget: ReaderTextureTarget = .both
     private var currentImageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     private var currentOnSingleTap: (() -> Void)?
+    private var currentOnTapLocation: ((CGFloat, Bool) -> Void)?
     private var currentOnStatusUpdate: ((String) -> Void)?
     private var currentOnZoomChanged: ((CGFloat) -> Void)?
     private var currentOnImageLoaded: ((UIImage) -> Void)?
@@ -601,6 +614,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         textureTarget: ReaderTextureTarget = .both,
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: @escaping (CGFloat) -> Void,
         onImageLoaded: ((UIImage) -> Void)? = nil,
@@ -621,6 +635,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
         self.currentTextureTarget = textureTarget
         self.currentImageOnlyBackdrop = imageOnlyBackdrop
         self.currentOnSingleTap = onSingleTap
+        self.currentOnTapLocation = onTapLocation
         self.currentOnStatusUpdate = onStatusUpdate
         self.currentOnZoomChanged = onZoomChanged
         self.currentOnImageLoaded = onImageLoaded
@@ -781,6 +796,7 @@ final class SnapPageHostingCell: UICollectionViewCell {
             textureTarget: currentTextureTarget,
             imageOnlyBackdrop: currentImageOnlyBackdrop,
             onSingleTap: currentOnSingleTap ?? {},
+            onTapLocation: currentOnTapLocation,
             onStatusUpdate: currentOnStatusUpdate ?? { _ in },
             onZoomChanged: currentOnZoomChanged,
             onImageLoaded: currentOnImageLoaded,

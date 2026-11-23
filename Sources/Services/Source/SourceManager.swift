@@ -43,6 +43,15 @@ public final class AppStore: ObservableObject {
     @Published public var showSpineShadowInCurl: Bool = true {
         didSet { save(showSpineShadowInCurl, key: Keys.spineShadow) }
     }
+    @Published public var enableTapPageTurn: Bool = true {
+        didSet { save(enableTapPageTurn, key: Keys.enableTapPageTurn) }
+    }
+    @Published public var invertTapPageTurn: Bool = false {
+        didSet { save(invertTapPageTurn, key: Keys.invertTapPageTurn) }
+    }
+    @Published public var enableEdgeSwipeDismiss: Bool = true {
+        didSet { save(enableEdgeSwipeDismiss, key: Keys.enableEdgeSwipeDismiss) }
+    }
     @Published public var preferredReaderBackground: ReaderBackground = .followSystem {
         didSet { save(preferredReaderBackground, key: Keys.readerBackground) }
     }
@@ -136,6 +145,9 @@ public final class AppStore: ObservableObject {
         static let turningEffect = "keda_online_turning_effect_v1"
         static let soundEnabled = "keda_online_sound_enabled_v1"
         static let spineShadow = "keda_online_spine_shadow_v1"
+        static let enableTapPageTurn = "keda_online_enable_tap_page_turn_v1"
+        static let invertTapPageTurn = "keda_online_invert_tap_page_turn_v1"
+        static let enableEdgeSwipeDismiss = "keda_online_enable_edge_swipe_dismiss_v1"
         static let readerBackground = "keda_online_reader_background_v1"
         static let readerTextureType = "keda_online_reader_texture_type_v1"
         static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
@@ -218,6 +230,9 @@ public final class AppStore: ObservableObject {
         self.pageTurningEffect = load(key: Keys.turningEffect) ?? .curling
         self.pageTurnSoundEnabled = load(key: Keys.soundEnabled) ?? true
         self.showSpineShadowInCurl = load(key: Keys.spineShadow) ?? true
+        self.enableTapPageTurn = load(key: Keys.enableTapPageTurn) ?? true
+        self.invertTapPageTurn = load(key: Keys.invertTapPageTurn) ?? false
+        self.enableEdgeSwipeDismiss = load(key: Keys.enableEdgeSwipeDismiss) ?? true
         self.preferredReaderBackground = load(key: Keys.readerBackground) ?? .followSystem
         self.readerTextureType = load(key: Keys.readerTextureType) ?? .classic
         self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4

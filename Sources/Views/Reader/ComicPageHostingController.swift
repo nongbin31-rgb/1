@@ -21,6 +21,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
     private var imageOnlyBackdrop: ReaderImageOnlyBackdrop
     private var showDividingLine: Bool
     private var onSingleTap: () -> Void
+    private var onTapLocation: ((CGFloat, Bool) -> Void)?
     private var onStatusUpdate: (String) -> Void
     private var onZoomChanged: ((CGFloat) -> Void)?
     private var onImageLoaded: ((UIImage) -> Void)?
@@ -45,6 +46,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil,
         onImageLoaded: ((UIImage) -> Void)? = nil,
@@ -68,6 +70,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
+        self.onTapLocation = onTapLocation
         self.onStatusUpdate = onStatusUpdate
         self.onZoomChanged = onZoomChanged
         self.onImageLoaded = onImageLoaded
@@ -91,6 +94,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
+            onTapLocation: onTapLocation,
             onStatusUpdate: onStatusUpdate,
             onZoomChanged: onZoomChanged,
             onImageLoaded: onImageLoaded,
@@ -243,6 +247,7 @@ public final class ComicPageHostingController: UIHostingController<ComicPageCell
             imageOnlyBackdrop: imageOnlyBackdrop,
             showDividingLine: showDividingLine,
             onSingleTap: onSingleTap,
+            onTapLocation: onTapLocation,
             onStatusUpdate: onStatusUpdate,
             onZoomChanged: onZoomChanged,
             onImageLoaded: onImageLoaded,

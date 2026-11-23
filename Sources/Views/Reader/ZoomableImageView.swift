@@ -118,6 +118,7 @@ public struct ZoomableImageView: UIViewRepresentable {
     var textureGrainDensity: Double = 1.0
     var applyTextureToImage: Bool = false
     let onSingleTap: () -> Void
+    var onTapLocation: ((CGFloat, Bool) -> Void)? = nil
     var onZoomChanged: ((CGFloat) -> Void)? = nil
 
     public init(
@@ -128,6 +129,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         textureGrainDensity: Double = 1.0,
         applyTextureToImage: Bool = false,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onZoomChanged: ((CGFloat) -> Void)? = nil
     ) {
         self.image = image
@@ -137,11 +139,12 @@ public struct ZoomableImageView: UIViewRepresentable {
         self.textureGrainDensity = textureGrainDensity
         self.applyTextureToImage = applyTextureToImage
         self.onSingleTap = onSingleTap
+        self.onTapLocation = onTapLocation
         self.onZoomChanged = onZoomChanged
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(onSingleTap: onSingleTap, onZoomChanged: onZoomChanged)
+        Coordinator(onSingleTap: onSingleTap, onTapLocation: onTapLocation, onZoomChanged: onZoomChanged)
     }
 
     public func makeUIView(context: Context) -> UIScrollView {
@@ -168,7 +171,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         doubleTap.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTap)
 
-        let singleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap))
+        let singleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap(_:)))
         singleTap.numberOfTapsRequired = 1
         singleTap.require(toFail: doubleTap)
         scrollView.addGestureRecognizer(singleTap)
@@ -186,6 +189,7 @@ public struct ZoomableImageView: UIViewRepresentable {
 
     public func updateUIView(_ uiView: UIScrollView, context: Context) {
         context.coordinator.onSingleTap = onSingleTap
+        context.coordinator.onTapLocation = onTapLocation
         context.coordinator.onZoomChanged = onZoomChanged
         if let imageView = context.coordinator.imageView {
             if imageView.image !== image {
@@ -211,6 +215,7 @@ public struct ZoomableImageView: UIViewRepresentable {
         weak var scrollView: UIScrollView?
         weak var imageView: ComicContainerImageView?
         var onSingleTap: () -> Void
+        var onTapLocation: ((CGFloat, Bool) -> Void)?
         var onZoomChanged: ((CGFloat) -> Void)?
 
         private var activeTexture: ReaderTextureType?
@@ -218,8 +223,13 @@ public struct ZoomableImageView: UIViewRepresentable {
         private var activeGrainDensity: Double = 1.0
         private var activeApplyToImage: Bool = false
 
-        init(onSingleTap: @escaping () -> Void, onZoomChanged: ((CGFloat) -> Void)?) {
+        init(
+            onSingleTap: @escaping () -> Void,
+            onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
+            onZoomChanged: ((CGFloat) -> Void)?
+        ) {
             self.onSingleTap = onSingleTap
+            self.onTapLocation = onTapLocation
             self.onZoomChanged = onZoomChanged
         }
 
@@ -397,8 +407,16 @@ public struct ZoomableImageView: UIViewRepresentable {
             onZoomChanged?(scrollView.zoomScale)
         }
 
-        @objc func handleSingleTap() {
-            onSingleTap()
+        @objc func handleSingleTap(_ gesture: UITapGestureRecognizer) {
+            if let onTapLocation {
+                let width = max(scrollView?.bounds.width ?? UIScreen.main.bounds.width, 1)
+                let locX = gesture.location(in: scrollView).x
+                let normalizedX = min(max(locX / width, 0), 1)
+                let isZoomed = (scrollView?.zoomScale ?? 1.0) > 1.05
+                onTapLocation(normalizedX, isZoomed)
+            } else {
+                onSingleTap()
+            }
         }
 
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
