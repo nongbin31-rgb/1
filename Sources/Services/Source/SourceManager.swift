@@ -165,14 +165,14 @@ public final class AppStore: ObservableObject {
         let builtinSources: [MangaSourceConfig] = [
             MangaSourceConfig(
                 id: "builtin-jm-source",
-                name: "禁漫天堂",
+                name: "漫画源 J",
                 kind: .jm,
                 baseURL: "https://www.cdnbtd.cc",
                 isEnabled: true
             ),
             MangaSourceConfig(
                 id: "builtin-wnacg-source",
-                name: "绅士漫画",
+                name: "漫画源 W",
                 kind: .wnacg,
                 baseURL: "https://www.cloudwn.shop",
                 isEnabled: true
@@ -188,6 +188,13 @@ public final class AppStore: ObservableObject {
 
         let savedSources: [MangaSourceConfig]? = load(key: Keys.sources)
         if var existing = savedSources, !existing.isEmpty {
+            for i in existing.indices {
+                if existing[i].id == "builtin-jm-source" && existing[i].name != "漫画源 J" {
+                    existing[i].name = "漫画源 J"
+                } else if existing[i].id == "builtin-wnacg-source" && existing[i].name != "漫画源 W" {
+                    existing[i].name = "漫画源 W"
+                }
+            }
             for builtin in builtinSources.reversed() where !existing.contains(where: { $0.id == builtin.id }) {
                 existing.insert(builtin, at: 0)
             }

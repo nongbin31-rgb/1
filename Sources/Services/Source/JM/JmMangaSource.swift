@@ -1,6 +1,6 @@
 import Foundation
 
-/// 禁漫天堂 (JMComic) 标准在线图源适配器
+/// 在线漫画源 J 标准在线图源适配器
 public struct JmMangaSource: MangaSourceProtocol {
     public let config: MangaSourceConfig
 

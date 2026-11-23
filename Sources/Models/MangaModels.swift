@@ -22,9 +22,9 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendab
         case .genericJSON:
             return "自定义 JSON 接口源"
         case .jm:
-            return "禁漫天堂 (JMComic)"
+            return "漫画源 J"
         case .wnacg:
-            return "绅士漫画 (WNACG)"
+            return "漫画源 W"
         }
     }
 
@@ -563,8 +563,8 @@ public enum MangaTitleMetadataParser {
             guard !tag.isEmpty,
                   tag.count <= 14,
                   !MangaSerialStatusHelper.isStatusTag(tag),
-                  tag != "绅士漫画",
-                  tag != "禁漫单行本" else {
+                  tag != "精选",
+                  tag != "单行本" else {
                 return
             }
             let key = tag.lowercased()
@@ -618,7 +618,7 @@ public enum MangaSerialStatusHelper {
     )
     private static let singleVolumeCategoryKeywords: [String] = [
         "单本", "單本", "单行本", "單行本", "同人", "短篇", "杂志", "雜誌",
-        "画集", "畫集", "cg", "cosplay", "写真", "寫真", "禁漫单行本", "绅士漫画", "紳士漫畫"
+        "画集", "畫集", "cg", "cosplay", "写真", "寫真", "精选"
     ]
     private static let ongoingCategoryKeywords: [String] = [
         "韩漫", "韓漫", "连载", "連載"
@@ -1085,7 +1085,7 @@ public enum AppColorSchemePreference: String, Codable, CaseIterable, Identifiabl
     #endif
 }
 
-/// 阅读背景模式（100% 对齐原版可达阅读器 ReaderBackground）
+/// 阅读背景模式（ReaderBackground）
 public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable {
     case followSystem = 0   // 跟随系统主题
     case light = 1          // 白色模式
@@ -1116,7 +1116,7 @@ public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable
     }
 }
 
-/// 真实纸张与材质纹理类型（严格对齐原版可达阅读器 Kedamanga 规范）
+/// 真实纸张与材质纹理类型
 public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
     case classic        = "Texture_0_classic_paper"       // 经典纸张
     case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸

@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import UIKit
 
-/// 禁漫图片元数据（从 URL fragment `#jm=<photoId>,<scrambleId>` 解析）
+/// 分块图片元数据（从 URL fragment 解析）
 public struct JmImageMeta: Sendable {
     public let cleanURL: String
     public let photoId: Int
@@ -57,7 +57,7 @@ public struct JmImageMeta: Sendable {
     }
 }
 
-/// 禁漫天堂图片切片还原器（基于 CoreGraphics 块级拷贝）
+/// 图片切片还原器（基于 CoreGraphics 块级拷贝）
 public enum JmImageDescrambler {
     public static func descrambleIfNeeded(
         data: Data,

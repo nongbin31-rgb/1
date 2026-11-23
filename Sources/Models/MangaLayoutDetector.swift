@@ -85,7 +85,7 @@ public enum MangaLayoutDetector {
         }
 
         // 3. 业务图源默认启发式规则：
-        // 在禁漫天堂 (JM) 或绅士漫画 (WNACG) 中，除了韩漫分类，95% 以上都是日漫同人志或单行本
+        // 在在线漫画源中，除了韩漫分类，多数为日漫同人志或单行本
         if manga.sourceID.contains("jm") || manga.sourceID.contains("wnacg") {
             return .japaneseManga
         }

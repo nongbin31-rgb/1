@@ -1,6 +1,6 @@
 import Foundation
 
-/// 绅士漫画 (WNACG) 标准在线图源适配器
+/// 在线漫画源 W 标准在线图源适配器
 public struct WnacgMangaSource: MangaSourceProtocol {
     public let config: MangaSourceConfig
 

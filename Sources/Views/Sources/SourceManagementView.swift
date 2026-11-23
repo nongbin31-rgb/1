@@ -57,7 +57,7 @@ public struct SourceManagementView: View {
                         Label("查看自定义 JSON 在线源接口规范", systemImage: "doc.text")
                     }
                 } footer: {
-                    Text("内置已集成 禁漫天堂 (JMComic) 与 绅士漫画 (WNACG) 双源并发竞速与自动节点自愈，所有在线源均通过标准 MangaSourceProtocol 接入。")
+                    Text("内置已集成多线路在线图源并发竞速与自动节点自愈，所有在线源均通过标准 MangaSourceProtocol 接入。")
                 }
             }
             .navigationTitle("在线源")
@@ -82,7 +82,7 @@ public struct SourceManagementView: View {
             .alert("节点缓存已重置", isPresented: $showingResetAlert) {
                 Button("好的", role: .cancel) {}
             } message: {
-                Text("下次请求将重新竞速测通最优的 JM 与 WNACG 镜像节点。")
+                Text("下次请求将重新竞速测通最优镜像节点。")
             }
         }
     }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 画质增强配置与实时对比交互视图（100% 复刻可达阅读器 ReaderImageUpscalerConfigView）
+/// 画质增强配置与实时对比交互视图（ReaderImageUpscalerConfigView）
 public struct ReaderImageUpscalerConfigView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: AppStore
@@ -454,7 +454,7 @@ public struct ReaderImageUpscalerConfigView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("关于 AI 画质增强")
                         .font(.title2.bold())
-                    Text("本阅读器内置了与《可达阅读器》完全一致的端侧双轨超分辨率管线：")
+                    Text("本阅读器内置了端侧双轨超分辨率画质增强管线：")
                         .foregroundColor(.secondary)
 
                     VStack(alignment: .leading, spacing: 8) {

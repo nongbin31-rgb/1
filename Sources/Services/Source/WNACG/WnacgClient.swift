@@ -1,6 +1,6 @@
 import Foundation
 
-/// 绅士漫画 (WNACG) 客户端
+/// 在线漫画源 W 客户端
 /// 集成官方 App JSON API 主链路、免盾镜像池 3 路并发竞速容灾与 SwiftSoup DOM 解析回退
 public actor WnacgClient {
     public static let shared = WnacgClient()
@@ -144,7 +144,7 @@ public actor WnacgClient {
             index = end
         }
 
-        throw lastError ?? MangaSourceError.decodingFailed("绅士漫画所有官方线路均不可用")
+        throw lastError ?? MangaSourceError.decodingFailed("所有网络线路均不可用")
     }
 
     private func executeApiWithFailover<T: Sendable>(
@@ -201,7 +201,7 @@ public actor WnacgClient {
             index = end
         }
 
-        throw lastError ?? MangaSourceError.decodingFailed("绅士漫画官方 API 线路均不可用")
+        throw lastError ?? MangaSourceError.decodingFailed("所有 API 线路均不可用")
     }
 
     private nonisolated func getSafeHtml(
@@ -275,11 +275,11 @@ public actor WnacgClient {
             throw MangaSourceError.httpError(http.statusCode)
         }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw MangaSourceError.decodingFailed("WNACG API 返回格式异常")
+            throw MangaSourceError.decodingFailed("API 返回格式异常")
         }
         let codeStr = obj["code"].map { String(describing: $0) } ?? ""
         if codeStr != "0" {
-            let msg = obj["msg"].map { String(describing: $0) } ?? "WNACG API 返回错误码 \(codeStr)"
+            let msg = obj["msg"].map { String(describing: $0) } ?? "API 返回错误码 \(codeStr)"
             throw MangaSourceError.decodingFailed(msg)
         }
         return data
@@ -287,7 +287,7 @@ public actor WnacgClient {
 
     private func decodeJsonObject(_ data: Data) throws -> [String: Any] {
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw MangaSourceError.decodingFailed("WNACG API 返回格式异常")
+            throw MangaSourceError.decodingFailed("API 返回格式异常")
         }
         return obj
     }
@@ -361,7 +361,7 @@ public actor WnacgClient {
 
         let directInfo = extractDirectAid(from: trimmed)
 
-        // 显式输入 wnacg123456 / aid-123456 时优先直达作品详情（仅第 1 页）
+        // 显式输入 aid 编号时优先直达作品详情（仅第 1 页）
         if let directInfo, directInfo.hasExplicitPrefix {
             if page > 1 { return [] }
             let stub = Manga(id: directInfo.id, sourceID: sourceID, title: "")
@@ -474,7 +474,7 @@ public actor WnacgClient {
                 sourceID: sourceID,
                 fallbackManga: manga
             ) else {
-                throw MangaSourceError.decodingFailed("WNACG 详情页面解析失败")
+                throw MangaSourceError.decodingFailed("详情页面解析失败")
             }
             return parsed
         }
@@ -681,7 +681,7 @@ public actor WnacgClient {
             let date = cleanString(entry["time"])
             let chapterText = pages > 0 ? "\(pages) P\(date.isEmpty ? "" : " · \(date)")" : date
             let category = WnacgParser.normalizeCategory(cleanString(entry["category"]))
-            let finalCategoryTag = category.isEmpty ? "绅士漫画" : category
+            let finalCategoryTag = category.isEmpty ? "精选" : category
             let statusText = MangaSerialStatusHelper.inferStatusText(
                 title: title,
                 latestChapter: chapterText,
@@ -696,7 +696,7 @@ public actor WnacgClient {
                     id: id,
                     sourceID: sourceID,
                     title: title,
-                    author: "绅士本",
+                    author: "佚名",
                     coverURL: WnacgParser.cleanWnacgUrl(cleanString(entry["cover"]), baseUrl: currentBaseUrl),
                     coverHeaders: ["Referer": "https://www.wnacg.com/"],
                     summary: chapterText,

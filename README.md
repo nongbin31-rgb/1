@@ -1,4 +1,4 @@
-# 清阅在线漫画 (KedaOnlineReader)
+# FristLove - iOS 高性能在线漫画阅读器
 
 纯原生 iOS / iPadOS（Swift + SwiftUI，iOS 16+）在线漫画阅读器。  
 以**在线图源**为架构基底，内置完整的 **Anime4K v4（Metal 多 Pass 实时超分）** 与 **Waifu2x（CoreML 端侧 2x 超分）** 双引擎管线，支持在 Windows 环境下通过 GitHub Actions 自动编译打包未签名 `.ipa` 并在真机自签安装。
@@ -11,8 +11,8 @@
    - 统一 `MangaSourceProtocol` 抽象，内置：
      - **内置在线演示源**：含低清 JPEG 压缩线稿/彩漫测试页（640×960）以及真实 HTTPS 在线图片流，装上即可零配置实测超分效果。
      - **通用 JSON 在线源**：只需填入你的 REST API `Base URL` 及可选 `Authorization` / `Referer` 请求头，即可对接自建图源服务。
-2. **双引擎经典超分管线（100% 完封不动复刻可达阅读器原包技术规格）**
-   - **资产完备集成**：内置从《可达阅读器_1.7.2_酷卡.ipa》逆向提取的完整资产包：
+2. **双引擎超分辨率画质增强管线**
+   - **资产完备集成**：内置完整的超分辨率离线模型与着色器资产包：
      - `waifu2x.framework`（内含 18 个 Apple CoreML 优化神经网络模型包 + `default.metallib` 嵌入式计算着色器 + arm64 二进制）
      - 48 个 Anime4K 官方专用 GLSL 片元着色器 + 1 个预编译 Metal 库 `default.metallib`
    - **Anime4K（Metal 实时级）**：
@@ -23,10 +23,10 @@
      - 完整映射 10 组核心 2x 模型：漫画类（无降噪、降噪 0~3）与照片类（无降噪、降噪 0~3）
      - 采用 Float16 半精度加速，优先直连 Apple Neural Engine (ANE) 硬件单元
      - 严格串行防踩踏锁调度与 156×156 分块重叠拼接消缝算法
-   - **原版同款安全与平滑策略**：
+   - **画质增强安全与平滑策略**：
      - **智能总像素保护与解除限制开关**：默认按总像素上限（`width × height <= 1200 万像素`）保护，替代旧版单边 2500px 截断，兼容 `800×8000` 等模糊条漫长图；同时配套 Metal 中间纹理即时释放与零拷贝读回优化，并在设置/阅读器中提供「解除超分尺寸限制」开关（Anime4K 单边仍受 Metal 8192px 硬件上限约束）
      - **增强后平滑淡入（Cross-fade）**：翻页时优先秒显原图，超分完成后 0.35s 柔和过渡，保证 60/120 FPS 翻页手感零卡顿
-   - **可达阅读器同款高级配置与分屏对比视图**：
+   - **高级配置与分屏对比视图**：
      - 内置 `ReaderImageUpscalerConfigView`，支持左右拖拽对比手柄、双指缩放查看原图与超分细节、耗时统计（`运行时长：%@s`）与模式说明弹窗
 3. **沉浸式阅读器与双轨拟真翻页引擎**
    - **双轨独立翻页流水线**：
@@ -42,15 +42,12 @@
 ## Windows 零 Mac 硬件编译与自签安装教程
 
 ### 第一步：推送代码到 GitHub 仓库
-1. 在 GitHub 上新建一个**私有仓库**（Private Repository）。
-2. 在 Windows 的 PowerShell 中进入 `KedaOnlineReader` 目录并推送代码：
+1. 在 GitHub 上新建一个仓库。
+2. 在 Windows 的 PowerShell 中进入项目目录并推送代码：
    ```powershell
-   cd e:\App\Keda\KedaOnlineReader
-   git init -b main
    git add .
-   git commit -m "init iOS online manga reader with Anime4K and Waifu2x"
-   git remote add origin https://github.com/<你的用户名>/<你的仓库名>.git
-   git push -u origin main
+   git commit -m "update reader docs and sources"
+   git push origin main
    ```
 
 ### 第二步：云端自动编译出 `.ipa`
@@ -60,11 +57,11 @@
 ### 第三步：在 Windows 上自签安装到 iPhone / iPad
 任选其一即可：
 - **方式 1：Sideloadly（最简单）**
-  1. Windows 安装 iTunes（官网非微软商店版）与 [Sideloadly](https://sideloadly.io/)。
-  2. 数据线连接 iPhone/iPad，把 `KedaOnlineReader-unsigned.ipa` 拖入 Sideloadly，登录你的 Apple ID 点击 **Start**。
-  3. 安装完成后在手机进入 `设置 -> 通用 -> VPN 与设备管理` 信任证书，并在 `设置 -> 隐私与安全性` 开启「开发者模式」。
+   1. Windows 安装 iTunes（官网非微软商店版）与 [Sideloadly](https://sideloadly.io/)。
+   2. 数据线连接 iPhone/iPad，把 `KedaOnlineReader-unsigned.ipa` 拖入 Sideloadly，登录你的 Apple ID 点击 **Start**。
+   3. 安装完成后在手机进入 `设置 -> 通用 -> VPN 与设备管理` 信任证书，并在 `设置 -> 隐私与安全性` 开启「开发者模式」。
 - **方式 2：SideStore / AltStore（支持 Wi-Fi 自动续签）**
-  - 首次通过 Windows 的 AltServer 安装 SideStore 后，后续可直接在手机内用 Wi-Fi 导入并每 7 天自动续签，无需再连电脑。
+   - 首次通过 Windows 的 AltServer 安装 SideStore 后，后续可直接在手机内用 Wi-Fi 导入并每 7 天自动续签，无需再连电脑。
 
 ---
 

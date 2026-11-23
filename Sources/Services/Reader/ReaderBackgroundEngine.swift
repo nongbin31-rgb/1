@@ -2,7 +2,7 @@
 //  ReaderBackgroundEngine.swift
 //  KedaOnlineReader
 //
-//  复刻自：可达阅读器 (Kedamanga) 拟真纸质与多模式阅读背景系统
+//  拟真纸质与多模式阅读背景系统
 //  涵盖 5 种背景模式、6 套真实物理纸张材质、正片叠底复合滤镜与立体书脊阴影
 //
 
