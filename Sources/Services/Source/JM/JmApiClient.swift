@@ -745,7 +745,7 @@ public actor JmApiClient {
         let title = cleanField(raw["name"]) ?? fallbackTitle ?? "JM \(id)"
         let rawAuthor = raw["author"] ?? raw["authors"]
         let author = parseAuthor(rawAuthor, fallbackTitle: title)
-        let category = extractCategoryTitle(raw["category"], raw["category_sub"]) ?? "单行本"
+        let category = extractCategoryTitle(raw["category"], raw["category_sub"]) ?? "禁漫单行本"
         let latestChapter = cleanField(raw["latest_ep_name"])
 
         var tags: [String] = [category]

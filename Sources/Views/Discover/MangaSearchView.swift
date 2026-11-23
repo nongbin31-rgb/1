@@ -281,9 +281,9 @@ public struct MangaSearchView: View {
         if let single = activeSingleSource {
             switch single.kind {
             case .jm:
-                return "搜漫画名、作者、标签或漫画编号"
+                return "搜漫画名、作者、标签或 JM 编号"
             case .wnacg:
-                return "搜漫画名、标签或作品 AID"
+                return "搜本子名、作者、标签或 AID 编号"
             case .demo:
                 return "搜索内置演示漫画（如：线稿 / 彩漫）"
             case .genericJSON:
@@ -449,10 +449,10 @@ public struct MangaSearchView: View {
             VStack(alignment: .leading, spacing: 5) {
                 tipRow("支持按漫画标题、作者名或题材标签关键词搜索。")
                 if enabledSources.contains(where: { $0.kind == .jm }) {
-                    tipRow("支持输入漫画编号（纯数字或带前缀编号）精准直达。")
+                    tipRow("禁漫天堂支持输入车牌号（如 JM422866 或纯数字编号）精准直达。")
                 }
                 if enabledSources.contains(where: { $0.kind == .wnacg }) {
-                    tipRow("支持关键词自动容错分词及 AID 编号直达。")
+                    tipRow("绅士漫画支持关键词自动容错分词及 AID 编号直达。")
                 }
                 if enabledSources.count > 1 {
                     tipRow("选择「全部源」可并发搜索所有已启用在线源，并随时切入单源翻页。")

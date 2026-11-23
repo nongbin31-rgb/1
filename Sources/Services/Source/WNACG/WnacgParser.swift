@@ -116,7 +116,7 @@ public enum WnacgParser {
             let coverURL = cleanWnacgUrl(rawCover, baseUrl: baseUrl)
 
             let picBoxClass = (try? el.select(".pic_box").first()?.attr("class")) ?? ""
-            let category = extractCategoryTagFromClass(picBoxClass) ?? "精选"
+            let category = extractCategoryTagFromClass(picBoxClass) ?? "绅士漫画"
 
             var infoCol = ((try? el.select(".info_col").first()?.text()) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,7 +135,7 @@ public enum WnacgParser {
                     id: aid,
                     sourceID: sourceID,
                     title: title,
-                    author: "佚名",
+                    author: "绅士本",
                     coverURL: coverURL,
                     coverHeaders: ["Referer": "\(baseUrl)/"],
                     summary: infoCol,
