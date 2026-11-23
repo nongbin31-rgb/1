@@ -465,6 +465,16 @@ public struct ReaderView: View {
                 chromeOverlay
                     .zIndex(12)
 
+                // 两侧物理边缘快速滑入退出漫画（原生 UIScreenEdgePanGestureRecognizer，零干扰翻页）
+                ReaderEdgeSwipeDismissOverlay(
+                    isEnabled: store.enableEdgeSwipeDismiss,
+                    isBlocked: isScrubbingProgress || isCompareMode,
+                    onDismiss: {
+                        dismiss()
+                    }
+                )
+                .zIndex(14)
+
                 // 当处于对比模式且导航栏收起时，提供常驻半透明快捷退出按钮，彻底解决无法退出的死锁
                 if isCompareMode {
                     VStack {
@@ -827,6 +837,9 @@ public struct ReaderView: View {
                         showChrome.toggle()
                     }
                 },
+                onTapLocation: { normalizedX, isZoomed in
+                    handleHorizontalPageTap(normalizedX: normalizedX, isZoomed: isZoomed)
+                },
                 onStatusUpdate: { text in
                     currentHUDText = text
                 },
@@ -866,6 +879,9 @@ public struct ReaderView: View {
                         showChrome.toggle()
                     }
                 },
+                onTapLocation: { normalizedX, isZoomed in
+                    handleHorizontalPageTap(normalizedX: normalizedX, isZoomed: isZoomed)
+                },
                 onStatusUpdate: { text in
                     currentHUDText = text
                 },
@@ -904,6 +920,9 @@ public struct ReaderView: View {
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                         showChrome.toggle()
                     }
+                },
+                onTapLocation: { normalizedX, isZoomed in
+                    handleHorizontalPageTap(normalizedX: normalizedX, isZoomed: isZoomed)
                 },
                 onStatusUpdate: { text in
                     currentHUDText = text
@@ -1226,6 +1245,58 @@ public struct ReaderView: View {
         guard !hasInitializedLayout else { return }
         activeLayoutMode = store.layoutMode(for: manga)
         hasInitializedLayout = true
+    }
+
+    /// 水平翻页模式（日漫 / 常规）三段式点击热区处理：
+    /// 左侧 [0, 0.30) / 中间 [0.30, 0.70] 唤出工具栏 / 右侧 (0.70, 1.0]
+    private func handleHorizontalPageTap(normalizedX: CGFloat, isZoomed: Bool) {
+        // 工具栏展开时，点击屏幕任意位置优先收起工具栏，避免误翻页
+        if showChrome {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
+                showChrome = false
+            }
+            return
+        }
+
+        // 未启用点击翻页、处于放大态、对比态或仅单页时，退回普通单击唤出工具栏
+        guard store.enableTapPageTurn,
+              activeLayoutMode != .verticalWebtoon,
+              !isCompareMode,
+              !isZoomed,
+              pages.count > 1 else {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
+                showChrome.toggle()
+            }
+            return
+        }
+
+        let isLeftZone = normalizedX < 0.30
+        let isRightZone = normalizedX > 0.70
+        guard isLeftZone || isRightZone else {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
+                showChrome.toggle()
+            }
+            return
+        }
+
+        // 默认：日漫 (RTL) 左=下一页、右=上一页；常规 (LTR) 左=上一页、右=下一页
+        // 开启翻转方向开关后左右语义互换
+        let baseLeftIsNext = (activeLayoutMode == .pagedRTL)
+        let effectiveLeftIsNext = store.invertTapPageTurn ? !baseLeftIsNext : baseLeftIsNext
+        let goNext = isLeftZone ? effectiveLeftIsNext : !effectiveLeftIsNext
+        let targetIndex = currentPageIndex + (goNext ? 1 : -1)
+
+        guard pages.indices.contains(targetIndex) else {
+            #if canImport(UIKit)
+            let generator = UIImpactFeedbackGenerator(style: .rigid)
+            generator.impactOccurred(intensity: 0.65)
+            #endif
+            currentHUDText = goNext ? "已是本话最后一页" : "已是本话第 1 页"
+            return
+        }
+
+        // 仅更新 currentPageIndex（不递增 externalJumpNonce），驱动底层容器执行对应翻页动画与音效
+        currentPageIndex = targetIndex
     }
 
     private var readerProgressStyleMenuButton: some View {
@@ -1846,12 +1917,47 @@ private struct ReaderUpscalerSheet: View {
                             }
                         }
 
+                        Toggle("点击左右两侧翻页", isOn: $store.enableTapPageTurn)
+
+                        if store.enableTapPageTurn {
+                            let baseLeftIsNext = (layoutMode == .pagedRTL)
+                            let effectiveLeftIsNext = store.invertTapPageTurn ? !baseLeftIsNext : baseLeftIsNext
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("点击翻页方向")
+                                        .font(.body)
+                                    Text(effectiveLeftIsNext ? "左→下一页 · 右→上一页" : "左→上一页 · 右→下一页")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        store.invertTapPageTurn.toggle()
+                                    }
+                                    #if canImport(UIKit)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    #endif
+                                } label: {
+                                    Label("翻转方向", systemImage: "arrow.left.arrow.right")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
                         Toggle("翻页音效与轻触震动", isOn: $soundEnabled)
 
                         if turningEffect == .curling {
                             Toggle("书脊中缝立体渐变阴影", isOn: $showSpineShadow)
                         }
                     }
+
+                    Toggle("两侧边缘快滑退出漫画", isOn: $store.enableEdgeSwipeDismiss)
                 } header: {
                     Text("阅读排版与翻页动画")
                 } footer: {

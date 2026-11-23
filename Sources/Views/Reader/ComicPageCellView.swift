@@ -325,6 +325,7 @@ public struct ComicPageCellView: View {
     public let showDividingLine: Bool
     public let filterConfig: ImageFilterConfig
     public let onSingleTap: () -> Void
+    public let onTapLocation: ((CGFloat, Bool) -> Void)?
     public let onStatusUpdate: (String) -> Void
     public var onZoomChanged: ((CGFloat) -> Void)? = nil
     public var onImageLoaded: ((UIImage) -> Void)? = nil
@@ -350,6 +351,7 @@ public struct ComicPageCellView: View {
         imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint,
         showDividingLine: Bool = true,
         onSingleTap: @escaping () -> Void,
+        onTapLocation: ((CGFloat, Bool) -> Void)? = nil,
         onStatusUpdate: @escaping (String) -> Void,
         onZoomChanged: ((CGFloat) -> Void)? = nil,
         onImageLoaded: ((UIImage) -> Void)? = nil,
@@ -372,6 +374,7 @@ public struct ComicPageCellView: View {
         self.imageOnlyBackdrop = imageOnlyBackdrop
         self.showDividingLine = showDividingLine
         self.onSingleTap = onSingleTap
+        self.onTapLocation = onTapLocation
         self.onStatusUpdate = onStatusUpdate
         self.onZoomChanged = onZoomChanged
         self.onImageLoaded = onImageLoaded
@@ -400,6 +403,7 @@ public struct ComicPageCellView: View {
                         textureGrainDensity: textureGrainDensity,
                         applyTextureToImage: background == .texture && (textureTarget == .both || textureTarget == .imageOnly),
                         onSingleTap: onSingleTap,
+                        onTapLocation: onTapLocation,
                         onZoomChanged: onZoomChanged
                     )
                 }
@@ -452,6 +456,11 @@ public struct ComicPageCellView: View {
                     Text("加载第 \(page.index + 1) 页...")
                         .font(.caption)
                         .foregroundStyle(textColorForBackground.opacity(0.8))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onSingleTap()
                 }
             }
         }
