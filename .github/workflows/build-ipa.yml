@@ -97,4 +97,4 @@ jobs:
           git push origin ":refs/tags/${TAG}" 2>/dev/null || true
           gh release create "${TAG}" KedaOnlineReader-unsigned.ipa \
             --title "Latest Build - iOS 26 Liquid Glass (${GITHUB_SHA::7})" \
-            --notes "自动构建的无签名 iOS 26 原生液态玻璃版 IPA（提交 ${GITHUB_SHA::7}），需 iOS 26.0+ 设备安装。"
+            --notes "Automated unsigned iOS 26 build (commit ${GITHUB_SHA::7}). Requires iOS 26.0 or later."
