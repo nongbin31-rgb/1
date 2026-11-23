@@ -738,7 +738,10 @@ public final class ReaderTextureCache: @unchecked Sendable {
         guard let srcBytes = extractRGBABytes(from: squareImg, width: pixelDim, height: pixelDim) else {
             return squareImg
         }
-        let blended = applyOffsetWrapBlend(srcBytes, width: pixelDim, height: pixelDim)
+        // 关键第一步：应用 Retinex 平场低频分离归一化，彻底消除摄影暗角与大尺度倾斜光照
+        let flatBytes = applyFlatFieldNormalization(srcBytes, width: pixelDim, height: pixelDim)
+        // 关键第二步：执行双通道可分离升余弦无缝混合，达到几何上的完美环形平铺无缝
+        let blended = applyOffsetWrapBlend(flatBytes, width: pixelDim, height: pixelDim)
         return makeUIImage(fromRGBABytes: blended, width: pixelDim, height: pixelDim, scale: screenScale) ?? squareImg
     }
 
@@ -844,42 +847,132 @@ public final class ReaderTextureCache: @unchecked Sendable {
         return UIImage(cgImage: outCG, scale: scale, orientation: .up)
     }
 
+    /// 平场低频分离归一化（Flat-Field Normalization via Retinex Division）：
+    /// 将图像分离为宏观低频光照场 L(x, y) 与高频微观物理材质反射率 R(x, y)。
+    /// 通过逐像素除法 R = (I / L) * mean，彻底消除镜头光学暗角与打光不均，
+    /// 同时 100% 完整保留物理纸纤维、纸浆斑点与真实木纹细节。
+    private static func applyFlatFieldNormalization(_ src: [UInt8], width: Int, height: Int) -> [UInt8] {
+        let totalPixels = width * height
+        guard totalPixels > 0 else { return src }
+
+        var rChannel = [Float](repeating: 0, count: totalPixels)
+        var gChannel = [Float](repeating: 0, count: totalPixels)
+        var bChannel = [Float](repeating: 0, count: totalPixels)
+
+        var sumR: Double = 0
+        var sumG: Double = 0
+        var sumB: Double = 0
+
+        for i in 0..<totalPixels {
+            let idx = i * 4
+            let r = Float(src[idx])
+            let g = Float(src[idx + 1])
+            let b = Float(src[idx + 2])
+            rChannel[i] = r
+            gChannel[i] = g
+            bChannel[i] = b
+            sumR += Double(r)
+            sumG += Double(g)
+            sumB += Double(b)
+        }
+
+        let meanR = Float(sumR / Double(totalPixels))
+        let meanG = Float(sumG / Double(totalPixels))
+        let meanB = Float(sumB / Double(totalPixels))
+
+        // 提取宏观光照场的滤波半径（约切片尺寸的 1/4 ~ 1/3，足够滤除纸张高频微观纤维，仅保留镜头暗角与大尺度光照梯度）
+        let radius = max(width / 4, 16)
+
+        // 级联两次可分离盒式滤波（具备环面环绕周期边界），数学上等价于大尺度近似高斯低通滤波
+        let rBlurH1 = boxBlur1DHorizontal(rChannel, width: width, height: height, radius: radius)
+        let rBlur1  = boxBlur1DVertical(rBlurH1, width: width, height: height, radius: radius)
+        let rBlurH2 = boxBlur1DHorizontal(rBlur1, width: width, height: height, radius: radius / 2)
+        let lowFreqR = boxBlur1DVertical(rBlurH2, width: width, height: height, radius: radius / 2)
+
+        let gBlurH1 = boxBlur1DHorizontal(gChannel, width: width, height: height, radius: radius)
+        let gBlur1  = boxBlur1DVertical(gBlurH1, width: width, height: height, radius: radius)
+        let gBlurH2 = boxBlur1DHorizontal(gBlur1, width: width, height: height, radius: radius / 2)
+        let lowFreqG = boxBlur1DVertical(gBlurH2, width: width, height: height, radius: radius / 2)
+
+        let bBlurH1 = boxBlur1DHorizontal(bChannel, width: width, height: height, radius: radius)
+        let bBlur1  = boxBlur1DVertical(bBlurH1, width: width, height: height, radius: radius)
+        let bBlurH2 = boxBlur1DHorizontal(bBlur1, width: width, height: height, radius: radius / 2)
+        let lowFreqB = boxBlur1DVertical(bBlurH2, width: width, height: height, radius: radius / 2)
+
+        var out = [UInt8](repeating: 255, count: totalPixels * 4)
+        for i in 0..<totalPixels {
+            let idx = i * 4
+            // 平场校准：(原像素 / 低频背景) * 全局平均色调
+            let flatR = (rChannel[i] / max(lowFreqR[i], 1.0)) * meanR
+            let flatG = (gChannel[i] / max(lowFreqG[i], 1.0)) * meanG
+            let flatB = (bChannel[i] / max(lowFreqB[i], 1.0)) * meanB
+
+            out[idx]     = UInt8(min(max(flatR.rounded(), 0.0), 255.0))
+            out[idx + 1] = UInt8(min(max(flatG.rounded(), 0.0), 255.0))
+            out[idx + 2] = UInt8(min(max(flatB.rounded(), 0.0), 255.0))
+            out[idx + 3] = src[idx + 3]
+        }
+        return out
+    }
+
+    /// 对图像执行双通道可分离升余弦无缝环形混合（Separable Two-Pass Raised-Cosine Wrap Blend）：
+    /// 先做水平无缝环绕混合，再做垂直无缝环绕混合。
+    /// 彻底杜绝双轴相乘 (wx * wy) 在中心与十字边缘处产生的四角/边缘暗坑明暗互异畸变，
+    /// 保证四边 100% 连续无缝平铺，且整体明暗严格均匀。
     private static func applyOffsetWrapBlend(_ src: [UInt8], width: Int, height: Int) -> [UInt8] {
-        var out = [UInt8](repeating: 255, count: width * height * 4)
+        guard width > 2, height > 2 else { return src }
         let halfW = width / 2
         let halfH = height / 2
 
         @inline(__always)
-        func axisWeight(_ coord: Int, total: Int) -> Float {
+        func raisedCosineWeight(_ coord: Int, total: Int) -> Float {
             let norm = (Float(coord) + 0.5) / Float(total)
             let dist = abs(2.0 * norm - 1.0)
-            let t = min(max((dist - 0.35) / 0.65, 0.0), 1.0)
-            let s = t * t * (3.0 - 2.0 * t)
-            return 1.0 - s
+            return 0.5 * (1.0 + cos(Float.pi * dist))
         }
 
         var wx = [Float](repeating: 0, count: width)
-        for x in 0..<width { wx[x] = axisWeight(x, total: width) }
+        for x in 0..<width { wx[x] = raisedCosineWeight(x, total: width) }
         var wy = [Float](repeating: 0, count: height)
-        for y in 0..<height { wy[y] = axisWeight(y, total: height) }
+        for y in 0..<height { wy[y] = raisedCosineWeight(y, total: height) }
 
+        // Pass 1: 水平方向可分离平滑环绕混合 (每行独立处理，杜绝纵向交叉相乘干扰)
+        var pass1 = [UInt8](repeating: 255, count: width * height * 4)
         for y in 0..<height {
-            let sy = (y + halfH) % height
-            let wyVal = wy[y]
+            let rowBase = y * width
             for x in 0..<width {
                 let sx = (x + halfW) % width
-                let w = wx[x] * wyVal
+                let w = wx[x]
+                let invW = 1.0 - w
+
+                let idxA = (rowBase + x) * 4
+                let idxB = (rowBase + sx) * 4
+
+                pass1[idxA]     = UInt8(min(max(Float(src[idxA])     * w + Float(src[idxB])     * invW, 0.0), 255.0))
+                pass1[idxA + 1] = UInt8(min(max(Float(src[idxA + 1]) * w + Float(src[idxB + 1]) * invW, 0.0), 255.0))
+                pass1[idxA + 2] = UInt8(min(max(Float(src[idxA + 2]) * w + Float(src[idxB + 2]) * invW, 0.0), 255.0))
+                pass1[idxA + 3] = src[idxA + 3]
+            }
+        }
+
+        // Pass 2: 垂直方向可分离平滑环绕混合 (每列独立处理，严格保持水平已无缝性，实现四边完美无缝)
+        var out = [UInt8](repeating: 255, count: width * height * 4)
+        for x in 0..<width {
+            for y in 0..<height {
+                let sy = (y + halfH) % height
+                let w = wy[y]
                 let invW = 1.0 - w
 
                 let idxA = (y * width + x) * 4
-                let idxB = (sy * width + sx) * 4
+                let idxB = (sy * width + x) * 4
 
-                out[idxA]     = UInt8(Float(src[idxA]) * w + Float(src[idxB]) * invW)
-                out[idxA + 1] = UInt8(Float(src[idxA + 1]) * w + Float(src[idxB + 1]) * invW)
-                out[idxA + 2] = UInt8(Float(src[idxA + 2]) * w + Float(src[idxB + 2]) * invW)
-                out[idxA + 3] = 255
+                out[idxA]     = UInt8(min(max(Float(pass1[idxA])     * w + Float(pass1[idxB])     * invW, 0.0), 255.0))
+                out[idxA + 1] = UInt8(min(max(Float(pass1[idxA + 1]) * w + Float(pass1[idxB + 1]) * invW, 0.0), 255.0))
+                out[idxA + 2] = UInt8(min(max(Float(pass1[idxA + 2]) * w + Float(pass1[idxB + 2]) * invW, 0.0), 255.0))
+                out[idxA + 3] = pass1[idxA + 3]
             }
         }
+
         return out
     }
 
@@ -1612,7 +1705,7 @@ public struct PaperTextureOverlayView: View {
                                         Image(uiImage: img)
                                             .interpolation(.none)
                                             .resizable(resizingMode: .tile)
-                                            .frame(width: viewW + tileW, height: viewH + tileH)
+                                            .frame(width: viewW + tileW * 2.0, height: viewH + tileH * 2.0)
                                             .offset(x: -phaseX, y: -phaseY)
                                     }
                                     .clipped()
@@ -1635,7 +1728,7 @@ public struct PaperTextureOverlayView: View {
                                             Image(uiImage: fineImg)
                                                 .interpolation(.none)
                                                 .resizable(resizingMode: .tile)
-                                                .frame(width: viewW + fineTileW, height: viewH + fineTileH)
+                                                .frame(width: viewW + fineTileW * 2.0, height: viewH + fineTileH * 2.0)
                                                 .offset(x: -finePhaseX, y: -finePhaseY)
                                         }
                                         .clipped()
@@ -1660,23 +1753,24 @@ public struct PaperTextureOverlayView: View {
                             let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
                             let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
 
-                            let cols = min(max(1, Int(ceil((viewW + phaseX) / tileW))), 64)
-                            let rows = min(max(1, Int(ceil((viewH + phaseY) / tileH))), 64)
-
                             ZStack {
                                 Color.clear
                                     .frame(width: viewW, height: viewH)
                                     .overlay(alignment: .topLeading) {
                                         ZStack {
                                             if let neutralTileImg, clampedTint < 0.999 {
-                                                tileGridView(tileImg: neutralTileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                                Image(uiImage: neutralTileImg)
+                                                    .interpolation(.medium)
+                                                    .resizable(resizingMode: .tile)
                                             }
                                             if clampedTint > 0.001 || neutralTileImg == nil {
-                                                tileGridView(tileImg: tileImg, rows: rows, cols: cols, tileW: tileW, tileH: tileH)
+                                                Image(uiImage: tileImg)
+                                                    .interpolation(.medium)
+                                                    .resizable(resizingMode: .tile)
                                                     .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
                                             }
                                         }
-                                        .compositingGroup()
+                                        .frame(width: viewW + tileW * 2.0, height: viewH + tileH * 2.0)
                                         .offset(x: -phaseX, y: -phaseY)
                                     }
                                     .clipped()
@@ -1699,7 +1793,7 @@ public struct PaperTextureOverlayView: View {
                                             Image(uiImage: fineImg)
                                                 .interpolation(.medium)
                                                 .resizable(resizingMode: .tile)
-                                                .frame(width: viewW + fineTileW, height: viewH + fineTileH)
+                                                .frame(width: viewW + fineTileW * 2.0, height: viewH + fineTileH * 2.0)
                                                 .offset(x: -finePhaseX, y: -finePhaseY)
                                         }
                                         .clipped()
@@ -1724,19 +1818,6 @@ public struct PaperTextureOverlayView: View {
             .clipped()
     }
 
-    private func tileGridView(tileImg: UIImage, rows: Int, cols: Int, tileW: CGFloat, tileH: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(0..<rows, id: \.self) { _ in
-                HStack(spacing: 0) {
-                    ForEach(0..<cols, id: \.self) { _ in
-                        Image(uiImage: tileImg)
-                            .resizable()
-                            .frame(width: tileW, height: tileH)
-                    }
-                }
-            }
-        }
-    }
 
     private func validReferenceSize() -> CGSize? {
         guard let ref = referenceSize, ref.width > 0, ref.height > 0 else {
