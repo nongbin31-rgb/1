@@ -1,7 +1,7 @@
 import Foundation
 import SwiftSoup
 
-/// 绅士漫画 (WNACG) 分类、URL 清洗与 DOM/FastLoad 解析工具
+/// 在线漫画源 W 分类、URL 清洗与 DOM/FastLoad 解析工具
 public enum WnacgParser {
     public static let cateLabelMap: [String: String] = [
         "1": "同人志 / 汉化",
@@ -116,7 +116,7 @@ public enum WnacgParser {
             let coverURL = cleanWnacgUrl(rawCover, baseUrl: baseUrl)
 
             let picBoxClass = (try? el.select(".pic_box").first()?.attr("class")) ?? ""
-            let category = extractCategoryTagFromClass(picBoxClass) ?? "绅士漫画"
+            let category = extractCategoryTagFromClass(picBoxClass) ?? "精选"
 
             var infoCol = ((try? el.select(".info_col").first()?.text()) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,7 +135,7 @@ public enum WnacgParser {
                     id: aid,
                     sourceID: sourceID,
                     title: title,
-                    author: "绅士本",
+                    author: "佚名",
                     coverURL: coverURL,
                     coverHeaders: ["Referer": "\(baseUrl)/"],
                     summary: infoCol,

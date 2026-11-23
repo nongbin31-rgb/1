@@ -1,6 +1,6 @@
 import Foundation
 
-/// 禁漫天堂 (JMComic) 协议客户端
+/// 在线漫画源 J 协议客户端
 /// 集成动态域名解密刷新、3 路并发镜像竞速自愈与 scramble_id 并行解析
 public actor JmApiClient {
     public static let shared = JmApiClient()
@@ -139,16 +139,16 @@ public actor JmApiClient {
         let stripped = rawBody.replacingOccurrences(of: "\u{FEFF}", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard stripped.hasPrefix("{") || stripped.hasPrefix("[") else {
-            throw MangaSourceError.decodingFailed("JM 接口返回非 JSON 内容")
+            throw MangaSourceError.decodingFailed("接口返回非 JSON 内容")
         }
         guard let jsonData = stripped.data(using: .utf8),
               let envelope = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            throw MangaSourceError.decodingFailed("JM API 返回格式无效")
+            throw MangaSourceError.decodingFailed("API 返回格式无效")
         }
         let codeStr = envelope["code"].map { String(describing: $0) } ?? ""
         if codeStr != "200" {
             let msg = envelope["errorMsg"] ?? envelope["message"] ?? "未知错误"
-            throw MangaSourceError.decodingFailed("JM API 错误 \(codeStr): \(msg)")
+            throw MangaSourceError.decodingFailed("API 错误 \(codeStr): \(msg)")
         }
 
         let dataField = envelope["data"]
@@ -158,7 +158,7 @@ public actor JmApiClient {
                 return nil
             }
             guard let plainData = plain.data(using: .utf8) else {
-                throw MangaSourceError.decodingFailed("JM 解密后 JSON 编码无效")
+                throw MangaSourceError.decodingFailed("解密后 JSON 编码无效")
             }
             return plainData
         }
@@ -201,7 +201,7 @@ public actor JmApiClient {
             throw MangaSourceError.httpError(http.statusCode)
         }
         guard let body = String(data: data, encoding: .utf8) else {
-            throw MangaSourceError.decodingFailed("JM 响应非 UTF-8 文本")
+            throw MangaSourceError.decodingFailed("响应非 UTF-8 文本")
         }
         return try decodeJmResponseData(body, timestamp: ts)
     }
@@ -268,7 +268,7 @@ public actor JmApiClient {
             }
         }
 
-        throw lastError ?? MangaSourceError.decodingFailed("所有禁漫天堂 API 域名均不可用")
+        throw lastError ?? MangaSourceError.decodingFailed("所有 API 域名均不可用")
     }
 
     private func tryRequestBases(
@@ -457,7 +457,7 @@ public actor JmApiClient {
         page: Int
     ) async throws -> RawPageResult {
         let directInfo = extractDirectAlbumID(from: trimmedQuery)
-        // 若用户显式输入 JM123456 / jm 123456，传纯数字给接口以便触发官方 redirect_aid 精准定位
+        // 若用户输入带前缀编号，传纯数字给接口以便触发精准定位
         let effectiveQuery = (directInfo?.hasExplicitPrefix == true) ? directInfo!.id : trimmedQuery
 
         let data = try await requestDecryptedJson(
@@ -494,7 +494,7 @@ public actor JmApiClient {
             }
         }
 
-        // 车牌号 / JM 编号直达兜底（仅第 1 页）
+        // 漫画编号直达兜底（仅第 1 页）
         if page == 1, let albumID = directInfo?.id {
             if let albumData = try? await requestDecryptedJson(
                 path: "/album",
@@ -539,7 +539,7 @@ public actor JmApiClient {
             path: "/album",
             queryParameters: ["id": manga.id]
         ) as? [String: Any] else {
-            throw MangaSourceError.decodingFailed("JM 详情数据格式无效")
+            throw MangaSourceError.decodingFailed("详情数据格式无效")
         }
 
         let title = cleanField(data["name"]) ?? manga.title
@@ -745,7 +745,7 @@ public actor JmApiClient {
         let title = cleanField(raw["name"]) ?? fallbackTitle ?? "JM \(id)"
         let rawAuthor = raw["author"] ?? raw["authors"]
         let author = parseAuthor(rawAuthor, fallbackTitle: title)
-        let category = extractCategoryTitle(raw["category"], raw["category_sub"]) ?? "禁漫单行本"
+        let category = extractCategoryTitle(raw["category"], raw["category_sub"]) ?? "单行本"
         let latestChapter = cleanField(raw["latest_ep_name"])
 
         var tags: [String] = [category]

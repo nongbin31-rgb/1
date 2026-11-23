@@ -1,6 +1,6 @@
 import Foundation
 
-/// JM / WNACG 最近一次测通的最优域名节点持久化管理
+/// 在线图源最近一次测通的最优域名节点持久化管理
 /// 消除冷启动后的多域名试错，同时支持节点失效自愈覆盖
 public actor OnlineEndpointStore {
     public static let shared = OnlineEndpointStore()

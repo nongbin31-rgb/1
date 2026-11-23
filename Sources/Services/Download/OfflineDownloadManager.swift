@@ -102,7 +102,7 @@ public struct OfflineMangaSummary: Identifiable, Sendable {
 
 /// 全局轻量章节离线缓存下载调度器
 /// - 物理存储隔离于 Application Support/OfflineMangaDownloads，不受 iOS Caches 清理与「清理临时缓存」影响
-/// - 章节间串行排队、单话内严格限流 3 并发（防 JM / WNACG 图床限流封禁）
+/// - 章节间串行排队、单话内严格限流 3 并发（防图床频控限流）
 /// - 自动落盘 [MangaPage] 清单与封面图，支持彻底断网阅读与断点续传
 @MainActor
 public final class OfflineDownloadManager: ObservableObject {

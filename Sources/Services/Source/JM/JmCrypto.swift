@@ -2,7 +2,7 @@ import CommonCrypto
 import CryptoKit
 import Foundation
 
-/// 禁漫天堂 (JMComic) 移动端 API 签名、AES-256-ECB 响应解密与切片计算工具
+/// 在线漫画源 J 移动端 API 签名、AES-256-ECB 响应解密与切片计算工具
 public enum JmCrypto {
     public static let defaultAppTokenSecret = "185Hcomic3PAPP7R"
     public static let defaultAppTokenSecret2 = "18comicAPPContent"
@@ -83,10 +83,10 @@ public enum JmCrypto {
         if normalized.isEmpty { return "" }
 
         guard let cipherData = Data(base64Encoded: normalized, options: [.ignoreUnknownCharacters]) else {
-            throw MangaSourceError.decodingFailed("JM Base64 密文解码失败")
+            throw MangaSourceError.decodingFailed("Base64 密文解码失败")
         }
         guard keyData.count == kCCKeySizeAES256 else {
-            throw MangaSourceError.decodingFailed("JM AES 密钥长度无效：\(keyData.count)")
+            throw MangaSourceError.decodingFailed("AES 密钥长度无效：\(keyData.count)")
         }
 
         let outLength = cipherData.count + kCCBlockSizeAES128
@@ -114,12 +114,12 @@ public enum JmCrypto {
         }
 
         guard status == kCCSuccess else {
-            throw MangaSourceError.decodingFailed("JM AES-256-ECB 解密失败 (CCCrypt=\(status))")
+            throw MangaSourceError.decodingFailed("AES-256-ECB 解密失败 (CCCrypt=\(status))")
         }
 
         plainData.removeSubrange(numBytesDecrypted..<plainData.count)
         guard let result = String(data: plainData, encoding: .utf8) else {
-            throw MangaSourceError.decodingFailed("JM 明文 UTF-8 解码失败")
+            throw MangaSourceError.decodingFailed("明文 UTF-8 解码失败")
         }
         return result
     }

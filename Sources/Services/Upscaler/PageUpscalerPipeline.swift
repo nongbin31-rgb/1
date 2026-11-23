@@ -104,7 +104,7 @@ private final class InFlightUpscaleEntry: @unchecked Sendable {
     var lastProgress: String = ""
 }
 
-/// 统一页面超分调度器（对齐可达阅读器：管理 Anime4K 与 Waifu2x 执行、在途合并与近期显存级缓存）
+/// 统一页面超分调度器（管理 Anime4K 与 Waifu2x 执行、在途合并与近期显存级缓存）
 public final class PageUpscalerPipeline: @unchecked Sendable {
     public static let shared = PageUpscalerPipeline()
 

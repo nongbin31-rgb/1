@@ -2,7 +2,7 @@
 //  ReaderBackgroundPickerSheet.swift
 //  KedaOnlineReader
 //
-//  复刻自：可达阅读器 (Kedamanga) 阅读背景与纸质纹理高级调控面板
+//  阅读背景与纸质纹理高级调控面板
 //  支持 5 大背景模式、6 种真实物理纸张材质选择、透明度无级调节与中缝阴影控制
 //
 

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-// MARK: - 1. 核心引擎分类（对齐可达阅读器 ImageUpscalerModel）
+// MARK: - 1. 核心引擎分类（ImageUpscalerModel）
 
 /// 超分模型大类
 public enum ImageUpscalerModel: String, Codable, CaseIterable, Identifiable {
@@ -10,7 +10,7 @@ public enum ImageUpscalerModel: String, Codable, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    /// 对齐可达阅读器多语言文案
+    /// 画质增强引擎显示名称
     public var displayName: String {
         switch self {
         case .anime4k: return "Anime4K"
@@ -31,7 +31,7 @@ public typealias UpscalerEngine = ImageUpscalerModel
 
 // MARK: - 2. Waifu2x 10 组核心 2x 模型预设（100% 对齐原包 waifu2x.framework）
 
-/// Waifu2x 官方 10 组 2x 超分模型（严格对应 .mlmodelc 目录名与可达阅读器原版选项）
+/// Waifu2x 官方 10 组 2x 超分模型（对应 .mlmodelc 目录名）
 public enum Waifu2xModel: String, Codable, CaseIterable, Identifiable {
     // 漫画 / 二次元线稿模型
     case anime_scale2x               = "up_anime_scale2x_model"
@@ -49,7 +49,7 @@ public enum Waifu2xModel: String, Codable, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    /// 对齐原版可达阅读器「ImageUpscaler - Waifu2x - %@」本地化文案
+    /// Waifu2x 模型本地化文案
     public var displayName: String {
         switch self {
         case .anime_scale2x:        return "漫画 - 放大 2 倍"
@@ -98,7 +98,7 @@ public enum Anime4kPreset: String, Codable, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    /// 对齐原版可达阅读器「ImageUpscaler - Anime4K - %@」文案
+    /// Anime4K 模型本地化文案
     public var displayName: String {
         switch self {
         case .AAFast: return "A + A (超分辨率 + 超分辨率)"
@@ -307,7 +307,7 @@ public struct UpscalePerformanceResult: Equatable {
         self.skipReason = skipReason
     }
 
-    /// 对齐可达阅读器「运行时长：%@s，可放大查看细节，单击图像隐藏面板」
+    /// 超分面板耗时与手势说明文案
     public var formattedText: String {
         let secStr = String(format: "%.3f", elapsedSeconds)
         return "运行时长：\(secStr)s，可放大查看细节，单击图像隐藏面板"

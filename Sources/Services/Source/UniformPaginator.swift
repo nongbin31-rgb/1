@@ -21,7 +21,7 @@ public struct RawPageResult: Sendable {
 }
 
 /// 统一前端分页协调器
-/// 将不同上游页大小（如 JM 80 本/页、WNACG 12 本/页）统一适配为固定每页 18 本，
+/// 将不同上游页大小统一适配为固定每页 18 本，
 /// 同时支持顺序无缝拼页缓存与远距离快速跳页定位。
 public actor UniformPaginator {
     public static let defaultPageSize = 18

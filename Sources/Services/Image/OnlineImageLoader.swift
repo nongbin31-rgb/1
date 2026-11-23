@@ -105,7 +105,7 @@ private final class InFlightImageEntry: @unchecked Sendable {
     var waiters: [UUID: CancellableImageWaiter] = [:]
 }
 
-/// 在线漫画图片异步加载与双层缓存（内存 + 磁盘），集成多图床容灾竞速与 JM 分块反混淆，同时支持 synthetic:// 测试图生成
+/// 在线漫画图片异步加载与双层缓存（内存 + 磁盘），集成多图床容灾竞速与分块反混淆，同时支持 synthetic:// 测试图生成
 public actor OnlineImageLoader {
     public static let shared = OnlineImageLoader()
 
@@ -336,7 +336,7 @@ public actor OnlineImageLoader {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// 将单张漫画图片下载并持久化至永久离线目录（自动复用已缓存文件与 JM 反混淆，支持断点续传）
+    /// 将单张漫画图片下载并持久化至永久离线目录（自动复用已缓存文件与分块反混淆，支持断点续传）
     public func downloadImageToOfflineStore(
         urlString: String,
         headers: [String: String] = [:]
@@ -370,7 +370,7 @@ public actor OnlineImageLoader {
             return (hash, Int64(cachedData.count))
         }
 
-        // 4. 走多图床容灾竞速下载 + JM 反混淆后原子落盘至离线目录
+        // 4. 走多图床容灾竞速下载 + 分块反混淆后原子落盘至离线目录
         let jmMeta = JmImageMeta.tryParse(urlString)
         let candidates = await buildCandidateUrls(rawUrl: urlString)
         guard !candidates.isEmpty else {
