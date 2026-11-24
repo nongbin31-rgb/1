@@ -63,14 +63,15 @@ public struct LocalMangaRecord: Identifiable, Codable, Equatable, Sendable {
     }
 
     public func toManga() -> Manga {
-        Manga(
+        let formattedSize = ByteCountFormatter.string(fromByteCount: fileSizeBytes, countStyle: .file)
+        return Manga(
             id: id,
             sourceID: LocalMangaSource.sourceID,
             title: title,
             author: "本地导入",
             coverURL: LocalMangaLibraryManager.coverURLString(for: id),
             coverHeaders: [:],
-            summary: "本地 \(format.displayTag) 漫画 · 共 \(chapterCount) 话 · \(pageCount) 页（\(OfflineDownloadManager.formatBytes(fileSizeBytes))）",
+            summary: "本地 \(format.displayTag) 漫画 · 共 \(chapterCount) 话 · \(pageCount) 页（\(formattedSize)）",
             tags: ["本地", format.displayTag],
             statusText: chapterCount > 1 ? "全 \(chapterCount) 话" : "单本"
         )

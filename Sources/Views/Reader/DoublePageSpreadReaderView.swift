@@ -259,7 +259,7 @@ public struct DoublePageSpreadReaderView: UIViewControllerRepresentable {
             return cell
         }
 
-        func configureCell(
+        fileprivate func configureCell(
             _ cell: DoublePageSpreadCollectionCell,
             spread: ReaderPageSpread,
             collectionView: UICollectionView

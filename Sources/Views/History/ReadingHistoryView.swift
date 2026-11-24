@@ -660,6 +660,7 @@ public struct ReadingHistoryView: View {
                 }
             }
 
+            @MainActor
             func launch(resolvedManga: Manga, chapters: [MangaChapter]) {
                 guard let firstChapter = chapters.first else {
                     showHud("该漫画暂无可阅读章节")

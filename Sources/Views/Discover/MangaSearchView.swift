@@ -288,6 +288,8 @@ public struct MangaSearchView: View {
                 return "搜索内置演示漫画（如：线稿 / 彩漫）"
             case .genericJSON:
                 return "在「\(single.name)」中搜索漫画"
+            case .local:
+                return "搜索本地漫画库"
             }
         }
         return "跨源搜索漫画名、作者、标签或编号"
