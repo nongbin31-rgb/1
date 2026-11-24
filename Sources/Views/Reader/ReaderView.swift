@@ -596,8 +596,19 @@ public struct ReaderView: View {
         .onChange(of: pages.count) { _ in
             refreshPageCacheSnapshot()
         }
+        .onAppear {
+            translationManager.beginReaderSession(for: manga.compositeKey)
+        }
         .onDisappear {
             pageCacheSnapshot.cancel()
+            let presentingInternalModal = showUpscalerSheet
+                || showTranslationSettingsSheet
+                || showConfigPreviewSheet
+                || showBackgroundPickerSheet
+                || showImageFilterSheet
+            if !presentingInternalModal {
+                translationManager.endReaderSession(for: manga.compositeKey)
+            }
         }
         .sheet(isPresented: $showUpscalerSheet) {
             ReaderUpscalerSheet(
@@ -1407,12 +1418,20 @@ public struct ReaderView: View {
         let isActiveOverlay = translationManager.isOverlayVisible
 
         return Menu {
-            if isActiveOverlay && hasCurrentTranslated {
+            if isActiveOverlay {
                 Button {
-                    translationManager.isOverlayVisible = false
+                    translationManager.resetReaderSession()
                     currentHUDText = "已切换为原图"
                 } label: {
-                    Label("显示原图（隐藏译文）", systemImage: "eye.slash")
+                    Label("显示原图（关闭译文）", systemImage: "eye.slash")
+                }
+
+                if !hasCurrentTranslated && !isTranslatingCurrent && !currentURL.isEmpty {
+                    Button {
+                        translateCurrentVisiblePages(forceRefresh: false)
+                    } label: {
+                        Label("翻译当前页", systemImage: "character.bubble")
+                    }
                 }
             } else {
                 Button {

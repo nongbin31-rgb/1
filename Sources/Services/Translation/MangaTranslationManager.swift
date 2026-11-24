@@ -74,6 +74,7 @@ public final class MangaTranslationManager: ObservableObject {
     private let renderedCache = NSCache<NSString, UIImage>()
     #endif
     private var inFlightTasks: [String: Task<PageTranslationResult, Error>] = [:]
+    private var activeMangaKey: String?
 
     // Bing 临时 Token 缓存
     private var bingAuthToken: String?
@@ -122,6 +123,29 @@ public final class MangaTranslationManager: ObservableObject {
 
     public func isTranslating(_ pageURL: String) -> Bool {
         translatingPageURLs.contains(pageURL)
+    }
+
+    /// 进入某本漫画阅读会话：仅当切换到新漫画或上次已退出阅读器时重置译文状态，避免阅读器内开关子弹窗误关译文
+    public func beginReaderSession(for mangaKey: String) {
+        if activeMangaKey != mangaKey {
+            activeMangaKey = mangaKey
+            resetReaderSession()
+        }
+    }
+
+    /// 退出某本漫画阅读会话：清空当前活跃漫画标识并重置译文显示与在途翻译
+    public func endReaderSession(for mangaKey: String) {
+        guard activeMangaKey == mangaKey else { return }
+        activeMangaKey = nil
+        resetReaderSession()
+    }
+
+    /// 重置当前会话的译文显示状态与在途翻译任务（保留本地缓存与设置偏好）
+    public func resetReaderSession() {
+        isOverlayVisible = false
+        inFlightTasks.values.forEach { $0.cancel() }
+        inFlightTasks.removeAll()
+        translatingPageURLs.removeAll()
     }
 
     /// 清除所有本地翻译缓存与内存合成图
