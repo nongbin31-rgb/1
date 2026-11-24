@@ -195,6 +195,13 @@ public struct MangaDetailView: View {
 
                     Button {
                         store.toggleBookshelf(currentManga)
+                        if store.isInBookshelf(currentManga), !chapters.isEmpty {
+                            store.syncBookshelfChapterMeta(
+                                manga: currentManga,
+                                chapters: chapters,
+                                markUnreadIfIncreased: false
+                            )
+                        }
                     } label: {
                         Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                             .frame(width: 24, height: 22)
@@ -613,7 +620,13 @@ public struct MangaDetailView: View {
             resolvedManga = detail.manga
             chapters = detail.chapters
             isOfflineFallback = false
+            store.syncBookshelfChapterMeta(
+                manga: detail.manga,
+                chapters: detail.chapters,
+                markUnreadIfIncreased: false
+            )
         } catch {
+            store.clearUnreadUpdateFlag(for: manga)
             if !cachedOffline.isEmpty {
                 chapters = cachedOffline
                 isOfflineFallback = true

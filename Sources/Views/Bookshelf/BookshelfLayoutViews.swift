@@ -218,6 +218,7 @@ private struct BookshelfFocusShelfView: View {
                     manga: hero,
                     progress: store.progress(for: hero),
                     addedAt: store.bookshelfAddedDate(for: hero),
+                    chapterBadge: store.resolvedBookshelfChapterBadge(for: hero),
                     isLaunching: launchingMangaKey == hero.compositeKey,
                     callbacks: callbacks
                 )
@@ -287,6 +288,7 @@ private struct BookshelfFocusShelfView: View {
                 LazyVGrid(columns: gridColumns, spacing: 18) {
                     ForEach(displayedBooks, id: \.compositeKey) { manga in
                         let progress = store.progress(for: manga)
+                        let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
                         let isSelected = selectedKeys.contains(manga.compositeKey)
 
                         BookshelfItemInteractiveWrapper(
@@ -298,6 +300,7 @@ private struct BookshelfFocusShelfView: View {
                             BookshelfFocusGridCard(
                                 manga: manga,
                                 progress: progress,
+                                chapterBadge: chapterBadge,
                                 isEditing: isEditing,
                                 isSelected: isSelected
                             )
@@ -319,6 +322,7 @@ private struct BookshelfHeroResumeCard: View {
     let manga: Manga
     let progress: ReadingProgress?
     let addedAt: Date?
+    let chapterBadge: BookshelfChapterBadgeInfo?
     let isLaunching: Bool
     let callbacks: BookshelfViewCallbacks
 
@@ -400,6 +404,17 @@ private struct BookshelfHeroResumeCard: View {
                     )
                     .frame(width: 82, height: 116)
                     .overlay(BookshelfCoverSpineCrease(cornerRadius: 10))
+                    .overlay(alignment: .topTrailing) {
+                        if let chapterBadge {
+                            BookshelfCoverChapterBadge(
+                                text: chapterBadge.text,
+                                hasUnreadUpdate: chapterBadge.hasUnreadUpdate,
+                                compact: true
+                            )
+                            .padding(.top, 4)
+                            .padding(.trailing, 4)
+                        }
+                    }
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
@@ -558,6 +573,7 @@ private struct BookshelfHeroResumeCard: View {
 private struct BookshelfFocusGridCard: View {
     let manga: Manga
     let progress: ReadingProgress?
+    let chapterBadge: BookshelfChapterBadgeInfo?
     let isEditing: Bool
     let isSelected: Bool
 
@@ -580,6 +596,17 @@ private struct BookshelfFocusGridCard: View {
             )
             .frame(maxWidth: .infinity)
             .aspectRatio(3.0 / 4.2, contentMode: .fit)
+            .overlay(alignment: .topTrailing) {
+                if !isEditing, let chapterBadge {
+                    BookshelfCoverChapterBadge(
+                        text: chapterBadge.text,
+                        hasUnreadUpdate: chapterBadge.hasUnreadUpdate,
+                        compact: false
+                    )
+                    .padding(.top, 5)
+                    .padding(.trailing, 5)
+                }
+            }
             .overlay(alignment: .bottom) {
                 if let progress {
                     BookshelfCoverBottomProgressBar(progress: progress, height: 3.5)
@@ -650,6 +677,7 @@ private struct BookshelfProgressListView: View {
         LazyVStack(spacing: 0) {
             ForEach(Array(books.enumerated()), id: \.element.compositeKey) { index, manga in
                 let progress = store.progress(for: manga)
+                let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
                 let isSelected = selectedKeys.contains(manga.compositeKey)
                 let isLaunching = launchingMangaKey == manga.compositeKey
 
@@ -665,6 +693,7 @@ private struct BookshelfProgressListView: View {
                                 manga: manga,
                                 progress: progress,
                                 addedAt: store.bookshelfAddedDate(for: manga),
+                                chapterBadge: chapterBadge,
                                 isEditing: isEditing,
                                 isSelected: isSelected
                             )
@@ -700,6 +729,7 @@ private struct BookshelfProgressListRowContent: View {
     let manga: Manga
     let progress: ReadingProgress?
     let addedAt: Date?
+    let chapterBadge: BookshelfChapterBadgeInfo?
     let isEditing: Bool
     let isSelected: Bool
 
@@ -750,6 +780,13 @@ private struct BookshelfProgressListRowContent: View {
             )
             .frame(width: 64, height: 90)
             .overlay(BookshelfCoverSpineCrease(cornerRadius: 8))
+            .overlay(alignment: .topTrailing) {
+                if !isEditing, chapterBadge?.hasUnreadUpdate == true {
+                    BookshelfCoverUpdateDot()
+                        .padding(.top, 4)
+                        .padding(.trailing, 4)
+                }
+            }
             .overlay {
                 if isEditing {
                     BookshelfSelectionOverlay(isSelected: isSelected, cornerRadius: 8, compact: true)
@@ -791,7 +828,10 @@ private struct BookshelfProgressListRowContent: View {
 
                 VStack(alignment: .leading, spacing: 4.5) {
                     HStack(spacing: 6) {
-                        if !manga.statusText.isEmpty {
+                        if let chapterBadge {
+                            BookshelfInlineChapterPill(badge: chapterBadge)
+                                .fixedSize(horizontal: true, vertical: false)
+                        } else if !manga.statusText.isEmpty {
                             BookshelfStatusDotText(statusText: manga.statusText)
                                 .fixedSize(horizontal: true, vertical: false)
                         } else if let date = progress?.updatedAt ?? addedAt {
@@ -915,6 +955,7 @@ private struct BookshelfGeekMatrixView: View {
             LazyVGrid(columns: columns, spacing: store.bookshelfGeekMatrixShowTitles ? 12 : 7) {
                 ForEach(books, id: \.compositeKey) { manga in
                     let progress = store.progress(for: manga)
+                    let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
                     let isSelected = selectedKeys.contains(manga.compositeKey)
                     let meta = MangaTitleMetadataParser.parse(title: manga.title, author: manga.displayAuthor)
 
@@ -932,6 +973,17 @@ private struct BookshelfGeekMatrixView: View {
                             )
                             .frame(maxWidth: .infinity)
                             .aspectRatio(3.0 / 4.25, contentMode: .fit)
+                            .overlay(alignment: .topLeading) {
+                                if !isEditing, let chapterBadge {
+                                    BookshelfCoverChapterBadge(
+                                        text: chapterBadge.compactText,
+                                        hasUnreadUpdate: chapterBadge.hasUnreadUpdate,
+                                        compact: true
+                                    )
+                                    .padding(.top, 4)
+                                    .padding(.leading, 4)
+                                }
+                            }
                             .overlay(alignment: .bottomTrailing) {
                                 if !isEditing, let progress {
                                     ZStack {
@@ -1085,6 +1137,7 @@ private struct BookshelfReadingTimelineView: View {
                     VStack(spacing: 10) {
                         ForEach(Array(section.items.enumerated()), id: \.element.compositeKey) { idx, manga in
                             let progress = store.progress(for: manga)
+                            let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
                             let isSelected = selectedKeys.contains(manga.compositeKey)
                             let isLaunching = launchingMangaKey == manga.compositeKey
 
@@ -1092,6 +1145,7 @@ private struct BookshelfReadingTimelineView: View {
                                 manga: manga,
                                 progress: progress,
                                 addedAt: store.bookshelfAddedDate(for: manga),
+                                chapterBadge: chapterBadge,
                                 bucket: section.bucket,
                                 isFirstInSection: idx == 0,
                                 isLastInSection: idx == section.items.count - 1,
@@ -1138,6 +1192,7 @@ private struct BookshelfTimelineRow: View {
     let manga: Manga
     let progress: ReadingProgress?
     let addedAt: Date?
+    let chapterBadge: BookshelfChapterBadgeInfo?
     let bucket: BookshelfTimelineBucket
     let isFirstInSection: Bool
     let isLastInSection: Bool
@@ -1201,6 +1256,13 @@ private struct BookshelfTimelineRow: View {
                         cornerRadius: 7
                     )
                     .frame(width: 46, height: 64)
+                    .overlay(alignment: .topTrailing) {
+                        if !isEditing, chapterBadge?.hasUnreadUpdate == true {
+                            BookshelfCoverUpdateDot()
+                                .padding(.top, 3)
+                                .padding(.trailing, 3)
+                        }
+                    }
                     .overlay {
                         if isEditing {
                             BookshelfSelectionOverlay(isSelected: isSelected, cornerRadius: 7, compact: true)
@@ -1249,7 +1311,9 @@ private struct BookshelfTimelineRow: View {
                                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 )
 
-                            if !manga.statusText.isEmpty {
+                            if let chapterBadge {
+                                BookshelfInlineChapterPill(badge: chapterBadge)
+                            } else if !manga.statusText.isEmpty {
                                 BookshelfStatusDotText(statusText: manga.statusText)
                             } else if let progress, !progress.chapterTitle.isEmpty, !progress.isManuallyMarkedCompleted {
                                 Text(progress.chapterTitle)
@@ -1441,6 +1505,84 @@ private struct BookshelfSelectionOverlay: View {
             .padding(5)
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// 封面话数微胶囊角标（用于聚焦续读 3 列网格、Hero 焦点卡与极客 4 列矩阵）
+private struct BookshelfCoverChapterBadge: View {
+    let text: String
+    let hasUnreadUpdate: Bool
+    let compact: Bool
+
+    var body: some View {
+        let fontSize: CGFloat = compact ? 8.5 : 9.5
+        let hPad: CGFloat = compact ? 5 : 6
+        let vPad: CGFloat = compact ? 2 : 2.5
+        let dotSize: CGFloat = compact ? 4.5 : 5
+        let bgColor: Color = hasUnreadUpdate ? Color.black.opacity(0.76) : Color.black.opacity(0.62)
+        let strokeColor: Color = hasUnreadUpdate ? Color.orange.opacity(0.75) : Color.white.opacity(0.18)
+
+        HStack(spacing: 3) {
+            if hasUnreadUpdate {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: dotSize, height: dotSize)
+            }
+            Text(text)
+                .font(.system(size: fontSize, weight: .semibold))
+                .monospacedDigit()
+                .foregroundColor(.white)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, hPad)
+        .padding(.vertical, vPad)
+        .background(Capsule().fill(bgColor))
+        .overlay(Capsule().strokeBorder(strokeColor, lineWidth: 0.5))
+    }
+}
+
+/// 小封面右上角新章节更新红点（用于进度列表与阅读时间轴）
+private struct BookshelfCoverUpdateDot: View {
+    var body: some View {
+        Circle()
+            .fill(Color.orange)
+            .frame(width: 7.5, height: 7.5)
+            .overlay(
+                Circle()
+                    .strokeBorder(Color.white, lineWidth: 1.2)
+            )
+            .shadow(color: Color.black.opacity(0.32), radius: 2, y: 1)
+    }
+}
+
+/// 列表/时间轴行内话数状态胶囊
+private struct BookshelfInlineChapterPill: View {
+    let badge: BookshelfChapterBadgeInfo
+
+    var body: some View {
+        let dotColor: Color = badge.hasUnreadUpdate
+            ? .orange
+            : (badge.isOngoing ? .green : .secondary.opacity(0.75))
+        let textColor: Color = badge.hasUnreadUpdate
+            ? .orange
+            : (badge.isOngoing ? .green : .secondary)
+        let bgColor: Color = badge.hasUnreadUpdate
+            ? Color.orange.opacity(0.14)
+            : (badge.isOngoing ? Color.green.opacity(0.12) : Color(uiColor: .secondarySystemFill))
+
+        HStack(spacing: 3.5) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 5, height: 5)
+            Text(badge.text)
+                .font(.system(size: 10, weight: .semibold))
+                .monospacedDigit()
+                .foregroundColor(textColor)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1.5)
+        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(bgColor))
     }
 }
 
