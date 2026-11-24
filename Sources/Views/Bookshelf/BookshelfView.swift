@@ -23,6 +23,10 @@ public struct BookshelfView: View {
     @State private var quickLaunchTask: Task<Void, Never>?
     @State private var readerLaunchPayload: BookshelfReaderLaunchPayload?
 
+    // 书架章节更新检查状态
+    @State private var isCheckingUpdates = false
+    @State private var backgroundSyncTask: Task<Void, Never>?
+
     private var searchedBooks: [Manga] {
         let kw = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kw.isEmpty else { return store.bookshelf }
@@ -173,6 +177,9 @@ public struct BookshelfView: View {
                                 )
                                 .padding(.bottom, isEditing ? 78 : 8)
                             }
+                            .refreshable {
+                                await checkBookshelfUpdates(forceAll: false, silent: false)
+                            }
                             .compatScrollIndicatorsHidden(store.bookshelfLayoutStyle == .readingTimeline)
                             .background(
                                 (store.bookshelfLayoutStyle == .readingTimeline
@@ -229,9 +236,13 @@ public struct BookshelfView: View {
                     selectedKeys = selectedKeys.intersection(visibleKeySet)
                 }
             }
+            .onAppear {
+                scheduleSilentChapterSyncIfNeeded()
+            }
             .onDisappear {
                 hudDismissTask?.cancel()
                 quickLaunchTask?.cancel()
+                backgroundSyncTask?.cancel()
                 quickLaunchingMangaKey = nil
             }
         }
@@ -360,6 +371,18 @@ public struct BookshelfView: View {
 
             if !store.bookshelf.isEmpty {
                 Divider()
+
+                Button {
+                    Task {
+                        await checkBookshelfUpdates(forceAll: false, silent: false)
+                    }
+                } label: {
+                    Label(
+                        isCheckingUpdates ? "正在检查更新..." : "检查章节更新",
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .disabled(isCheckingUpdates)
 
                 Button {
                     enterEditMode()
@@ -760,7 +783,11 @@ public struct BookshelfView: View {
 
                 let resolvedManga = detail.manga
                 let chapters = detail.chapters
-                store.updateBookshelfManga(resolvedManga)
+                store.syncBookshelfChapterMeta(
+                    manga: resolvedManga,
+                    chapters: chapters,
+                    markUnreadIfIncreased: false
+                )
                 launchReader(resolvedManga: resolvedManga, chapters: chapters)
             } catch {
                 guard !Task.isCancelled else { return }
@@ -772,6 +799,118 @@ public struct BookshelfView: View {
                     showHud("章节载入失败：\(error.localizedDescription)", duration: 3.0)
                 }
             }
+        }
+    }
+
+    /// 进入书架时对从未获取过话数的收藏做一次低并发静默补齐，避免冷启动空白
+    private func scheduleSilentChapterSyncIfNeeded() {
+        guard !isCheckingUpdates else { return }
+        let hasUnsynced = store.bookshelf.contains { store.chapterMeta(for: $0) == nil }
+        guard hasUnsynced else { return }
+
+        backgroundSyncTask?.cancel()
+        backgroundSyncTask = Task {
+            await checkBookshelfUpdates(forceAll: false, silent: true)
+        }
+    }
+
+    /// 受控并发检查书架章节更新（下拉刷新 / 手动检查 / 静默补齐）
+    private func checkBookshelfUpdates(forceAll: Bool, silent: Bool) async {
+        guard !isCheckingUpdates, !store.bookshelf.isEmpty else { return }
+
+        let allBooks = store.bookshelf
+        let targets: [Manga]
+        if silent {
+            targets = allBooks.filter { store.chapterMeta(for: $0) == nil }
+        } else if forceAll {
+            targets = allBooks
+        } else {
+            let prioritized = allBooks.filter { manga in
+                guard let meta = store.chapterMeta(for: manga) else { return true }
+                return meta.isOngoing || MangaSerialStatusHelper.isOngoingStatus(manga.statusText)
+            }
+            targets = prioritized.isEmpty ? allBooks : prioritized
+        }
+
+        guard !targets.isEmpty else {
+            if !silent {
+                showHud("书架已是最新")
+            }
+            return
+        }
+
+        isCheckingUpdates = true
+        defer { isCheckingUpdates = false }
+
+        if !silent {
+            BookshelfHaptics.light()
+        }
+
+        // 预先在主线程构建待请求的 (manga, adapter) 列表，避免后台并发访问 MainActor 状态
+        let workItems: [(manga: Manga, adapter: any MangaSourceProtocol)] = targets.compactMap { manga in
+            guard let adapter = store.adapter(for: manga.sourceID) else { return nil }
+            return (manga, adapter)
+        }
+        guard !workItems.isEmpty else { return }
+
+        let maxConcurrency = silent ? 2 : 3
+        var updatedCount = 0
+        var syncedCount = 0
+        var nextIndex = 0
+
+        await withTaskGroup(of: (Manga, [MangaChapter])?.self) { group in
+            let initialCount = min(maxConcurrency, workItems.count)
+            for _ in 0..<initialCount {
+                let item = workItems[nextIndex]
+                nextIndex += 1
+                group.addTask {
+                    guard !Task.isCancelled else { return nil }
+                    do {
+                        let detail = try await item.adapter.fetchDetail(for: item.manga)
+                        return (detail.manga, detail.chapters)
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+
+            for await result in group {
+                if let (resolvedManga, chapters) = result, !chapters.isEmpty {
+                    syncedCount += 1
+                    let didIncrease = store.syncBookshelfChapterMeta(
+                        manga: resolvedManga,
+                        chapters: chapters,
+                        markUnreadIfIncreased: !silent
+                    )
+                    if didIncrease {
+                        updatedCount += 1
+                    }
+                }
+
+                if nextIndex < workItems.count, !Task.isCancelled {
+                    let item = workItems[nextIndex]
+                    nextIndex += 1
+                    group.addTask {
+                        guard !Task.isCancelled else { return nil }
+                        do {
+                            let detail = try await item.adapter.fetchDetail(for: item.manga)
+                            return (detail.manga, detail.chapters)
+                        } catch {
+                            return nil
+                        }
+                    }
+                }
+            }
+        }
+
+        guard !silent, !Task.isCancelled else { return }
+        if updatedCount > 0 {
+            BookshelfHaptics.medium()
+            showHud("发现 \(updatedCount) 部漫画有新章节", duration: 2.8)
+        } else if syncedCount > 0 {
+            showHud("书架已是最新（已同步 \(syncedCount) 部）", duration: 2.2)
+        } else {
+            showHud("检查更新失败，请检查网络", duration: 2.4)
         }
     }
 }

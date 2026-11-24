@@ -109,6 +109,9 @@ public final class AppStore: ObservableObject {
     @Published public var bookshelfAddedAt: [String: Date] = [:] {
         didSet { save(bookshelfAddedAt, key: Keys.bookshelfAddedAt) }
     }
+    @Published public var bookshelfChapterMeta: [String: BookshelfChapterMeta] = [:] {
+        didSet { save(bookshelfChapterMeta, key: Keys.bookshelfChapterMeta) }
+    }
     @Published public var searchHistory: [String] = [] {
         didSet { save(searchHistory, key: Keys.searchHistory) }
     }
@@ -165,6 +168,7 @@ public final class AppStore: ObservableObject {
         static let bookshelfSortOrder = "keda_online_bookshelf_sort_order_v1"
         static let bookshelfGeekMatrixShowTitles = "keda_online_bookshelf_matrix_titles_v1"
         static let bookshelfAddedAt = "keda_online_bookshelf_added_at_v1"
+        static let bookshelfChapterMeta = "keda_online_bookshelf_chapter_meta_v1"
         static let searchHistory = "keda_online_search_history_v1"
         static let imageFilterConfig = "keda_online_image_filter_config_v1"
         static let readerPreloadMode = "keda_online_reader_preload_mode_v1"
@@ -250,6 +254,7 @@ public final class AppStore: ObservableObject {
         self.bookshelfSortOrder = load(key: Keys.bookshelfSortOrder) ?? .recentRead
         self.bookshelfGeekMatrixShowTitles = load(key: Keys.bookshelfGeekMatrixShowTitles) ?? true
         self.bookshelfAddedAt = load(key: Keys.bookshelfAddedAt) ?? [:]
+        self.bookshelfChapterMeta = load(key: Keys.bookshelfChapterMeta) ?? [:]
         self.searchHistory = load(key: Keys.searchHistory) ?? []
         self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
         self.readerPreloadMode = load(key: Keys.readerPreloadMode) ?? .standard
@@ -441,6 +446,60 @@ public final class AppStore: ObservableObject {
         if bookshelf[idx] != manga {
             bookshelf[idx] = manga
         }
+    }
+
+    public func chapterMeta(for manga: Manga) -> BookshelfChapterMeta? {
+        bookshelfChapterMeta[manga.compositeKey]
+    }
+
+    /// 同步书架漫画最新章节快照；仅对已在书架中的漫画生效，返回是否检测到新增章节
+    @discardableResult
+    public func syncBookshelfChapterMeta(
+        manga: Manga,
+        chapters: [MangaChapter],
+        markUnreadIfIncreased: Bool = false
+    ) -> Bool {
+        guard isInBookshelf(manga), !chapters.isEmpty else {
+            return false
+        }
+        updateBookshelfManga(manga)
+
+        let key = manga.compositeKey
+        let previous = bookshelfChapterMeta[key]
+        let updated = MangaSerialStatusHelper.buildBookshelfChapterMeta(
+            manga: manga,
+            chapters: chapters,
+            previousMeta: previous,
+            markUnreadIfIncreased: markUnreadIfIncreased
+        )
+        let didIncrease = (previous != nil && previous!.chapterCount > 0 && updated.chapterCount > previous!.chapterCount)
+        bookshelfChapterMeta[key] = updated
+        return didIncrease
+    }
+
+    /// 清除书架漫画的新章节红点提示
+    public func clearUnreadUpdateFlag(for manga: Manga) {
+        let key = manga.compositeKey
+        guard var meta = bookshelfChapterMeta[key], meta.hasUnreadUpdate else { return }
+        meta.hasUnreadUpdate = false
+        bookshelfChapterMeta[key] = meta
+    }
+
+    /// 获取书架卡片应展示的话数角标信息（单话作品返回 nil；未同步过时降级读取进度中的 totalChapters）
+    public func resolvedBookshelfChapterBadge(for manga: Manga) -> BookshelfChapterBadgeInfo? {
+        if let meta = bookshelfChapterMeta[manga.compositeKey] {
+            guard !meta.badgeText.isEmpty else { return nil }
+            return BookshelfChapterBadgeInfo(
+                text: meta.badgeText,
+                compactText: meta.compactBadgeText,
+                isOngoing: meta.isOngoing,
+                hasUnreadUpdate: meta.hasUnreadUpdate
+            )
+        }
+        return MangaSerialStatusHelper.fallbackBookshelfBadge(
+            manga: manga,
+            progress: progress(for: manga)
+        )
     }
 
     public func updateProgress(

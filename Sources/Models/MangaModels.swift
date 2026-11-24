@@ -940,6 +940,135 @@ public enum MangaSerialStatusHelper {
         }
         return trimmed
     }
+
+    /// 构建书架封面持久化话数快照（方案 A：单话日漫/同人志不生成封面角标，仅多话/连载生成）
+    public static func buildBookshelfChapterMeta(
+        manga: Manga,
+        chapters: [MangaChapter],
+        previousMeta: BookshelfChapterMeta? = nil,
+        markUnreadIfIncreased: Bool = false
+    ) -> BookshelfChapterMeta {
+        let count = chapters.count
+        let baseStatus = inferStatusText(
+            title: manga.title,
+            tags: manga.tags,
+            rawStatus: manga.statusText,
+            isSeries: count > 1,
+            chapterCount: count
+        )
+        let ongoing = isOngoingStatus(baseStatus)
+        let latestNum = count > 1 ? resolveLatestChapterNumber(from: chapters) : nil
+
+        let badgeText: String
+        let compactBadgeText: String
+        if count <= 1 {
+            // 方案 A：单话作品保持封面清爽，不贴角标
+            badgeText = ""
+            compactBadgeText = ""
+        } else if ongoing {
+            if let num = latestNum {
+                badgeText = "更至\(num)话"
+                compactBadgeText = "\(num)话"
+            } else {
+                badgeText = "更至\(count)话"
+                compactBadgeText = "\(count)话"
+            }
+        } else {
+            let hasVolume = chapters.contains { $0.title.contains("卷") || $0.title.contains("冊") || $0.title.contains("册") }
+            let unit = hasVolume ? "卷" : "话"
+            badgeText = "全\(count)\(unit)"
+            compactBadgeText = "全\(count)\(unit)"
+        }
+
+        let hasUnreadUpdate: Bool
+        if markUnreadIfIncreased {
+            if let prev = previousMeta, prev.chapterCount > 0, count > prev.chapterCount {
+                hasUnreadUpdate = true
+            } else {
+                hasUnreadUpdate = previousMeta?.hasUnreadUpdate ?? false
+            }
+        } else {
+            hasUnreadUpdate = false
+        }
+
+        return BookshelfChapterMeta(
+            chapterCount: count,
+            latestChapterNumber: latestNum,
+            badgeText: badgeText,
+            compactBadgeText: compactBadgeText,
+            isOngoing: ongoing,
+            hasUnreadUpdate: hasUnreadUpdate,
+            lastSyncedAt: Date()
+        )
+    }
+
+    /// 尚未拉取快照时，利用已有阅读进度中的 totalChapters 做降级兜底（仅多话作品展示）
+    public static func fallbackBookshelfBadge(
+        manga: Manga,
+        progress: ReadingProgress?
+    ) -> BookshelfChapterBadgeInfo? {
+        guard let total = progress?.totalChapters, total > 1 else {
+            return nil
+        }
+        let ongoing = isOngoingStatus(manga.statusText)
+        let text = ongoing ? "更至\(total)话" : "全\(total)话"
+        let compact = ongoing ? "\(total)话" : "全\(total)话"
+        return BookshelfChapterBadgeInfo(
+            text: text,
+            compactText: compact,
+            isOngoing: ongoing,
+            hasUnreadUpdate: false
+        )
+    }
+}
+
+/// 书架漫画最新章节元数据快照（独立持久化，向后兼容旧书架数据）
+public struct BookshelfChapterMeta: Codable, Equatable, Sendable {
+    public var chapterCount: Int
+    public var latestChapterNumber: String?
+    public var badgeText: String
+    public var compactBadgeText: String
+    public var isOngoing: Bool
+    public var hasUnreadUpdate: Bool
+    public var lastSyncedAt: Date
+
+    public init(
+        chapterCount: Int,
+        latestChapterNumber: String? = nil,
+        badgeText: String = "",
+        compactBadgeText: String = "",
+        isOngoing: Bool = false,
+        hasUnreadUpdate: Bool = false,
+        lastSyncedAt: Date = Date()
+    ) {
+        self.chapterCount = chapterCount
+        self.latestChapterNumber = latestChapterNumber
+        self.badgeText = badgeText
+        self.compactBadgeText = compactBadgeText
+        self.isOngoing = isOngoing
+        self.hasUnreadUpdate = hasUnreadUpdate
+        self.lastSyncedAt = lastSyncedAt
+    }
+}
+
+/// 书架视图渲染用统一话数角标信息
+public struct BookshelfChapterBadgeInfo: Equatable, Sendable {
+    public let text: String
+    public let compactText: String
+    public let isOngoing: Bool
+    public let hasUnreadUpdate: Bool
+
+    public init(
+        text: String,
+        compactText: String,
+        isOngoing: Bool,
+        hasUnreadUpdate: Bool
+    ) {
+        self.text = text
+        self.compactText = compactText
+        self.isOngoing = isOngoing
+        self.hasUnreadUpdate = hasUnreadUpdate
+    }
 }
 
 /// 漫画详情页复合连载/话数展示描述模型
