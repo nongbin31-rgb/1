@@ -332,6 +332,7 @@ public struct ComicPageCellView: View {
     public var onPageReady: ((Int) -> Void)? = nil
 
     @StateObject private var slot = ComicPageSlot()
+    @ObservedObject private var translationManager = MangaTranslationManager.shared
 
     public init(
         page: MangaPage,
@@ -395,8 +396,12 @@ public struct ComicPageCellView: View {
                         onSingleTap: onSingleTap
                     )
                 } else {
+                    let renderedImg = translationManager.resolvedDisplayImage(
+                        for: page.imageURL,
+                        baseImage: currentImg
+                    )
                     ZoomableImageView(
-                        image: currentImg,
+                        image: renderedImg,
                         texture: texture,
                         textureOpacity: textureOpacity,
                         textureTintOpacity: textureTintOpacity,

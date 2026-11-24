@@ -7,6 +7,7 @@ public struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @ObservedObject private var downloadManager = OfflineDownloadManager.shared
     @ObservedObject private var localLibrary = LocalMangaLibraryManager.shared
+    @ObservedObject private var translationManager = MangaTranslationManager.shared
 
     @State private var cacheSizeText = "计算中..."
     @State private var offlineSizeText = "0.0 MB"
@@ -79,6 +80,25 @@ public struct SettingsView: View {
                     Text("在线图源")
                 } footer: {
                     Text("配置启用的漫画图源、重置优选镜像节点缓存或添加自定义 JSON 在线源。")
+                }
+
+                Section {
+                    NavigationLink {
+                        TranslationSettingsView(embeddedInNavigation: true)
+                    } label: {
+                        HStack {
+                            Label("漫画翻译", systemImage: "character.bubble")
+                            Spacer()
+                            Text(translationManager.config.activeEngineSummary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                } header: {
+                    Text("生肉翻译")
+                } footer: {
+                    Text("支持免费离线翻译（iOS 18+）、免 Key 在线翻译，以及 Gemini / 智谱 / DeepSeek 等 AI 大模型语境意译。")
                 }
 
                 Section {

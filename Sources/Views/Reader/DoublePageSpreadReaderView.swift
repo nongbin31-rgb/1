@@ -628,6 +628,7 @@ private struct DoublePageSpreadCellView: View {
 
     @StateObject private var primarySlot = ComicPageSlot()
     @StateObject private var secondarySlot = ComicPageSlot()
+    @ObservedObject private var translationManager = MangaTranslationManager.shared
 
     private var reloadTaskKey: String {
         let secID = spread.secondaryPage?.id ?? "none"
@@ -701,7 +702,11 @@ private struct DoublePageSpreadCellView: View {
     ) -> some View {
         ZStack(alignment: alignment) {
             if let image = slot.displayImage {
-                Image(uiImage: image)
+                let renderedImage = translationManager.resolvedDisplayImage(
+                    for: page.imageURL,
+                    baseImage: image
+                )
+                Image(uiImage: renderedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: alignment)

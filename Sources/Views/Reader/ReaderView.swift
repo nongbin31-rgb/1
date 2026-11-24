@@ -315,6 +315,8 @@ public struct ReaderView: View {
 
     @State private var showChrome = false
     @State private var showUpscalerSheet = false
+    @State private var showTranslationSettingsSheet = false
+    @ObservedObject private var translationManager = MangaTranslationManager.shared
     @State private var showConfigPreviewSheet = false
     @State private var showBackgroundPickerSheet = false
     @State private var showImageFilterSheet = false
@@ -577,6 +579,7 @@ public struct ReaderView: View {
                 chapterIndex: currentChapterArrayIndex,
                 totalChapters: chapters.count
             )
+            triggerAutoFollowTranslationIfNeeded(for: newIndex)
         }
         .onChange(of: preloadSettingsSignature) { _ in
             syncPreloaderSettings()
@@ -624,6 +627,15 @@ public struct ReaderView: View {
             .environmentObject(store)
             .readerLiquidGlassSheet(cornerRadius: 32)
         }
+        .background {
+            Color.clear
+                .sheet(isPresented: $showTranslationSettingsSheet) {
+                    TranslationSettingsView(embeddedInNavigation: false) {
+                        showTranslationSettingsSheet = false
+                    }
+                }
+        }
+        .attachAppleTranslationBridge()
         .fullScreenCover(isPresented: $showConfigPreviewSheet) {
             ReaderImageUpscalerConfigView(
                 imageForPreview: resolveCurrentImageForPreview()
@@ -1051,6 +1063,7 @@ public struct ReaderView: View {
 
                     CompatGlassEffectContainer(spacing: 8) {
                         HStack(spacing: 8) {
+                            readerTranslationMenuButton
                             readerProgressStyleMenuButton
 
                             Button {
@@ -1387,6 +1400,166 @@ public struct ReaderView: View {
         currentPageIndex = targetIndex
     }
 
+    private var readerTranslationMenuButton: some View {
+        let currentURL = pages.indices.contains(currentPageIndex) ? pages[currentPageIndex].imageURL : ""
+        let isTranslatingCurrent = !currentURL.isEmpty && translationManager.isTranslating(currentURL)
+        let hasCurrentTranslated = !currentURL.isEmpty && translationManager.hasResult(for: currentURL)
+        let isActiveOverlay = translationManager.isOverlayVisible
+
+        return Menu {
+            if isActiveOverlay && hasCurrentTranslated {
+                Button {
+                    translationManager.isOverlayVisible = false
+                    currentHUDText = "已切换为原图"
+                } label: {
+                    Label("显示原图（隐藏译文）", systemImage: "eye.slash")
+                }
+            } else {
+                Button {
+                    translateCurrentVisiblePages(forceRefresh: false)
+                } label: {
+                    Label(hasCurrentTranslated ? "显示译文" : "翻译当前页", systemImage: "character.bubble")
+                }
+            }
+
+            Button {
+                translationManager.config.autoFollowPages.toggle()
+                if translationManager.config.autoFollowPages {
+                    translationManager.isOverlayVisible = true
+                    currentHUDText = "已开启自动跟随翻页翻译"
+                    triggerAutoFollowTranslationIfNeeded(for: currentPageIndex)
+                } else {
+                    currentHUDText = "已关闭自动跟随翻页翻译"
+                }
+            } label: {
+                Label(
+                    translationManager.config.autoFollowPages ? "关闭自动跟随翻页" : "开启自动跟随翻页",
+                    systemImage: translationManager.config.autoFollowPages ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath"
+                )
+            }
+
+            if !currentURL.isEmpty {
+                Button {
+                    translateCurrentVisiblePages(forceRefresh: true)
+                } label: {
+                    Label("重新翻译当前页", systemImage: "arrow.clockwise")
+                }
+            }
+
+            Divider()
+
+            Button {
+                DispatchQueue.main.async {
+                    showTranslationSettingsSheet = true
+                }
+            } label: {
+                Label("翻译设置（\(translationManager.config.activeEngineSummary)）", systemImage: "slider.horizontal.3")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if isTranslatingCurrent {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(0.72)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: isActiveOverlay ? "character.bubble.fill" : "character.bubble")
+                        .font(.caption.weight(.semibold))
+                }
+                Text("译")
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .foregroundStyle(.white)
+            .liquidGlassCapsule(
+                interactive: true,
+                tint: isActiveOverlay ? Color.purple.opacity(0.85) : nil
+            )
+        }
+        .accessibilityLabel("漫画翻译")
+    }
+
+    private func currentVisiblePagesForTranslation(at index: Int) -> [MangaPage] {
+        guard pages.indices.contains(index) else { return [] }
+        if activeLayoutMode != .verticalWebtoon && isDoublePageActive(for: UIScreen.main.bounds.size) {
+            let spreads = ReaderSpreadBuilder.buildSpreads(
+                pages: pages,
+                isolateCover: store.isolateCoverInDoublePage,
+                aspectRatios: cachedPageAspectRatios
+            )
+            let sIdx = ReaderSpreadBuilder.spreadIndex(containingPage: index, in: spreads)
+            if spreads.indices.contains(sIdx) {
+                let spread = spreads[sIdx]
+                if let sec = spread.secondaryPage {
+                    return [spread.primaryPage, sec]
+                }
+                return [spread.primaryPage]
+            }
+        }
+        return [pages[index]]
+    }
+
+    private func translateCurrentVisiblePages(forceRefresh: Bool) {
+        let targets = currentVisiblePagesForTranslation(at: currentPageIndex)
+        guard !targets.isEmpty else { return }
+
+        translationManager.isOverlayVisible = true
+        let engineDesc = translationManager.config.activeEngineSummary
+        currentHUDText = "正在翻译（\(engineDesc)）..."
+
+        Task {
+            var totalBubbles = 0
+            var usedEngine = engineDesc
+            var lastError: String?
+
+            for targetPage in targets {
+                do {
+                    let result = try await translationManager.translatePage(
+                        page: targetPage,
+                        forceRefresh: forceRefresh
+                    )
+                    totalBubbles += result.bubbles.count
+                    usedEngine = result.engineLabel
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            }
+
+            if totalBubbles > 0 {
+                currentHUDText = "已翻译 \(totalBubbles) 处对白 · \(usedEngine)"
+                if translationManager.config.autoFollowPages {
+                    let nextIdx = (targets.last?.index ?? currentPageIndex) + 1
+                    if pages.indices.contains(nextIdx) {
+                        translationManager.prefetchTranslationIfNeeded(page: pages[nextIdx])
+                    }
+                }
+            } else if let err = lastError {
+                currentHUDText = "翻译提示：\(err)"
+            } else {
+                currentHUDText = "本页未识别到对白文字"
+            }
+        }
+    }
+
+    private func triggerAutoFollowTranslationIfNeeded(for index: Int) {
+        guard translationManager.isOverlayVisible, translationManager.config.autoFollowPages else {
+            return
+        }
+        let targets = currentVisiblePagesForTranslation(at: index)
+        guard !targets.isEmpty else { return }
+
+        let needsWork = targets.contains { !translationManager.hasResult(for: $0.imageURL) }
+        if needsWork {
+            translateCurrentVisiblePages(forceRefresh: false)
+        } else {
+            let nextIdx = (targets.last?.index ?? index) + 1
+            if pages.indices.contains(nextIdx) {
+                translationManager.prefetchTranslationIfNeeded(page: pages[nextIdx])
+            }
+        }
+    }
+
     private var readerProgressStyleMenuButton: some View {
         Menu {
             Section("进度条交互风格") {
@@ -1681,6 +1854,7 @@ private struct VerticalMangaPageCell: View {
     var onPageReady: ((Int) -> Void)? = nil
 
     @StateObject private var slot = ReaderPageSlot()
+    @ObservedObject private var translationManager = MangaTranslationManager.shared
 
     private var resolvedPlaceholderHeight: CGFloat {
         guard contentWidth > 0, let ratio = cachedAspectRatio, ratio > 0 else {
@@ -1715,7 +1889,11 @@ private struct VerticalMangaPageCell: View {
 
                     // 核心抗接缝设计 (Subpixel Anti-Seam Overlap)：
                     // 图片高度增加 1 物理像素微重叠，并在显示上严格无缝衔接
-                    Image(uiImage: displayImage)
+                    let resolvedWebtoonImg = translationManager.resolvedDisplayImage(
+                        for: page.imageURL,
+                        baseImage: displayImage
+                    )
+                    Image(uiImage: resolvedWebtoonImg)
                         .resizable()
                         .scaledToFill()
                         .frame(width: contentWidth, height: alignedHeight + pixelSize)
