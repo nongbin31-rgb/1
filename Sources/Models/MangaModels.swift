@@ -1105,6 +1105,44 @@ public struct ReadingHistoryItem: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// 自定义书架分组 / 收藏夹模型
+public struct BookshelfGroup: Identifiable, Codable, Equatable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var iconName: String
+    public var createdAt: Date
+
+    public static let presetIcons: [String] = [
+        "folder.fill",
+        "flame.fill",
+        "star.fill",
+        "heart.fill",
+        "bookmark.fill",
+        "bolt.fill",
+        "sparkles",
+        "book.closed.fill",
+    ]
+
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        iconName: String = "folder.fill",
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.iconName = iconName
+        self.createdAt = createdAt
+    }
+}
+
+/// 书架分组筛选条件
+public enum BookshelfGroupFilter: Hashable, Sendable {
+    case all
+    case ungrouped
+    case group(String)
+}
+
 /// 漫画详情页复合连载/话数展示描述模型
 public struct MangaDetailStatusDescriptor: Equatable, Sendable {
     public enum StatusKind: Equatable, Sendable {

@@ -118,6 +118,12 @@ public final class AppStore: ObservableObject {
     @Published public var pauseReadingHistory: Bool = false {
         didSet { save(pauseReadingHistory, key: Keys.pauseReadingHistory) }
     }
+    @Published public var bookshelfGroups: [BookshelfGroup] = [] {
+        didSet { save(bookshelfGroups, key: Keys.bookshelfGroups) }
+    }
+    @Published public var bookshelfGroupAssignments: [String: Set<String>] = [:] {
+        didSet { save(bookshelfGroupAssignments, key: Keys.bookshelfGroupAssignments) }
+    }
     @Published public var searchHistory: [String] = [] {
         didSet { save(searchHistory, key: Keys.searchHistory) }
     }
@@ -177,6 +183,8 @@ public final class AppStore: ObservableObject {
         static let bookshelfChapterMeta = "keda_online_bookshelf_chapter_meta_v1"
         static let readingHistory = "keda_online_reading_history_v1"
         static let pauseReadingHistory = "keda_online_pause_reading_history_v1"
+        static let bookshelfGroups = "keda_online_bookshelf_groups_v1"
+        static let bookshelfGroupAssignments = "keda_online_bookshelf_group_assignments_v1"
         static let searchHistory = "keda_online_search_history_v1"
         static let imageFilterConfig = "keda_online_image_filter_config_v1"
         static let readerPreloadMode = "keda_online_reader_preload_mode_v1"
@@ -265,6 +273,8 @@ public final class AppStore: ObservableObject {
         self.bookshelfChapterMeta = load(key: Keys.bookshelfChapterMeta) ?? [:]
         self.readingHistory = load(key: Keys.readingHistory) ?? []
         self.pauseReadingHistory = load(key: Keys.pauseReadingHistory) ?? false
+        self.bookshelfGroups = load(key: Keys.bookshelfGroups) ?? []
+        self.bookshelfGroupAssignments = load(key: Keys.bookshelfGroupAssignments) ?? [:]
         self.searchHistory = load(key: Keys.searchHistory) ?? []
         self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
         self.readerPreloadMode = load(key: Keys.readerPreloadMode) ?? .standard
@@ -320,11 +330,18 @@ public final class AppStore: ObservableObject {
         public let manga: Manga
         public let originalIndex: Int
         public let addedAt: Date?
+        public let groupIDs: Set<String>
 
-        public init(manga: Manga, originalIndex: Int, addedAt: Date?) {
+        public init(
+            manga: Manga,
+            originalIndex: Int,
+            addedAt: Date?,
+            groupIDs: Set<String> = []
+        ) {
             self.manga = manga
             self.originalIndex = originalIndex
             self.addedAt = addedAt
+            self.groupIDs = groupIDs
         }
     }
 
@@ -353,14 +370,17 @@ public final class AppStore: ObservableObject {
         var removed: [BookshelfRemovedItem] = []
         var remaining: [Manga] = []
         var updatedAddedAt = bookshelfAddedAt
+        var updatedAssignments = bookshelfGroupAssignments
 
         for (index, manga) in bookshelf.enumerated() {
             if keys.contains(manga.compositeKey) {
+                let removedGroups = updatedAssignments.removeValue(forKey: manga.compositeKey) ?? []
                 removed.append(
                     BookshelfRemovedItem(
                         manga: manga,
                         originalIndex: index,
-                        addedAt: updatedAddedAt.removeValue(forKey: manga.compositeKey)
+                        addedAt: updatedAddedAt.removeValue(forKey: manga.compositeKey),
+                        groupIDs: removedGroups
                     )
                 )
             } else {
@@ -371,6 +391,7 @@ public final class AppStore: ObservableObject {
         guard !removed.isEmpty else { return [] }
         bookshelf = remaining
         bookshelfAddedAt = updatedAddedAt
+        bookshelfGroupAssignments = updatedAssignments
         return removed
     }
 
@@ -379,6 +400,8 @@ public final class AppStore: ObservableObject {
         guard !items.isEmpty else { return }
         var updatedShelf = bookshelf
         var updatedAddedAt = bookshelfAddedAt
+        var updatedAssignments = bookshelfGroupAssignments
+        let validGroupIDs = Set(bookshelfGroups.map(\.id))
 
         for item in items.sorted(by: { $0.originalIndex < $1.originalIndex }) {
             guard !updatedShelf.contains(where: { $0.compositeKey == item.manga.compositeKey }) else {
@@ -389,10 +412,101 @@ public final class AppStore: ObservableObject {
             if let addedAt = item.addedAt {
                 updatedAddedAt[item.manga.compositeKey] = addedAt
             }
+            let restoredGroups = item.groupIDs.intersection(validGroupIDs)
+            if !restoredGroups.isEmpty {
+                updatedAssignments[item.manga.compositeKey] = restoredGroups
+            }
         }
 
         bookshelf = updatedShelf
         bookshelfAddedAt = updatedAddedAt
+        bookshelfGroupAssignments = updatedAssignments
+    }
+
+    // MARK: - 自定义书架分组管理（支持一本漫画多分组）
+
+    @discardableResult
+    public func createBookshelfGroup(name: String, iconName: String = "folder.fill") -> BookshelfGroup? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let group = BookshelfGroup(name: trimmed, iconName: iconName)
+        bookshelfGroups.append(group)
+        return group
+    }
+
+    public func renameBookshelfGroup(id: String, name: String, iconName: String? = nil) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = bookshelfGroups.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        bookshelfGroups[idx].name = trimmed
+        if let iconName, !iconName.isEmpty {
+            bookshelfGroups[idx].iconName = iconName
+        }
+    }
+
+    /// 删除分组（仅解除分组关联，绝不删除书架中的漫画）
+    public func deleteBookshelfGroup(id: String) {
+        bookshelfGroups.removeAll { $0.id == id }
+        var updated = bookshelfGroupAssignments
+        for (key, var set) in updated {
+            if set.remove(id) != nil {
+                if set.isEmpty {
+                    updated.removeValue(forKey: key)
+                } else {
+                    updated[key] = set
+                }
+            }
+        }
+        bookshelfGroupAssignments = updated
+    }
+
+    public func moveBookshelfGroups(fromOffsets source: IndexSet, toOffset destination: Int) {
+        bookshelfGroups.move(fromOffsets: source, toOffset: destination)
+    }
+
+    public func groupIDs(for manga: Manga) -> Set<String> {
+        let valid = Set(bookshelfGroups.map(\.id))
+        return (bookshelfGroupAssignments[manga.compositeKey] ?? []).intersection(valid)
+    }
+
+    public func setGroups(_ groupIDs: Set<String>, for manga: Manga) {
+        let valid = groupIDs.intersection(Set(bookshelfGroups.map(\.id)))
+        var updated = bookshelfGroupAssignments
+        if valid.isEmpty {
+            updated.removeValue(forKey: manga.compositeKey)
+        } else {
+            updated[manga.compositeKey] = valid
+        }
+        bookshelfGroupAssignments = updated
+    }
+
+    public func addMangas(_ mangas: [Manga], toGroups groupIDs: Set<String>) {
+        let valid = groupIDs.intersection(Set(bookshelfGroups.map(\.id)))
+        guard !mangas.isEmpty, !valid.isEmpty else { return }
+        var updated = bookshelfGroupAssignments
+        for manga in mangas {
+            var current = updated[manga.compositeKey] ?? []
+            current.formUnion(valid)
+            updated[manga.compositeKey] = current
+        }
+        bookshelfGroupAssignments = updated
+    }
+
+    public func removeMangas(_ mangas: [Manga], fromGroup groupID: String) {
+        guard !mangas.isEmpty else { return }
+        var updated = bookshelfGroupAssignments
+        for manga in mangas {
+            guard var current = updated[manga.compositeKey] else { continue }
+            current.remove(groupID)
+            if current.isEmpty {
+                updated.removeValue(forKey: manga.compositeKey)
+            } else {
+                updated[manga.compositeKey] = current
+            }
+        }
+        bookshelfGroupAssignments = updated
     }
 
     /// 批量将漫画标记为已读完（已有章节进度时保留真实页数并置为 100%，未读过时写入显式手动已读标记）

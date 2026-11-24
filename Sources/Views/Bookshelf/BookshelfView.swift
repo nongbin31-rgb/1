@@ -7,6 +7,11 @@ public struct BookshelfView: View {
 
     @State private var searchText = ""
     @State private var focusFilter: BookshelfFocusFilter = .all
+    @State private var selectedGroupFilter: BookshelfGroupFilter = .all
+
+    // 自定义分组管理与选择弹窗状态
+    @State private var showingGroupManagerSheet = false
+    @State private var groupPickerContext: BookshelfGroupPickerContext?
 
     // 批量管理多选状态
     @State private var isEditing = false
@@ -110,13 +115,28 @@ public struct BookshelfView: View {
         }
     }
 
+    private var groupFilteredBooks: [Manga] {
+        switch selectedGroupFilter {
+        case .all:
+            return sortedBooks
+        case .ungrouped:
+            return sortedBooks.filter { store.groupIDs(for: $0).isEmpty }
+        case .group(let groupID):
+            return sortedBooks.filter { store.groupIDs(for: $0).contains(groupID) }
+        }
+    }
+
     private var displayedBooks: [Manga] {
         guard store.bookshelfLayoutStyle == .focusShelf else {
-            return sortedBooks
+            return groupFilteredBooks
         }
-        return sortedBooks.filter { manga in
+        return groupFilteredBooks.filter { manga in
             focusFilter.matches(manga, progress: store.progress(for: manga))
         }
+    }
+
+    private var isFilteringGroup: Bool {
+        selectedGroupFilter != .all
     }
 
     private var isSearching: Bool {
@@ -139,6 +159,9 @@ public struct BookshelfView: View {
         BookshelfViewCallbacks(
             onToggleSelect: toggleSelect(_:),
             onQuickResume: quickResume(_:),
+            onManageGroups: { manga in
+                groupPickerContext = .single(manga)
+            },
             onMarkCompleted: markSingleCompleted(_:),
             onResetProgress: resetSingleProgress(_:),
             onRemoveSingle: removeSingle(_:)
@@ -153,6 +176,10 @@ public struct BookshelfView: View {
 
                     if !store.bookshelf.isEmpty {
                         bookshelfSearchBar
+
+                        if !store.bookshelfGroups.isEmpty {
+                            bookshelfGroupBar
+                        }
                     }
 
                     Group {
@@ -160,14 +187,16 @@ public struct BookshelfView: View {
                             emptyStateView
                         } else if sortedBooks.isEmpty {
                             emptySearchResultView
+                        } else if groupFilteredBooks.isEmpty {
+                            emptyGroupResultView
                         } else {
                             ScrollView(showsIndicators: store.bookshelfLayoutStyle != .readingTimeline) {
                                 BookshelfLayoutCollectionView(
                                     style: store.bookshelfLayoutStyle,
-                                    allBooks: store.bookshelf,
-                                    sortedBooks: sortedBooks,
+                                    allBooks: isFilteringGroup ? groupFilteredBooks : store.bookshelf,
+                                    sortedBooks: groupFilteredBooks,
                                     displayedBooks: displayedBooks,
-                                    isSearching: isSearching,
+                                    isSearching: isSearching || isFilteringGroup,
                                     isEditing: isEditing,
                                     selectedKeys: activeSelectedKeys,
                                     launchingMangaKey: quickLaunchingMangaKey,
@@ -235,6 +264,33 @@ public struct BookshelfView: View {
                 if isEditing {
                     selectedKeys = selectedKeys.intersection(visibleKeySet)
                 }
+            }
+            .onChange(of: selectedGroupFilter) { _ in
+                if isEditing {
+                    selectedKeys = selectedKeys.intersection(visibleKeySet)
+                }
+            }
+            .onChange(of: store.bookshelfGroups) { groups in
+                if case .group(let activeID) = selectedGroupFilter,
+                   !groups.contains(where: { $0.id == activeID }) {
+                    selectedGroupFilter = .all
+                }
+                if groups.isEmpty {
+                    selectedGroupFilter = .all
+                }
+            }
+            .sheet(isPresented: $showingGroupManagerSheet) {
+                BookshelfGroupManagerSheet()
+                    .environmentObject(store)
+            }
+            .sheet(item: $groupPickerContext) { ctx in
+                BookshelfGroupPickerSheet(context: ctx) { message in
+                    if case .batch = ctx {
+                        exitEditMode()
+                    }
+                    showHud(message)
+                }
+                .environmentObject(store)
             }
             .onAppear {
                 scheduleSilentChapterSyncIfNeeded()
@@ -372,6 +428,12 @@ public struct BookshelfView: View {
                 Divider()
 
                 Button {
+                    showingGroupManagerSheet = true
+                } label: {
+                    Label("管理书架分组", systemImage: "folder.badge.plus")
+                }
+
+                Button {
                     Task {
                         await checkBookshelfUpdates(forceAll: false, silent: false)
                     }
@@ -434,6 +496,132 @@ public struct BookshelfView: View {
         .padding(.bottom, 6)
     }
 
+    // MARK: - Custom Group Bar
+
+    private var ungroupedBookCount: Int {
+        sortedBooks.reduce(into: 0) { count, manga in
+            if store.groupIDs(for: manga).isEmpty {
+                count += 1
+            }
+        }
+    }
+
+    private func bookCount(in groupID: String) -> Int {
+        sortedBooks.reduce(into: 0) { count, manga in
+            if store.groupIDs(for: manga).contains(groupID) {
+                count += 1
+            }
+        }
+    }
+
+    private var bookshelfGroupBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                groupFilterChip(
+                    title: "全部",
+                    iconName: "square.grid.2x2",
+                    count: sortedBooks.count,
+                    isSelected: selectedGroupFilter == .all
+                ) {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        selectedGroupFilter = .all
+                    }
+                    BookshelfHaptics.light()
+                }
+
+                ForEach(store.bookshelfGroups) { group in
+                    let isSelected = (selectedGroupFilter == .group(group.id))
+                    let count = bookCount(in: group.id)
+
+                    groupFilterChip(
+                        title: group.name,
+                        iconName: group.iconName,
+                        count: count,
+                        isSelected: isSelected
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedGroupFilter = .group(group.id)
+                        }
+                        BookshelfHaptics.light()
+                    }
+                    .contextMenu {
+                        Button {
+                            showingGroupManagerSheet = true
+                        } label: {
+                            Label("重命名 / 管理分组", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            store.deleteBookshelfGroup(id: group.id)
+                            BookshelfHaptics.medium()
+                            showHud("已删除分组「\(group.name)」")
+                        } label: {
+                            Label("删除此分组", systemImage: "trash")
+                        }
+                    }
+                }
+
+                let ungroupedCount = ungroupedBookCount
+                if ungroupedCount > 0 || selectedGroupFilter == .ungrouped {
+                    groupFilterChip(
+                        title: "未分组",
+                        iconName: "tray",
+                        count: ungroupedCount,
+                        isSelected: selectedGroupFilter == .ungrouped
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedGroupFilter = .ungrouped
+                        }
+                        BookshelfHaptics.light()
+                    }
+                }
+
+                Button {
+                    showingGroupManagerSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color(uiColor: .secondarySystemFill)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("新建或管理书架分组")
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func groupFilterChip(
+        title: String,
+        iconName: String,
+        count: Int,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let fgColor: Color = isSelected ? .white : .primary
+        let bgColor: Color = isSelected ? Color.accentColor : Color(uiColor: .secondarySystemFill)
+
+        return Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: iconName)
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(title)
+                    .lineLimit(1)
+                Text("\(count)")
+                    .font(.system(size: 11, weight: .bold))
+                    .monospacedDigit()
+                    .opacity(isSelected ? 0.9 : 0.65)
+            }
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundColor(fgColor)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(bgColor))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Batch Action Floating Bar & HUD
 
     private var batchActionBar: some View {
@@ -441,6 +629,27 @@ public struct BookshelfView: View {
         let disabled = count == 0
 
         return HStack(spacing: 0) {
+            Button {
+                batchAssignGroups()
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("分组")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(Color.accentColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .opacity(disabled ? 0.35 : 1)
+
+            Divider()
+                .frame(height: 26)
+
             Button {
                 batchMarkCompleted()
             } label: {
@@ -572,6 +781,36 @@ public struct BookshelfView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var emptyGroupResultView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "folder")
+                .font(.system(size: 38))
+                .foregroundStyle(.secondary)
+            Text("当前分组暂无漫画")
+                .font(.headline)
+            Text("长按任意漫画或点击右上角「选择」即可批量移入此分组。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 36)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedGroupFilter = .all
+                }
+            } label: {
+                Text("查看全部收藏")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "books.vertical")
@@ -636,6 +875,13 @@ public struct BookshelfView: View {
             selectedKeys = visibleKeySet
         }
         BookshelfHaptics.light()
+    }
+
+    private func batchAssignGroups() {
+        let keys = activeSelectedKeys
+        let targets = displayedBooks.filter { keys.contains($0.compositeKey) }
+        guard !targets.isEmpty else { return }
+        groupPickerContext = .batch(targets)
     }
 
     private func batchMarkCompleted() {

@@ -44,6 +44,7 @@ enum BookshelfFocusFilter: String, CaseIterable, Identifiable {
 struct BookshelfViewCallbacks {
     let onToggleSelect: (Manga) -> Void
     let onQuickResume: (Manga) -> Void
+    let onManageGroups: (Manga) -> Void
     let onMarkCompleted: (Manga) -> Void
     let onResetProgress: (Manga) -> Void
     let onRemoveSingle: (Manga) -> Void
@@ -1706,6 +1707,12 @@ private extension View {
                     return progress.isCompleted ? "重新阅读" : "继续阅读"
                 }()
                 Label(labelTitle, systemImage: "play.fill")
+            }
+
+            Button {
+                callbacks.onManageGroups(manga)
+            } label: {
+                Label("设置分组...", systemImage: "folder.badge.plus")
             }
 
             if progress?.isCompleted != true {
