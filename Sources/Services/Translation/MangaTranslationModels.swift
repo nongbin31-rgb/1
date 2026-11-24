@@ -79,7 +79,7 @@ public enum MangaTranslationAIProvider: String, CaseIterable, Codable, Identifia
 
     public var defaultModelName: String {
         switch self {
-        case .gemini: return "gemini-2.5-flash"
+        case .gemini: return "gemini-flash-latest"
         case .zhipu: return "glm-4-flash"
         case .deepseek: return "deepseek-chat"
         case .siliconflow: return "Qwen/Qwen2.5-7B-Instruct"
@@ -90,7 +90,7 @@ public enum MangaTranslationAIProvider: String, CaseIterable, Codable, Identifia
     public var suggestedModels: [String] {
         switch self {
         case .gemini:
-            return ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+            return ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
         case .zhipu:
             return ["glm-4-flash", "glm-4v-flash"]
         case .deepseek:
@@ -98,7 +98,7 @@ public enum MangaTranslationAIProvider: String, CaseIterable, Codable, Identifia
         case .siliconflow:
             return ["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-VL-7B-Instruct"]
         case .custom:
-            return ["gpt-4o-mini", "gemini-2.5-flash", "deepseek-chat"]
+            return ["gpt-4o-mini", "gemini-flash-latest", "deepseek-chat"]
         }
     }
 
@@ -297,14 +297,14 @@ public struct MangaTranslationConfig: Codable, Equatable, Sendable {
         }
     }
 
-    /// 缓存签名（切换引擎 / 模型 / VLM / 源语言后自然隔离缓存）
+    /// 缓存签名（切换引擎 / 模型 / VLM / 源语言后自然隔离缓存；v2 升级自动失效旧版单通道 OCR 漏检缓存）
     public var cacheSignature: String {
         let eff = resolvedEffectiveEngine
         switch eff {
         case .aiLLM:
-            return "ai_\(aiProvider.rawValue)_\(resolvedModelName)_\(useVLMMode ? "vlm" : "ocr")_\(sourceLanguage.rawValue)"
+            return "v2_ai_\(aiProvider.rawValue)_\(resolvedModelName)_\(useVLMMode ? "vlm" : "ocr")_\(sourceLanguage.rawValue)"
         default:
-            return "\(eff.rawValue)_\(sourceLanguage.rawValue)"
+            return "v2_\(eff.rawValue)_\(sourceLanguage.rawValue)"
         }
     }
 }

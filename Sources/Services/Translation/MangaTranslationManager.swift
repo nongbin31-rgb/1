@@ -92,11 +92,23 @@ public final class MangaTranslationManager: ObservableObject {
         self.cacheDirectory = cachesDir.appendingPathComponent("MangaTranslations", isDirectory: true)
         try? FileManager.default.createDirectory(at: self.cacheDirectory, withIntermediateDirectories: true)
 
+        var needsSaveMigratedConfig = false
         if let data = UserDefaults.standard.data(forKey: Self.configStorageKey),
-           let decoded = try? JSONDecoder().decode(MangaTranslationConfig.self, from: data) {
+           var decoded = try? JSONDecoder().decode(MangaTranslationConfig.self, from: data) {
+            // 平滑迁移已对新用户下线的 Gemini 2.x 旧默认模型，避免升级后继续触发 HTTP 404
+            if decoded.aiProvider == .gemini {
+                let legacyGeminiModels: Set<String> = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+                if legacyGeminiModels.contains(decoded.modelName.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    decoded.modelName = MangaTranslationAIProvider.gemini.defaultModelName
+                    needsSaveMigratedConfig = true
+                }
+            }
             self.config = decoded
         } else {
             self.config = MangaTranslationConfig()
+        }
+        if needsSaveMigratedConfig {
+            saveConfig()
         }
 
         #if canImport(UIKit)
@@ -231,7 +243,8 @@ public final class MangaTranslationManager: ObservableObject {
 
         let pxW = baseImage.cgImage?.width ?? Int(baseImage.size.width * baseImage.scale)
         let pxH = baseImage.cgImage?.height ?? Int(baseImage.size.height * baseImage.scale)
-        let renderKey = "\(pageURL)::\(signature)::\(pxW)x\(pxH)::\(result.bubbles.count)" as NSString
+        let baseIdentity = ObjectIdentifier(baseImage).hashValue
+        let renderKey = "\(pageURL)::\(signature)::\(pxW)x\(pxH)::\(baseIdentity)::\(result.bubbles.count)" as NSString
 
         if let cached = renderedCache.object(forKey: renderKey) {
             return cached
@@ -336,9 +349,13 @@ public final class MangaTranslationManager: ObservableObject {
                     sourceLanguage: activeConfig.sourceLanguage
                 )
                 guard !detected.isEmpty else { throw MangaTranslationError.noTextDetected }
+                let resolvedLang = Self.inferEffectiveSourceLanguage(
+                    from: detected.map(\.text),
+                    configured: activeConfig.sourceLanguage
+                )
                 let translatedTexts = try await self.translateTextsViaAppleWithFallback(
                     texts: detected.map(\.text),
-                    sourceLanguage: activeConfig.sourceLanguage
+                    sourceLanguage: resolvedLang
                 )
                 bubbles = Self.zipBubbles(detected: detected, translated: translatedTexts.texts)
                 engineLabel = translatedTexts.engineLabel
@@ -349,9 +366,13 @@ public final class MangaTranslationManager: ObservableObject {
                     sourceLanguage: activeConfig.sourceLanguage
                 )
                 guard !detected.isEmpty else { throw MangaTranslationError.noTextDetected }
+                let resolvedLang = Self.inferEffectiveSourceLanguage(
+                    from: detected.map(\.text),
+                    configured: activeConfig.sourceLanguage
+                )
                 let translatedTexts = try await self.translateTextsViaBing(
                     texts: detected.map(\.text),
-                    sourceLanguage: activeConfig.sourceLanguage
+                    sourceLanguage: resolvedLang
                 )
                 bubbles = Self.zipBubbles(detected: detected, translated: translatedTexts)
                 engineLabel = "Bing 免费"
@@ -362,9 +383,13 @@ public final class MangaTranslationManager: ObservableObject {
                     sourceLanguage: activeConfig.sourceLanguage
                 )
                 guard !detected.isEmpty else { throw MangaTranslationError.noTextDetected }
+                let resolvedLang = Self.inferEffectiveSourceLanguage(
+                    from: detected.map(\.text),
+                    configured: activeConfig.sourceLanguage
+                )
                 let translatedTexts = try await Self.translateTextsViaGoogle(
                     texts: detected.map(\.text),
-                    sourceLanguage: activeConfig.sourceLanguage
+                    sourceLanguage: resolvedLang
                 )
                 bubbles = Self.zipBubbles(detected: detected, translated: translatedTexts)
                 engineLabel = "Google 免费"
@@ -375,9 +400,13 @@ public final class MangaTranslationManager: ObservableObject {
                     sourceLanguage: activeConfig.sourceLanguage
                 )
                 guard !detected.isEmpty else { throw MangaTranslationError.noTextDetected }
+                let resolvedLang = Self.inferEffectiveSourceLanguage(
+                    from: detected.map(\.text),
+                    configured: activeConfig.sourceLanguage
+                )
                 let translatedTexts = try await self.translateTextsViaBing(
                     texts: detected.map(\.text),
-                    sourceLanguage: activeConfig.sourceLanguage
+                    sourceLanguage: resolvedLang
                 )
                 bubbles = Self.zipBubbles(detected: detected, translated: translatedTexts)
                 engineLabel = "Bing 免费"
@@ -777,12 +806,34 @@ public final class MangaTranslationManager: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw MangaTranslationError.networkFailed("AI 接口无有效响应")
-        }
+        let maxAttempts = 3
+        let retryDelaysNS: [UInt64] = [1_500_000_000, 3_000_000_000]
 
-        guard (200...299).contains(http.statusCode) else {
+        for attempt in 0..<maxAttempts {
+            try Task.checkCancellation()
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw MangaTranslationError.networkFailed("AI 接口无有效响应")
+            }
+
+            if (200...299).contains(http.statusCode) {
+                guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = root["choices"] as? [[String: Any]],
+                      let first = choices.first,
+                      let message = first["message"] as? [String: Any],
+                      let content = message["content"] as? String else {
+                    throw MangaTranslationError.decodingFailed("AI 响应中未找到有效译文内容")
+                }
+                return content
+            }
+
+            // 对上游服务瞬时繁忙（502/503/504，常见于免费层流量尖峰）做短暂退避重试
+            if (http.statusCode == 502 || http.statusCode == 503 || http.statusCode == 504),
+               attempt + 1 < maxAttempts {
+                try await Task.sleep(nanoseconds: retryDelaysNS[attempt])
+                continue
+            }
+
             let errBody = String(data: data, encoding: .utf8) ?? ""
             if http.statusCode == 401 || http.statusCode == 403 {
                 throw MangaTranslationError.networkFailed("API Key 无效或无权限（HTTP \(http.statusCode)）")
@@ -790,27 +841,34 @@ public final class MangaTranslationManager: ObservableObject {
             if http.statusCode == 429 {
                 throw MangaTranslationError.networkFailed("请求频率或免费额度已达上限（HTTP 429），请稍后重试")
             }
+            if http.statusCode == 503 {
+                throw MangaTranslationError.networkFailed("模型当前高负载繁忙（HTTP 503），请稍后重试或切换 Flash-Lite 等轻量模型")
+            }
             let brief = extractAPIErrorMessage(from: data) ?? String(errBody.prefix(120))
             throw MangaTranslationError.networkFailed("AI 请求失败（HTTP \(http.statusCode)）：\(brief)")
         }
 
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = root["choices"] as? [[String: Any]],
-              let first = choices.first,
-              let message = first["message"] as? [String: Any],
-              let content = message["content"] as? String else {
-            throw MangaTranslationError.decodingFailed("AI 响应中未找到有效译文内容")
-        }
-        return content
+        throw MangaTranslationError.networkFailed("AI 接口连续重试失败，请稍后重试")
     }
 
     private nonisolated static func extractAPIErrorMessage(from data: Data) -> String? {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        if let err = obj["error"] as? [String: Any], let msg = err["message"] as? String {
-            return msg
+        guard let raw = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        if let obj = raw as? [String: Any] {
+            if let err = obj["error"] as? [String: Any], let msg = err["message"] as? String {
+                return msg
+            }
+            if let msg = obj["message"] as? String {
+                return msg
+            }
         }
-        if let msg = obj["message"] as? String {
-            return msg
+        // 兼容 Google Gemini OpenAI 兼容层返回的数组包裹错误体 [{"error": {"message": ...}}]
+        if let arr = raw as? [[String: Any]], let first = arr.first {
+            if let err = first["error"] as? [String: Any], let msg = err["message"] as? String {
+                return msg
+            }
+            if let msg = first["message"] as? String {
+                return msg
+            }
         }
         return nil
     }
@@ -909,6 +967,51 @@ public final class MangaTranslationManager: ObservableObject {
             )
         }
         return bubbles
+    }
+
+    /// 根据整页 OCR 文本字形特征推断精确源语种（解决自动模式下 Apple 离线翻译将含汉字日文误判跳过的问题）
+    private nonisolated static func inferEffectiveSourceLanguage(
+        from texts: [String],
+        configured: MangaTranslationSourceLanguage
+    ) -> MangaTranslationSourceLanguage {
+        guard configured == .auto else { return configured }
+
+        var kanaCount = 0
+        var hangulCount = 0
+        var latinCount = 0
+        var hanCount = 0
+
+        for text in texts {
+            for scalar in text.unicodeScalars {
+                let v = scalar.value
+                if (0x3040...0x30FF).contains(v) || (0x31F0...0x31FF).contains(v) {
+                    kanaCount += 1
+                } else if (0xAC00...0xD7AF).contains(v) || (0x1100...0x11FF).contains(v) || (0x3130...0x318F).contains(v) {
+                    hangulCount += 1
+                } else if (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) {
+                    hanCount += 1
+                } else if (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v) {
+                    latinCount += 1
+                }
+            }
+        }
+
+        if kanaCount >= 2 {
+            return .japanese
+        }
+        if hangulCount >= 2 {
+            return .korean
+        }
+        if latinCount >= 6 && hanCount == 0 && kanaCount == 0 && hangulCount == 0 {
+            return .english
+        }
+        if kanaCount > 0 {
+            return .japanese
+        }
+        if hangulCount > 0 {
+            return .korean
+        }
+        return .auto
     }
 
     private nonisolated static func zipBubbles(

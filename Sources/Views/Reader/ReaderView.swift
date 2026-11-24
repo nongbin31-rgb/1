@@ -1945,7 +1945,11 @@ private struct VerticalMangaPageCell: View {
                         Color.white
                     }
 
-                    Image(uiImage: displayImage)
+                    let resolvedFallbackImg = translationManager.resolvedDisplayImage(
+                        for: page.imageURL,
+                        baseImage: displayImage
+                    )
+                    Image(uiImage: resolvedFallbackImg)
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity)
