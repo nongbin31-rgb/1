@@ -1087,16 +1087,16 @@ public struct ReaderView: View {
                                     }
                                 }
                             } label: {
-                                Label(isCompareMode ? "退出对比" : "对比", systemImage: "rectangle.split.2x1")
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
+                                Image(systemName: "rectangle.split.2x1")
+                                    .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.white)
-                                    .liquidGlassCapsule(
+                                    .frame(width: 34, height: 34)
+                                    .liquidGlassCircle(
                                         interactive: true,
                                         tint: isCompareMode ? Color.accentColor : nil
                                     )
                             }
+                            .accessibilityLabel(isCompareMode ? "退出原图对比" : "原图对比")
                         }
                     }
                 }
@@ -1200,16 +1200,13 @@ public struct ReaderView: View {
                         Button {
                             showUpscalerSheet = true
                         } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "sparkles")
-                                Text(store.enableImageUpscaler ? store.upscalerConfig.model.displayName : "画质增强")
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Capsule())
-                            .foregroundStyle(.white)
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 36, height: 36)
+                                .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Circle())
+                                .foregroundStyle(.white)
                         }
+                        .accessibilityLabel(store.enableImageUpscaler ? "画质增强（\(store.upscalerConfig.model.displayName)）" : "画质增强")
 
                         Spacer()
 
