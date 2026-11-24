@@ -408,6 +408,19 @@ public struct BookshelfView: View {
                 }
 
                 bookshelfOptionsMenu
+
+                NavigationLink {
+                    SettingsView(embeddedInNavigation: true)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 32, height: 32)
+                        .background(Color(uiColor: .secondarySystemFill), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("打开设置")
             }
         }
         .frame(minHeight: 40)

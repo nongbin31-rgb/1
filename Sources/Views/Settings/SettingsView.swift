@@ -2,6 +2,8 @@ import SwiftUI
 
 /// 全局设置页（默认超分管线、翻页特效、缓存管理、开源许可说明）
 public struct SettingsView: View {
+    public var embeddedInNavigation: Bool = false
+
     @EnvironmentObject private var store: AppStore
     @ObservedObject private var downloadManager = OfflineDownloadManager.shared
     @ObservedObject private var localLibrary = LocalMangaLibraryManager.shared
@@ -10,8 +12,23 @@ public struct SettingsView: View {
     @State private var offlineSizeText = "0.0 MB"
     @State private var showingClearAlert = false
 
+    public init(embeddedInNavigation: Bool = false) {
+        self.embeddedInNavigation = embeddedInNavigation
+    }
+
     public var body: some View {
-        CompatNavigationContainer {
+        if embeddedInNavigation {
+            settingsFormContent
+                .navigationBarTitleDisplayMode(.inline)
+                .compatNavigationBarHidden(false)
+        } else {
+            CompatNavigationContainer {
+                settingsFormContent
+            }
+        }
+    }
+
+    private var settingsFormContent: some View {
             Form {
                 Section {
                     HStack(spacing: 16) {
@@ -351,7 +368,6 @@ public struct SettingsView: View {
             } message: {
                 Text("将清空在线浏览产生的临时图片缓存与近期 2x 高清超分位图，不会删除已离线下载的漫画章节。")
             }
-        }
     }
 
     private func refreshCacheSize() async {

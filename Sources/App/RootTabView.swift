@@ -4,7 +4,6 @@ public enum AppTab: Hashable {
     case bookshelf
     case discover
     case history
-    case settings
 }
 
 public struct RootTabView: View {
@@ -34,12 +33,6 @@ public struct RootTabView: View {
                     Label("足迹", systemImage: "clock.arrow.circlepath")
                 }
                 .tag(AppTab.history)
-
-            SettingsView()
-                .tabItem {
-                    Label("设置", systemImage: "slider.horizontal.3")
-                }
-                .tag(AppTab.settings)
         }
         .overlay(alignment: .top) {
             if let message = externalImportBanner {
