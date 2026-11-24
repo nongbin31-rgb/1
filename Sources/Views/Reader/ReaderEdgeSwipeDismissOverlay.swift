@@ -32,6 +32,10 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
     public let onDismiss: () -> Void
 
     @State private var swipeState = ReaderEdgeSwipeState()
+    @State private var isArmedToDismiss = false
+    @State private var armResetTask: Task<Void, Never>?
+
+    private let confirmWindowNanoseconds: UInt64 = 2_200_000_000
 
     public init(
         isEnabled: Bool,
@@ -53,7 +57,9 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
                     onStateChanged: { newState in
                         swipeState = newState
                     },
-                    onDismiss: onDismiss
+                    onDismiss: {
+                        handleSwipeCommitted()
+                    }
                 )
                 .frame(width: 0, height: 0)
                 #endif
@@ -62,11 +68,59 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
                     edgeIndicator(side: side, containerSize: geo.size)
                         .allowsHitTesting(false)
                 }
+
+                if isArmedToDismiss {
+                    armedPromptBanner
+                        .position(x: geo.size.width * 0.5, y: max(geo.size.height - 96, 120))
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: isArmedToDismiss)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
+        .onDisappear {
+            armResetTask?.cancel()
+            armResetTask = nil
+            isArmedToDismiss = false
+        }
+    }
+
+    private func handleSwipeCommitted() {
+        if isArmedToDismiss {
+            armResetTask?.cancel()
+            armResetTask = nil
+            isArmedToDismiss = false
+            onDismiss()
+            return
+        }
+
+        isArmedToDismiss = true
+        armResetTask?.cancel()
+        armResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: confirmWindowNanoseconds)
+            guard !Task.isCancelled else { return }
+            isArmedToDismiss = false
+            armResetTask = nil
+        }
+    }
+
+    private var armedPromptBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+            Text("再滑一次退出阅读")
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Capsule().fill(Color.black.opacity(0.82)))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.75))
+        .shadow(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 4)
     }
 
     private func edgeIndicator(side: ReaderEdgeSwipeSide, containerSize: CGSize) -> some View {
@@ -75,16 +129,19 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
         let pullOffset: CGFloat = clampedProgress * 26
         let isLeft: Bool = (side == .left)
         let isReady: Bool = swipeState.isReadyToDismiss
+        let readyText: String = isArmedToDismiss ? "松手退出" : "再滑退出"
 
         let fgColor: Color = isReady ? .white : Color.white.opacity(0.92)
-        let fillColor: Color = isReady ? Color.accentColor.opacity(0.92) : Color.black.opacity(0.62)
+        let fillColor: Color = isReady
+            ? (isArmedToDismiss ? Color.accentColor.opacity(0.94) : Color.black.opacity(0.80))
+            : Color.black.opacity(0.62)
         let borderColor: Color = Color.white.opacity(isReady ? 0.35 : 0.18)
         let hPadding: CGFloat = isReady ? 12 : 10
         let posX: CGFloat = isLeft ? (18 + pullOffset) : (containerSize.width - 18 - pullOffset)
         let scaleVal: CGFloat = 0.86 + clampedProgress * 0.14
         let opacityVal: Double = Double(min(clampedProgress * 1.4, 1.0))
 
-        return edgeIndicatorLabel(isLeft: isLeft, isReady: isReady)
+        return edgeIndicatorLabel(isLeft: isLeft, isReady: isReady, readyText: readyText)
             .foregroundColor(fgColor)
             .padding(.horizontal, hPadding)
             .padding(.vertical, 10)
@@ -98,18 +155,18 @@ public struct ReaderEdgeSwipeDismissOverlay: View {
     }
 
     @ViewBuilder
-    private func edgeIndicatorLabel(isLeft: Bool, isReady: Bool) -> some View {
+    private func edgeIndicatorLabel(isLeft: Bool, isReady: Bool, readyText: String) -> some View {
         HStack(spacing: 4) {
             if isLeft {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 13, weight: .bold))
                 if isReady {
-                    Text("松手退出")
+                    Text(readyText)
                         .font(.system(size: 11, weight: .semibold))
                 }
             } else {
                 if isReady {
-                    Text("松手退出")
+                    Text(readyText)
                         .font(.system(size: 11, weight: .semibold))
                 }
                 Image(systemName: "chevron.right")
