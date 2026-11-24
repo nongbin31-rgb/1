@@ -52,6 +52,12 @@ public final class AppStore: ObservableObject {
     @Published public var enableEdgeSwipeDismiss: Bool = true {
         didSet { save(enableEdgeSwipeDismiss, key: Keys.enableEdgeSwipeDismiss) }
     }
+    @Published public var enableLandscapeDoublePage: Bool = true {
+        didSet { save(enableLandscapeDoublePage, key: Keys.enableLandscapeDoublePage) }
+    }
+    @Published public var isolateCoverInDoublePage: Bool = true {
+        didSet { save(isolateCoverInDoublePage, key: Keys.isolateCoverInDoublePage) }
+    }
     @Published public var preferredReaderBackground: ReaderBackground = .followSystem {
         didSet { save(preferredReaderBackground, key: Keys.readerBackground) }
     }
@@ -163,6 +169,8 @@ public final class AppStore: ObservableObject {
         static let enableTapPageTurn = "keda_online_enable_tap_page_turn_v1"
         static let invertTapPageTurn = "keda_online_invert_tap_page_turn_v1"
         static let enableEdgeSwipeDismiss = "keda_online_enable_edge_swipe_dismiss_v1"
+        static let enableLandscapeDoublePage = "keda_online_enable_landscape_double_page_v1"
+        static let isolateCoverInDoublePage = "keda_online_isolate_cover_in_double_page_v1"
         static let readerBackground = "keda_online_reader_background_v1"
         static let readerTextureType = "keda_online_reader_texture_type_v1"
         static let readerTextureOpacity = "keda_online_reader_texture_opacity_v1"
@@ -253,6 +261,8 @@ public final class AppStore: ObservableObject {
         self.enableTapPageTurn = load(key: Keys.enableTapPageTurn) ?? true
         self.invertTapPageTurn = load(key: Keys.invertTapPageTurn) ?? false
         self.enableEdgeSwipeDismiss = load(key: Keys.enableEdgeSwipeDismiss) ?? true
+        self.enableLandscapeDoublePage = load(key: Keys.enableLandscapeDoublePage) ?? true
+        self.isolateCoverInDoublePage = load(key: Keys.isolateCoverInDoublePage) ?? true
         self.preferredReaderBackground = load(key: Keys.readerBackground) ?? .followSystem
         self.readerTextureType = load(key: Keys.readerTextureType) ?? .classic
         self.readerTextureOpacity = load(key: Keys.readerTextureOpacity) ?? 0.4

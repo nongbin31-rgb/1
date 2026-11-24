@@ -153,6 +153,10 @@ public struct SettingsView: View {
                     }
 
                     Toggle("隐藏控制栏时显示极简进度", isOn: $store.showAmbientProgressInReader)
+                    Toggle("横屏 / iPad 自动双页对开", isOn: $store.enableLandscapeDoublePage)
+                    if store.enableLandscapeDoublePage {
+                        Toggle("双页模式封面单独成页", isOn: $store.isolateCoverInDoublePage)
+                    }
                     Toggle("点击左右两侧翻页", isOn: $store.enableTapPageTurn)
                     if store.enableTapPageTurn {
                         Toggle("翻转点击翻页方向", isOn: $store.invertTapPageTurn)

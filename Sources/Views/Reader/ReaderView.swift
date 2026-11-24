@@ -404,7 +404,7 @@ public struct ReaderView: View {
                     }
                     .frame(width: windowGeo.size.width, height: windowGeo.size.height)
                 } else {
-                    readerContent
+                    readerContent(windowSize: windowGeo.size)
                         .id(currentChapter.id)
                         .frame(width: windowGeo.size.width, height: windowGeo.size.height)
                         .clipped()
@@ -723,8 +723,16 @@ public struct ReaderView: View {
         }
     }
 
+    private func isDoublePageActive(for windowSize: CGSize) -> Bool {
+        store.enableLandscapeDoublePage
+            && activeLayoutMode != .verticalWebtoon
+            && !isCompareMode
+            && windowSize.width > windowSize.height * 1.05
+            && pages.count > 1
+    }
+
     @ViewBuilder
-    private var readerContent: some View {
+    private func readerContent(windowSize: CGSize) -> some View {
         if activeLayoutMode == .verticalWebtoon && !isCompareMode {
             GeometryReader { geo in
                 let contentWidth = geo.size.width
@@ -810,6 +818,66 @@ public struct ReaderView: View {
                     }
                 }
             }
+        } else if isDoublePageActive(for: windowSize) {
+            // 横屏 / iPad 双页对开模式（支持封面偏移校正、自带宽图独占与对称书脊阴影）
+            let spreads = ReaderSpreadBuilder.buildSpreads(
+                pages: pages,
+                isolateCover: store.isolateCoverInDoublePage,
+                aspectRatios: cachedPageAspectRatios
+            )
+            DoublePageSpreadReaderView(
+                spreads: spreads,
+                upscalerConfig: store.upscalerConfig,
+                enableUpscaler: store.enableImageUpscaler,
+                transitionAfterUpscaled: store.transitionAfterImageUpscaled,
+                filterConfig: store.imageFilterConfig,
+                isRightToLeft: activeLayoutMode == .pagedRTL,
+                turningEffect: store.pageTurningEffect,
+                soundEnabled: store.pageTurnSoundEnabled,
+                showSpineShadow: store.showSpineShadowInCurl,
+                showDividingLine: store.showSpineDividingLine,
+                background: store.preferredReaderBackground,
+                texture: store.readerTextureType,
+                textureOpacity: store.readerTextureOpacity,
+                textureTintOpacity: store.readerTextureTintOpacity,
+                textureGrainDensity: store.readerClassicGrainDensity,
+                textureTarget: store.readerTextureTarget,
+                imageOnlyBackdrop: store.readerImageOnlyBackdrop,
+                currentPageIndex: $currentPageIndex,
+                externalJumpNonce: externalJumpNonce,
+                onSingleTap: {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
+                        showChrome.toggle()
+                    }
+                },
+                onTapLocation: { normalizedX, isZoomed in
+                    handleHorizontalPageTap(
+                        normalizedX: normalizedX,
+                        isZoomed: isZoomed,
+                        activeSpreads: spreads
+                    )
+                },
+                onStatusUpdate: { text in
+                    currentHUDText = text
+                },
+                onImageLoaded: { loadedPage, img in
+                    if img.size.width > 0, img.size.height > 0 {
+                        let aspect = img.size.height / img.size.width
+                        if cachedPageAspectRatios[loadedPage.id] == nil {
+                            cachedPageAspectRatios[loadedPage.id] = aspect
+                        }
+                    }
+                    if loadedPage.index == currentPageIndex {
+                        capturedPreviewImage = img
+                    }
+                    checkAspectRatioIfUndetermined(with: img.size)
+                },
+                onPageReady: { readyIdx in
+                    if pages.indices.contains(readyIdx) {
+                        preloader.markPageReady(pageID: pages[readyIdx].id, index: readyIdx)
+                    }
+                }
+            )
         } else if store.pageTurningEffect == .curling {
             // 仿真书本卷页模式 (PageCurl 3D立体网格折叠)
             StablePageCurlReaderView(
@@ -1247,9 +1315,13 @@ public struct ReaderView: View {
         hasInitializedLayout = true
     }
 
-    /// 水平翻页模式（日漫 / 常规）三段式点击热区处理：
+    /// 水平翻页模式（日漫 / 常规 / 横屏双页）三段式点击热区处理：
     /// 左侧 [0, 0.30) / 中间 [0.30, 0.70] 唤出工具栏 / 右侧 (0.70, 1.0]
-    private func handleHorizontalPageTap(normalizedX: CGFloat, isZoomed: Bool) {
+    private func handleHorizontalPageTap(
+        normalizedX: CGFloat,
+        isZoomed: Bool,
+        activeSpreads: [ReaderPageSpread]? = nil
+    ) {
         // 工具栏展开时，点击屏幕任意位置优先收起工具栏，避免误翻页
         if showChrome {
             withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
@@ -1284,7 +1356,23 @@ public struct ReaderView: View {
         let baseLeftIsNext = (activeLayoutMode == .pagedRTL)
         let effectiveLeftIsNext = store.invertTapPageTurn ? !baseLeftIsNext : baseLeftIsNext
         let goNext = isLeftZone ? effectiveLeftIsNext : !effectiveLeftIsNext
-        let targetIndex = currentPageIndex + (goNext ? 1 : -1)
+
+        let targetIndex: Int
+        if let spreads = activeSpreads, !spreads.isEmpty {
+            let currentSpreadIdx = ReaderSpreadBuilder.spreadIndex(containingPage: currentPageIndex, in: spreads)
+            let targetSpreadIdx = currentSpreadIdx + (goNext ? 1 : -1)
+            guard spreads.indices.contains(targetSpreadIdx) else {
+                #if canImport(UIKit)
+                let generator = UIImpactFeedbackGenerator(style: .rigid)
+                generator.impactOccurred(intensity: 0.65)
+                #endif
+                currentHUDText = goNext ? "已是本话最后一页" : "已是本话第 1 页"
+                return
+            }
+            targetIndex = spreads[targetSpreadIdx].primaryPage.index
+        } else {
+            targetIndex = currentPageIndex + (goNext ? 1 : -1)
+        }
 
         guard pages.indices.contains(targetIndex) else {
             #if canImport(UIKit)
@@ -1921,6 +2009,12 @@ private struct ReaderUpscalerSheet: View {
                             ForEach(PageTurningEffect.allCases) { effect in
                                 Text(effect.displayName).tag(effect)
                             }
+                        }
+
+                        Toggle("横屏 / iPad 双页对开", isOn: $store.enableLandscapeDoublePage)
+
+                        if store.enableLandscapeDoublePage {
+                            Toggle("封面单独成页（对开偏移校正）", isOn: $store.isolateCoverInDoublePage)
                         }
 
                         Toggle("点击左右两侧翻页", isOn: $store.enableTapPageTurn)
