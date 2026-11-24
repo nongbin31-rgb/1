@@ -27,7 +27,7 @@ public struct LocalLibraryView: View {
                     showingImporter = true
                 } label: {
                     HStack {
-                        Label("导入本地漫画 (CBZ / ZIP / PDF)", systemImage: "plus.circle.fill")
+                        Label("导入本地漫画 (CBZ / ZIP / PDF / EPUB)", systemImage: "plus.circle.fill")
                         Spacer()
                         if library.isImporting {
                             ProgressView()
@@ -36,7 +36,7 @@ public struct LocalLibraryView: View {
                 }
                 .disabled(library.isImporting)
             } footer: {
-                Text("支持一次多选导入多个 .cbz、.zip 或 .pdf 文件，也支持在系统「文件」App 中选择用 FristLove 直接打开。导入后无需解压占双倍空间，且完整支持 AI 超分、滤镜与全部翻页特效。")
+                Text("支持一次多选导入多个 .cbz、.zip、.pdf 或 .epub 漫画文件，也支持在系统「文件」App 中选择用 FristLove 直接打开。导入后无需解压占双倍空间，且完整支持 AI 超分、滤镜与全部翻页特效。")
             }
 
             if let noticeText {
@@ -132,28 +132,32 @@ public struct LocalLibraryView: View {
         }
         .navigationTitle("本地漫画库")
         .navigationBarTitleDisplayMode(.inline)
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: LocalMangaLibraryManager.supportedImportContentTypes,
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                Task {
-                    let outcome = await store.importLocalMangaFiles(urls: urls)
-                    if !outcome.imported.isEmpty {
-                        if outcome.failedNames.isEmpty {
-                            noticeText = "已导入 \(outcome.imported.count) 部本地漫画并加入书架"
+        .sheet(isPresented: $showingImporter) {
+            LocalMangaDocumentPicker(
+                onPick: { urls in
+                    showingImporter = false
+                    guard !urls.isEmpty else { return }
+                    Task {
+                        noticeText = "正在导入 \(urls.count) 个本地文件..."
+                        let outcome = await store.importLocalMangaFiles(urls: urls)
+                        if !outcome.imported.isEmpty {
+                            if outcome.failedNames.isEmpty {
+                                noticeText = "已导入 \(outcome.imported.count) 部本地漫画并加入书架"
+                            } else {
+                                noticeText = "成功 \(outcome.imported.count) 部，失败 \(outcome.failedNames.count) 部：\(outcome.failedNames.joined(separator: "；"))"
+                            }
+                        } else if !outcome.failedNames.isEmpty {
+                            noticeText = "导入失败：\(outcome.failedNames.joined(separator: "；"))"
                         } else {
-                            noticeText = "成功 \(outcome.imported.count) 部，失败 \(outcome.failedNames.count) 部"
+                            noticeText = "未检测到可导入的漫画文件"
                         }
-                    } else if !outcome.failedNames.isEmpty {
-                        noticeText = "导入失败：\(outcome.failedNames.joined(separator: "、"))"
                     }
+                },
+                onCancel: {
+                    showingImporter = false
                 }
-            case .failure(let error):
-                noticeText = "选择文件失败：\(error.localizedDescription)"
-            }
+            )
+            .ignoresSafeArea()
         }
         .alert(
             "彻底删除「\(pendingDeleteRecord?.title ?? "")」？",

@@ -54,6 +54,7 @@ targets:
               - org.comicbook.cbz-archive
               - public.zip-archive
               - com.adobe.pdf
+              - org.idpf.epub-container
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: org.comicbook.cbz-archive
             UTTypeDescription: Comic Book ZIP Archive
@@ -63,6 +64,14 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension:
                 - cbz
+          - UTTypeIdentifier: org.idpf.epub-container
+            UTTypeDescription: EPUB Publication
+            UTTypeConformsTo:
+              - public.zip-archive
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - epub
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         UIApplicationSceneManifest:

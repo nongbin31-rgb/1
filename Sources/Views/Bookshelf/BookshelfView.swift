@@ -293,30 +293,36 @@ public struct BookshelfView: View {
                 }
                 .environmentObject(store)
             }
-            .fileImporter(
-                isPresented: $showingLocalFileImporter,
-                allowedContentTypes: LocalMangaLibraryManager.supportedImportContentTypes,
-                allowsMultipleSelection: true
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    Task {
-                        showHud("正在导入 \(urls.count) 个本地文件...", duration: 4.0)
-                        let outcome = await store.importLocalMangaFiles(urls: urls)
-                        if !outcome.imported.isEmpty {
-                            BookshelfHaptics.medium()
-                            if outcome.failedNames.isEmpty {
-                                showHud("已导入 \(outcome.imported.count) 部本地漫画")
-                            } else {
-                                showHud("导入成功 \(outcome.imported.count) 部，失败 \(outcome.failedNames.count) 部", duration: 3.0)
+            .background {
+                Color.clear
+                    .sheet(isPresented: $showingLocalFileImporter) {
+                        LocalMangaDocumentPicker(
+                            onPick: { urls in
+                                showingLocalFileImporter = false
+                                guard !urls.isEmpty else { return }
+                                Task {
+                                    showHud("正在导入 \(urls.count) 个本地文件...", duration: 4.0)
+                                    let outcome = await store.importLocalMangaFiles(urls: urls)
+                                    if !outcome.imported.isEmpty {
+                                        BookshelfHaptics.medium()
+                                        if outcome.failedNames.isEmpty {
+                                            showHud("已导入 \(outcome.imported.count) 部本地漫画")
+                                        } else {
+                                            showHud("导入成功 \(outcome.imported.count) 部，失败 \(outcome.failedNames.count) 部", duration: 3.2)
+                                        }
+                                    } else if let firstError = outcome.failedNames.first {
+                                        showHud("导入失败：\(firstError)", duration: 3.5)
+                                    } else {
+                                        showHud("未检测到可导入的漫画文件", duration: 2.5)
+                                    }
+                                }
+                            },
+                            onCancel: {
+                                showingLocalFileImporter = false
                             }
-                        } else if !outcome.failedNames.isEmpty {
-                            showHud("导入失败：不支持的格式或压缩包无图片", duration: 3.0)
-                        }
+                        )
+                        .ignoresSafeArea()
                     }
-                case .failure(let error):
-                    showHud("选择文件失败：\(error.localizedDescription)", duration: 2.8)
-                }
             }
             .onAppear {
                 scheduleSilentChapterSyncIfNeeded()
@@ -453,9 +459,11 @@ public struct BookshelfView: View {
             Divider()
 
             Button {
-                showingLocalFileImporter = true
+                DispatchQueue.main.async {
+                    showingLocalFileImporter = true
+                }
             } label: {
-                Label("导入本地漫画 (CBZ/ZIP/PDF)", systemImage: "doc.badge.plus")
+                Label("导入本地漫画 (CBZ/ZIP/PDF/EPUB)", systemImage: "doc.badge.plus")
             }
 
             if !store.bookshelf.isEmpty {

@@ -55,7 +55,7 @@ public struct LocalMangaSource: MangaSourceProtocol {
         }
 
         switch record.format {
-        case .cbz, .zip:
+        case .cbz, .zip, .epub:
             guard let chIdx = record.chapters.firstIndex(where: { $0.id == chapter.id }) else {
                 return []
             }

@@ -51,6 +51,16 @@ public enum LocalZipArchiveReader {
 
     /// 扫描 ZIP / CBZ 内的全部图片条目（按自然顺序排序）
     public static func listImageEntries(at url: URL) throws -> [LocalZipImageEntry] {
+        let all = try listAllEntries(at: url)
+        var entries = all.filter { isValidImagePath($0.path) }
+        entries.sort { lhs, rhs in
+            lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+        }
+        return entries
+    }
+
+    /// 扫描 ZIP / CBZ / EPUB 内的全部非目录文件条目（支持 STORED 与 DEFLATED）
+    public static func listAllEntries(at url: URL) throws -> [LocalZipImageEntry] {
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             throw ZipError.cannotOpenFile
         }
@@ -162,8 +172,10 @@ public enum LocalZipArchiveReader {
                 }
             }
 
-            if isValidImagePath(rawPath), (compressionMethod == 0 || compressionMethod == 8) {
-                let normalized = rawPath.replacingOccurrences(of: "\\", with: "/")
+            let normalized = rawPath.replacingOccurrences(of: "\\", with: "/")
+            if !normalized.isEmpty,
+               !normalized.hasSuffix("/"),
+               (compressionMethod == 0 || compressionMethod == 8) {
                 let components = normalized.split(separator: "/").map(String.init)
                 let fileName = components.last ?? normalized
                 let folderName: String
@@ -174,7 +186,7 @@ public enum LocalZipArchiveReader {
                 }
                 entries.append(
                     LocalZipImageEntry(
-                        path: rawPath,
+                        path: normalized,
                         folderName: folderName,
                         fileName: fileName,
                         compressionMethod: compressionMethod,
@@ -189,9 +201,6 @@ public enum LocalZipArchiveReader {
             parsedCount += 1
         }
 
-        entries.sort { lhs, rhs in
-            lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
-        }
         return entries
     }
 
@@ -268,7 +277,7 @@ public enum LocalZipArchiveReader {
 
     // MARK: - Path & Binary Helpers
 
-    private static func isValidImagePath(_ rawPath: String) -> Bool {
+    static func isValidImagePath(_ rawPath: String) -> Bool {
         let normalized = rawPath.replacingOccurrences(of: "\\", with: "/")
         guard !normalized.isEmpty, !normalized.hasSuffix("/") else { return false }
         let parts = normalized.split(separator: "/")
@@ -397,4 +406,293 @@ public enum LocalPDFArchiveReader {
         }
     }
     #endif
+}
+
+/// EPUB 漫画解析结果
+public struct LocalEPUBParseResult: Sendable {
+    public let title: String?
+    public let author: String?
+    public let coverEntry: LocalZipImageEntry?
+    public let orderedPages: [LocalZipImageEntry]
+}
+
+/// 零第三方依赖本地 EPUB 漫画解析器（解析 container.xml -> OPF manifest & spine -> XHTML/SVG 图像序列，失败自动降级扫描包内图片）
+public enum LocalEPUBArchiveReader {
+    private struct ManifestItem {
+        let id: String
+        let href: String
+        let mediaType: String
+        let properties: String
+    }
+
+    public static func parse(at url: URL) throws -> LocalEPUBParseResult {
+        let allEntries = try LocalZipArchiveReader.listAllEntries(at: url)
+        var entryByLowerPath: [String: LocalZipImageEntry] = [:]
+        entryByLowerPath.reserveCapacity(allEntries.count)
+        for entry in allEntries {
+            let key = normalizeZipPath(entry.path).lowercased()
+            entryByLowerPath[key] = entry
+        }
+
+        // 1. 定位 OPF 文件（优先读取 META-INF/container.xml，找不到则直接找包内首个 .opf）
+        var opfPath: String?
+        if let containerEntry = entryByLowerPath["meta-inf/container.xml"],
+           let containerData = try? LocalZipArchiveReader.extractData(at: url, entry: containerEntry),
+           let containerXML = String(data: containerData, encoding: .utf8) ?? String(data: containerData, encoding: .isoLatin1) {
+            opfPath = extractFirstAttribute(named: "full-path", in: containerXML)
+        }
+        if opfPath == nil {
+            opfPath = allEntries.first(where: { $0.path.lowercased().hasSuffix(".opf") })?.path
+        }
+
+        var parsedTitle: String?
+        var parsedAuthor: String?
+        var coverEntry: LocalZipImageEntry?
+        var orderedPages: [LocalZipImageEntry] = []
+        var seenPagePaths: Set<String> = []
+
+        if let rawOPFPath = opfPath {
+            let normalizedOPF = normalizeZipPath(rawOPFPath)
+            if let opfEntry = entryByLowerPath[normalizedOPF.lowercased()],
+               let opfData = try? LocalZipArchiveReader.extractData(at: url, entry: opfEntry),
+               let opfXML = String(data: opfData, encoding: .utf8) ?? String(data: opfData, encoding: .isoLatin1) {
+                let opfDir = parentDirectory(of: normalizedOPF)
+
+                parsedTitle = decodeXMLEntities(extractFirstTagText(tagPattern: "(?:dc:)?title", in: opfXML))
+                parsedAuthor = decodeXMLEntities(extractFirstTagText(tagPattern: "(?:dc:)?creator", in: opfXML))
+
+                let manifestItems = parseManifestItems(in: opfXML)
+                var manifestByID: [String: ManifestItem] = [:]
+                for item in manifestItems {
+                    manifestByID[item.id] = item
+                }
+
+                // 识别封面图（EPUB3 properties="cover-image" 或 EPUB2 <meta name="cover" content="..."/>）
+                if let coverItem = manifestItems.first(where: { $0.properties.lowercased().contains("cover-image") }) {
+                    let resolved = resolveRelativePath(coverItem.href, baseDir: opfDir)
+                    coverEntry = entryByLowerPath[resolved.lowercased()]
+                }
+                if coverEntry == nil, let coverMetaID = extractCoverMetaID(in: opfXML),
+                   let coverItem = manifestByID[coverMetaID] {
+                    let resolved = resolveRelativePath(coverItem.href, baseDir: opfDir)
+                    coverEntry = entryByLowerPath[resolved.lowercased()]
+                }
+
+                // 按 <spine> 顺序解析每个页面引用的漫画图片
+                let spineIDRefs = parseSpineIDRefs(in: opfXML)
+                for idref in spineIDRefs {
+                    guard let item = manifestByID[idref] else { continue }
+                    let resolvedItemPath = resolveRelativePath(item.href, baseDir: opfDir)
+                    guard let entry = entryByLowerPath[resolvedItemPath.lowercased()] else { continue }
+
+                    // 某些特殊 EPUB 的 spine 直接指向图片本身
+                    if LocalZipArchiveReader.isValidImagePath(entry.path) {
+                        let key = entry.path.lowercased()
+                        if seenPagePaths.insert(key).inserted {
+                            orderedPages.append(entry)
+                        }
+                        continue
+                    }
+
+                    // 标准 EPUB：读取 XHTML/HTML 页面并提取 <img> / <image> 引用
+                    guard let xhtmlData = try? LocalZipArchiveReader.extractData(at: url, entry: entry),
+                          let xhtml = String(data: xhtmlData, encoding: .utf8) ?? String(data: xhtmlData, encoding: .isoLatin1) else {
+                        continue
+                    }
+
+                    let pageDir = parentDirectory(of: resolvedItemPath)
+                    let imageHrefs = extractImageReferences(in: xhtml)
+                    for rawHref in imageHrefs {
+                        let resolvedImgPath = resolveRelativePath(rawHref, baseDir: pageDir)
+                        if let imgEntry = entryByLowerPath[resolvedImgPath.lowercased()],
+                           LocalZipArchiveReader.isValidImagePath(imgEntry.path) {
+                            let key = imgEntry.path.lowercased()
+                            if seenPagePaths.insert(key).inserted {
+                                orderedPages.append(imgEntry)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 兜底降级：若 OPF / Spine 未解析到图片，直接扫描包内所有图片自然排序
+        if orderedPages.isEmpty {
+            var fallback = allEntries.filter { LocalZipArchiveReader.isValidImagePath($0.path) }
+            fallback.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            orderedPages = fallback
+        }
+
+        if coverEntry == nil {
+            coverEntry = orderedPages.first
+        } else if let cover = coverEntry, !seenPagePaths.contains(cover.path.lowercased()) {
+            // 若封面未包含在 spine 中，保留为封面且不强行污染正文；若正文为空则作为唯一页
+            if orderedPages.isEmpty {
+                orderedPages = [cover]
+            }
+        }
+
+        return LocalEPUBParseResult(
+            title: parsedTitle?.isEmpty == true ? nil : parsedTitle,
+            author: parsedAuthor?.isEmpty == true ? nil : parsedAuthor,
+            coverEntry: coverEntry,
+            orderedPages: orderedPages
+        )
+    }
+
+    // MARK: - Lightweight XML / Path Helpers
+
+    private static func parseManifestItems(in xml: String) -> [ManifestItem] {
+        guard let regex = try? NSRegularExpression(pattern: "<item\\b[^>]*>", options: [.caseInsensitive]) else {
+            return []
+        }
+        let ns = xml as NSString
+        let matches = regex.matches(in: xml, range: NSRange(location: 0, length: ns.length))
+        var result: [ManifestItem] = []
+        result.reserveCapacity(matches.count)
+
+        for match in matches {
+            let tag = ns.substring(with: match.range)
+            guard let id = extractFirstAttribute(named: "id", in: tag),
+                  let href = extractFirstAttribute(named: "href", in: tag) else {
+                continue
+            }
+            let mediaType = extractFirstAttribute(named: "media-type", in: tag) ?? ""
+            let properties = extractFirstAttribute(named: "properties", in: tag) ?? ""
+            result.append(ManifestItem(id: id, href: href, mediaType: mediaType, properties: properties))
+        }
+        return result
+    }
+
+    private static func parseSpineIDRefs(in xml: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: "<itemref\\b[^>]*>", options: [.caseInsensitive]) else {
+            return []
+        }
+        let ns = xml as NSString
+        let matches = regex.matches(in: xml, range: NSRange(location: 0, length: ns.length))
+        return matches.compactMap { match in
+            let tag = ns.substring(with: match.range)
+            return extractFirstAttribute(named: "idref", in: tag)
+        }
+    }
+
+    private static func extractCoverMetaID(in xml: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "<meta\\b[^>]*>", options: [.caseInsensitive]) else {
+            return nil
+        }
+        let ns = xml as NSString
+        let matches = regex.matches(in: xml, range: NSRange(location: 0, length: ns.length))
+        for match in matches {
+            let tag = ns.substring(with: match.range)
+            if extractFirstAttribute(named: "name", in: tag)?.lowercased() == "cover",
+               let content = extractFirstAttribute(named: "content", in: tag),
+               !content.isEmpty {
+                return content
+            }
+        }
+        return nil
+    }
+
+    private static func extractImageReferences(in xhtml: String) -> [String] {
+        // 同时匹配 HTML <img src="..."> 与 SVG <image xlink:href="..."> / <image href="...">
+        guard let regex = try? NSRegularExpression(
+            pattern: "<(?:img|image)\\b[^>]*>",
+            options: [.caseInsensitive]
+        ) else {
+            return []
+        }
+        let ns = xhtml as NSString
+        let matches = regex.matches(in: xhtml, range: NSRange(location: 0, length: ns.length))
+        var refs: [String] = []
+        for match in matches {
+            let tag = ns.substring(with: match.range)
+            if let src = extractFirstAttribute(named: "src", in: tag)
+                ?? extractFirstAttribute(named: "xlink:href", in: tag)
+                ?? extractFirstAttribute(named: "href", in: tag) {
+                let cleaned = decodeXMLEntities(src)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? src
+                if !cleaned.isEmpty, !cleaned.hasPrefix("data:") {
+                    refs.append(cleaned)
+                }
+            }
+        }
+        return refs
+    }
+
+    private static func extractFirstTagText(tagPattern: String, in xml: String) -> String? {
+        let pattern = "<\(tagPattern)\\b[^>]*>([\\s\\S]*?)</\(tagPattern)>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let ns = xml as NSString
+        guard let match = regex.firstMatch(in: xml, range: NSRange(location: 0, length: ns.length)),
+              match.numberOfRanges >= 2 else {
+            return nil
+        }
+        let raw = ns.substring(with: match.range(at: 1))
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func extractFirstAttribute(named name: String, in text: String) -> String? {
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let pattern = "\\b\(escaped)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let ns = text as NSString
+        guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else {
+            return nil
+        }
+        if match.range(at: 1).location != NSNotFound {
+            return ns.substring(with: match.range(at: 1))
+        }
+        if match.range(at: 2).location != NSNotFound {
+            return ns.substring(with: match.range(at: 2))
+        }
+        return nil
+    }
+
+    private static func decodeXMLEntities(_ text: String?) -> String? {
+        guard var value = text else { return nil }
+        value = value
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&apos;", with: "'")
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalizeZipPath(_ path: String) -> String {
+        let withoutQuery = path.split(separator: "#", maxSplits: 1).first.map(String.init) ?? path
+        let clean = withoutQuery.split(separator: "?", maxSplits: 1).first.map(String.init) ?? withoutQuery
+        let decoded = clean.removingPercentEncoding ?? clean
+        var parts: [String] = []
+        for seg in decoded.replacingOccurrences(of: "\\", with: "/").split(separator: "/") {
+            if seg == "." || seg.isEmpty { continue }
+            if seg == ".." {
+                if !parts.isEmpty { parts.removeLast() }
+            } else {
+                parts.append(String(seg))
+            }
+        }
+        return parts.joined(separator: "/")
+    }
+
+    private static func parentDirectory(of path: String) -> String {
+        let normalized = normalizeZipPath(path)
+        guard let lastSlash = normalized.lastIndex(of: "/") else { return "" }
+        return String(normalized[..<lastSlash])
+    }
+
+    private static func resolveRelativePath(_ href: String, baseDir: String) -> String {
+        let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("/") {
+            return normalizeZipPath(trimmed)
+        }
+        if baseDir.isEmpty {
+            return normalizeZipPath(trimmed)
+        }
+        return normalizeZipPath("\(baseDir)/\(trimmed)")
+    }
 }

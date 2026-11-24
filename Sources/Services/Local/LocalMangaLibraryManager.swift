@@ -9,6 +9,7 @@ public enum LocalMangaFormat: String, Codable, Equatable, Sendable {
     case cbz = "cbz"
     case zip = "zip"
     case pdf = "pdf"
+    case epub = "epub"
 
     public var displayTag: String {
         rawValue.uppercased()
@@ -19,8 +20,27 @@ public enum LocalMangaFormat: String, Codable, Equatable, Sendable {
         case "cbz": return .cbz
         case "zip": return .zip
         case "pdf": return .pdf
+        case "epub": return .epub
         default: return nil
         }
+    }
+
+    /// 当文件无后缀或被外部重命名时，按文件头魔数兜底识别（PDF / ZIP）
+    public static func detectWithMagicFallback(from url: URL) -> LocalMangaFormat? {
+        if let byExt = detect(from: url) {
+            return byExt
+        }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 4), header.count >= 4 else { return nil }
+        let bytes = [UInt8](header)
+        if bytes == [0x25, 0x50, 0x44, 0x46] { // %PDF
+            return .pdf
+        }
+        if bytes[0] == 0x50 && bytes[1] == 0x4B { // PK (ZIP/CBZ/EPUB)
+            return .zip
+        }
+        return nil
     }
 }
 
@@ -51,6 +71,7 @@ public struct LocalChapterRecord: Codable, Equatable, Sendable {
 public struct LocalMangaRecord: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public var title: String
+    public var author: String?
     public let format: LocalMangaFormat
     public let archiveFileName: String
     public let fileSizeBytes: Int64
@@ -64,11 +85,17 @@ public struct LocalMangaRecord: Identifiable, Codable, Equatable, Sendable {
 
     public func toManga() -> Manga {
         let formattedSize = ByteCountFormatter.string(fromByteCount: fileSizeBytes, countStyle: .file)
+        let resolvedAuthor: String
+        if let author, !author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            resolvedAuthor = author
+        } else {
+            resolvedAuthor = "本地导入"
+        }
         return Manga(
             id: id,
             sourceID: LocalMangaSource.sourceID,
             title: title,
-            author: "本地导入",
+            author: resolvedAuthor,
             coverURL: LocalMangaLibraryManager.coverURLString(for: id),
             coverHeaders: [:],
             summary: "本地 \(format.displayTag) 漫画 · 共 \(chapterCount) 话 · \(pageCount) 页（\(formattedSize)）",
@@ -78,16 +105,29 @@ public struct LocalMangaRecord: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-/// 本地漫画库持久化管理器（CBZ / ZIP / PDF 导入、封面提取、索引缓存与按需图像渲染）
+/// 本地漫画库持久化管理器（CBZ / ZIP / PDF / EPUB 导入、封面提取、索引缓存与按需图像渲染）
 @MainActor
 public final class LocalMangaLibraryManager: ObservableObject {
     public static let shared = LocalMangaLibraryManager()
 
-    /// 支持导入的 UniformTypeIdentifier 列表（供 SwiftUI .fileImporter 使用）
+    /// 支持导入的 UniformTypeIdentifier 列表（兼容 CBZ / ZIP / PDF / EPUB 及被识别为通用 data 的文件）
     public static var supportedImportContentTypes: [UTType] {
-        var types: [UTType] = [.zip, .pdf]
-        if let cbzType = UTType(filenameExtension: "cbz") {
-            types.insert(cbzType, at: 0)
+        var types: [UTType] = []
+        let candidates: [UTType?] = [
+            UTType("org.comicbook.cbz-archive"),
+            UTType("com.macitbetter.cbz-archive"),
+            UTType(filenameExtension: "cbz"),
+            UTType("org.idpf.epub-container"),
+            UTType(filenameExtension: "epub"),
+            .zip,
+            .pdf,
+            .archive,
+            .data,
+        ]
+        for candidate in candidates {
+            if let t = candidate, !types.contains(t) {
+                types.append(t)
+            }
         }
         return types
     }
@@ -184,7 +224,9 @@ public final class LocalMangaLibraryManager: ObservableObject {
                     )
                     output.append((record, nil))
                 } catch {
-                    output.append((nil, fileName))
+                    let reason = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let display = reason.isEmpty ? fileName : "\(fileName)（\(reason)）"
+                    output.append((nil, display))
                 }
             }
             return output
@@ -289,7 +331,7 @@ public final class LocalMangaLibraryManager: ObservableObject {
         guard let record = recordSnapshot(for: mangaID) else { return nil }
         let archiveURL = archivesDirectory.appendingPathComponent(record.archiveFileName)
         switch record.format {
-        case .cbz, .zip:
+        case .cbz, .zip, .epub:
             guard let firstEntry = record.chapters.first?.zipEntries.first,
                   let data = try? LocalZipArchiveReader.extractData(at: archiveURL, entry: firstEntry) else {
                 return nil
@@ -308,22 +350,55 @@ public final class LocalMangaLibraryManager: ObservableObject {
         archivesDir: URL,
         coversDir: URL
     ) throws -> LocalMangaRecord {
-        guard let format = LocalMangaFormat.detect(from: sourceURL) else {
-            throw NSError(domain: "LocalManga", code: -1, userInfo: [NSLocalizedDescriptionKey: "不支持的文件格式"])
-        }
-
         let id = UUID().uuidString.lowercased()
         let rawTitle = sourceURL.deletingPathExtension().lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = rawTitle.isEmpty ? "本地漫画" : rawTitle
-        let archiveFileName = "\(id).\(format.rawValue)"
-        let destArchiveURL = archivesDir.appendingPathComponent(archiveFileName)
+        var title = rawTitle.isEmpty ? "本地漫画" : rawTitle
+        var author: String? = nil
 
         let fm = FileManager.default
+        if !fm.fileExists(atPath: archivesDir.path) {
+            try fm.createDirectory(at: archivesDir, withIntermediateDirectories: true)
+        }
+        if !fm.fileExists(atPath: coversDir.path) {
+            try fm.createDirectory(at: coversDir, withIntermediateDirectories: true)
+        }
+
+        // 先通过 NSFileCoordinator 安全读取/拷贝到沙盒临时文件，再按扩展名+魔数判断格式
+        let tempCopyURL = archivesDir.appendingPathComponent("tmp_\(id).\(sourceURL.pathExtension.isEmpty ? "bin" : sourceURL.pathExtension.lowercased())")
+        if fm.fileExists(atPath: tempCopyURL.path) {
+            try? fm.removeItem(at: tempCopyURL)
+        }
+
+        var coordinatorError: NSError?
+        var copyError: Error?
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(readingItemAt: sourceURL, options: [.withoutChanges], error: &coordinatorError) { readableURL in
+            do {
+                try fm.copyItem(at: readableURL, to: tempCopyURL)
+            } catch {
+                copyError = error
+            }
+        }
+        if let copyError {
+            throw copyError
+        }
+        if let coordinatorError, !fm.fileExists(atPath: tempCopyURL.path) {
+            throw coordinatorError
+        }
+
+        guard let format = LocalMangaFormat.detect(from: sourceURL)
+            ?? LocalMangaFormat.detectWithMagicFallback(from: tempCopyURL) else {
+            try? fm.removeItem(at: tempCopyURL)
+            throw NSError(domain: "LocalManga", code: -1, userInfo: [NSLocalizedDescriptionKey: "不支持的文件格式，仅支持 CBZ / ZIP / PDF / EPUB"])
+        }
+
+        let archiveFileName = "\(id).\(format.rawValue)"
+        let destArchiveURL = archivesDir.appendingPathComponent(archiveFileName)
         if fm.fileExists(atPath: destArchiveURL.path) {
             try? fm.removeItem(at: destArchiveURL)
         }
-        try fm.copyItem(at: sourceURL, to: destArchiveURL)
+        try fm.moveItem(at: tempCopyURL, to: destArchiveURL)
 
         let attrs = try? fm.attributesOfItem(atPath: destArchiveURL.path)
         let fileSizeBytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
@@ -344,6 +419,34 @@ public final class LocalMangaLibraryManager: ObservableObject {
             #if canImport(UIKit)
             if let firstEntry = chapters.first?.zipEntries.first,
                let rawData = try? LocalZipArchiveReader.extractData(at: destArchiveURL, entry: firstEntry),
+               let img = UIImage(data: rawData) {
+                saveCoverThumbnail(img, to: coversDir.appendingPathComponent("\(id).jpg"))
+            }
+            #endif
+
+        case .epub:
+            let parsed = try LocalEPUBArchiveReader.parse(at: destArchiveURL)
+            guard !parsed.orderedPages.isEmpty else {
+                try? fm.removeItem(at: destArchiveURL)
+                throw NSError(domain: "LocalManga", code: -4, userInfo: [NSLocalizedDescriptionKey: "EPUB 中未发现漫画图片页面"])
+            }
+            if let epubTitle = parsed.title, !epubTitle.isEmpty {
+                title = epubTitle
+            }
+            author = parsed.author
+            chapters = [
+                LocalChapterRecord(
+                    id: "\(id)::epub",
+                    title: "全本阅读",
+                    number: 1,
+                    zipEntries: parsed.orderedPages
+                )
+            ]
+            totalPages = parsed.orderedPages.count
+
+            #if canImport(UIKit)
+            if let coverEntry = parsed.coverEntry ?? parsed.orderedPages.first,
+               let rawData = try? LocalZipArchiveReader.extractData(at: destArchiveURL, entry: coverEntry),
                let img = UIImage(data: rawData) {
                 saveCoverThumbnail(img, to: coversDir.appendingPathComponent("\(id).jpg"))
             }
@@ -376,6 +479,7 @@ public final class LocalMangaLibraryManager: ObservableObject {
         return LocalMangaRecord(
             id: id,
             title: title,
+            author: author,
             format: format,
             archiveFileName: archiveFileName,
             fileSizeBytes: fileSizeBytes,
