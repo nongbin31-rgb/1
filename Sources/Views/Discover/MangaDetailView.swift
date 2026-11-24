@@ -15,6 +15,11 @@ public struct MangaDetailView: View {
     @State private var launchPayload: ReaderLaunchPayload?
     @State private var chapterToDelete: MangaChapter?
     @State private var showingDeleteMangaDownloadsAlert = false
+    @AppStorage("keda_online_detail_chapter_descending_v1") private var isChapterListDescending = false
+
+    private var displayedChapters: [MangaChapter] {
+        isChapterListDescending ? Array(chapters.reversed()) : chapters
+    }
 
     private var currentManga: Manga {
         resolvedManga ?? manga
@@ -358,6 +363,32 @@ public struct MangaDetailView: View {
                 if isLoading {
                     ProgressView()
                 } else if !chapters.isEmpty {
+                    if chapters.count > 1 {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isChapterListDescending.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.up.arrow.down")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                Text(isChapterListDescending ? "倒序" : "正序")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(isChapterListDescending ? Color.accentColor : Color.secondary)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                isChapterListDescending
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color(uiColor: .secondarySystemFill),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isChapterListDescending ? "当前倒序，点击切换为正序" : "当前正序，点击切换为倒序")
+                    }
+
                     if activeCount > 0 {
                         Button {
                             downloadManager.cancelDownloads(for: mangaKey)
@@ -437,7 +468,7 @@ public struct MangaDetailView: View {
                 .padding()
             } else {
                 LazyVStack(spacing: 8) {
-                    ForEach(chapters) { chapter in
+                    ForEach(displayedChapters) { chapter in
                         let saved = store.progress(for: currentManga)
                         let isCurrent = saved?.chapterID == chapter.id
                         let isDownloaded = downloadManager.isDownloaded(mangaKey: mangaKey, chapterID: chapter.id)
