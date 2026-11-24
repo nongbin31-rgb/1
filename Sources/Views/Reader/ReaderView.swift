@@ -1634,10 +1634,13 @@ public struct ReaderView: View {
         guard size.width > 0, size.height > 0 else { return }
 
         let ratio = size.height / size.width
-        // 若为高瘦条漫长图（>= 1.85）且当前未处于条漫模式，智能自适应切换为条漫
-        if ratio >= 1.85 && activeLayoutMode != .verticalWebtoon {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                activeLayoutMode = .verticalWebtoon
+        // 若为高瘦条漫长图（>= 1.85），持久化记为韩漫条漫使详情页与下次打开保持一致，并即时切换为条漫
+        if ratio >= 1.85 {
+            store.recordAutoDetectedCategory(.koreanWebtoon, for: manga)
+            if activeLayoutMode != .verticalWebtoon {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    activeLayoutMode = .verticalWebtoon
+                }
             }
         }
     }

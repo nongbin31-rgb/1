@@ -41,9 +41,9 @@ public enum MangaLayoutCategory: String, Codable, CaseIterable, Identifiable, Se
 public enum MangaLayoutDetector {
     // MARK: - 正则规则库
 
-    /// 标题韩漫标记正则
+    /// 标题韩漫标记正则（同时兼容简体与繁体标签）
     private static let koreanTitlePattern = try! NSRegularExpression(
-        pattern: #"(?i)(?:\[|【|\(|（)?\s*(?:韩漫|webtoon|条漫|條漫|韩国漫画|韓國漫畫)\s*(?:\]|】|\)|）)?"#,
+        pattern: #"(?i)(?:\[|【|\(|（)?\s*(?:韩漫|韓漫|webtoon|manhwa|条漫|條漫|长条|長條|韩国漫画|韓國漫畫|韩国|韓國)\s*(?:\]|】|\)|）)?"#,
         options: []
     )
 
@@ -55,12 +55,13 @@ public enum MangaLayoutDetector {
 
     // MARK: - 关键词集合
 
-    /// 韩漫强特征标签（全部小写）
+    /// 韩漫强特征标签（全部小写，兼容简繁体）
     private static let koreanTagKeywords: Set<String> = [
-        "韩漫", "韩国", "韩国漫画", "韓國漫畫", "韩漫汉化", "韩漫生肉",
-        "webtoon", "webtoons", "条漫", "條漫", "长条漫", "长条", "长图",
+        "韩漫", "韓漫", "韩国", "韓國", "韩国漫画", "韓國漫畫",
+        "韩漫汉化", "韓漫漢化", "韩漫生肉", "韓漫生肉", "韩漫无删", "韓漫無刪",
+        "webtoon", "webtoons", "manhwa", "条漫", "條漫", "长条漫", "長條漫", "长条", "長條", "长图", "長圖",
         "korean", "korea", "만화", "웹툰",
-        "toptoon", "lezhin", "bomtoon", "kakaopage", "naver webtoon", "漫蛙"
+        "toptoon", "lezhin", "bomtoon", "kakaopage", "naver webtoon", "toomics", "ridibooks", "漫蛙"
     ]
 
     /// 日漫强特征标签（全部小写）

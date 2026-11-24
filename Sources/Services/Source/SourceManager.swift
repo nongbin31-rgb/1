@@ -34,6 +34,10 @@ public final class AppStore: ObservableObject {
     @Published public var mangaLayoutOverrides: [String: ReaderLayoutMode] = [:] {
         didSet { save(mangaLayoutOverrides, key: Keys.mangaLayoutOverrides) }
     }
+    /// 阅读器通过实际正文图片高宽比实测识别的分类缓存（如确认长图为韩漫条漫，使详情页与下次打开保持一致）
+    @Published public var autoDetectedCategories: [String: MangaLayoutCategory] = [:] {
+        didSet { save(autoDetectedCategories, key: Keys.autoDetectedCategories) }
+    }
     @Published public var pageTurningEffect: PageTurningEffect = .curling {
         didSet { save(pageTurningEffect, key: Keys.turningEffect) }
     }
@@ -163,6 +167,7 @@ public final class AppStore: ObservableObject {
         static let layoutMode = "keda_online_layout_v1"
         static let autoDetectMangaLayout = "keda_online_auto_detect_manga_layout_v1"
         static let mangaLayoutOverrides = "keda_online_manga_layout_overrides_v1"
+        static let autoDetectedCategories = "keda_online_auto_detected_categories_v1"
         static let turningEffect = "keda_online_turning_effect_v1"
         static let soundEnabled = "keda_online_sound_enabled_v1"
         static let spineShadow = "keda_online_spine_shadow_v1"
@@ -256,6 +261,7 @@ public final class AppStore: ObservableObject {
         self.readerLayoutMode = load(key: Keys.layoutMode) ?? .verticalWebtoon
         self.autoDetectMangaLayout = load(key: Keys.autoDetectMangaLayout) ?? true
         self.mangaLayoutOverrides = load(key: Keys.mangaLayoutOverrides) ?? [:]
+        self.autoDetectedCategories = load(key: Keys.autoDetectedCategories) ?? [:]
         self.pageTurningEffect = load(key: Keys.turningEffect) ?? .curling
         self.pageTurnSoundEnabled = load(key: Keys.soundEnabled) ?? true
         self.showSpineShadowInCurl = load(key: Keys.spineShadow) ?? true
@@ -1057,7 +1063,7 @@ public final class AppStore: ObservableObject {
         guard autoDetectMangaLayout else {
             return readerLayoutMode
         }
-        let category = MangaLayoutDetector.detectCategory(for: manga)
+        let category = detectedCategory(for: manga)
         switch category {
         case .koreanWebtoon:
             return .verticalWebtoon
@@ -1082,9 +1088,20 @@ public final class AppStore: ObservableObject {
         mangaLayoutOverrides[manga.compositeKey]
     }
 
-    /// 获取特定漫画的智能分类（韩漫 / 日漫 / 常规）
+    /// 记录阅读器通过实际正文图片尺寸识别出的漫画分类（与详情页同步）
+    public func recordAutoDetectedCategory(_ category: MangaLayoutCategory, for manga: Manga) {
+        let key = manga.compositeKey
+        if autoDetectedCategories[key] != category {
+            autoDetectedCategories[key] = category
+        }
+    }
+
+    /// 获取特定漫画的智能分类（优先采用阅读器实测图片尺寸结果，否则按标题/标签静态推断）
     public func detectedCategory(for manga: Manga) -> MangaLayoutCategory {
-        MangaLayoutDetector.detectCategory(for: manga)
+        if let measured = autoDetectedCategories[manga.compositeKey] {
+            return measured
+        }
+        return MangaLayoutDetector.detectCategory(for: manga)
     }
 
     private func save<T: Encodable>(_ value: T, key: String) {
