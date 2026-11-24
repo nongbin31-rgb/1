@@ -259,10 +259,10 @@ public struct TranslationSettingsView: View {
             if let msg = testStatusMessage, let ok = testStatusOK {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(ok ? .green : .orange)
+                        .foregroundStyle(ok ? Color.green : Color.orange)
                     Text(msg)
                         .font(.caption)
-                        .foregroundStyle(ok ? .primary : .orange)
+                        .foregroundStyle(ok ? Color.primary : Color.orange)
                 }
             }
         } header: {
