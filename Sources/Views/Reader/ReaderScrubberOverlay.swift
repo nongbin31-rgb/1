@@ -1676,14 +1676,23 @@ struct ReaderScrubberPreviewOverlay: View {
         let _ = thumbnailStore.version
         if pages.indices.contains(targetIndex) {
             let page = pages[targetIndex]
-            let thumb = thumbnailStore.cachedThumbnail(for: page.imageURL)
+            let thumbAsset = thumbnailStore.cachedThumbnailAsset(for: page.imageURL)
+            let thumb = thumbAsset?.primaryThumbnail
+            let stripFrames = thumbAsset?.longStripFrames
+            let isLongStrip = (stripFrames?.count ?? 0) >= 3
             let isAtOrigin = (targetIndex == originIndex)
             let isUpscaled = enableUpscaler && PageUpscalerPipeline.shared.cachedImage(pageKey: page.id, config: upscalerConfig) != nil
             let isLocallyCached = thumb != nil || OnlineImageLoader.shared.hasCachedImage(for: page.imageURL)
             let isHoverLoading = thumbnailStore.isInFlight(for: page.imageURL)
 
             VStack(spacing: isLandscape ? 8 : 14) {
-                if let thumb {
+                if let stripFrames, stripFrames.count >= 3 {
+                    longStripFilmstripPreview(
+                        frames: Array(stripFrames.prefix(3)),
+                        availableSize: availableSize,
+                        isLandscape: isLandscape
+                    )
+                } else if let thumb {
                     let maxPreviewHeight: CGFloat = isLandscape
                         ? max(96, availableSize.height * 0.30)
                         : min(230, availableSize.height * 0.27)
@@ -1711,6 +1720,14 @@ struct ReaderScrubberPreviewOverlay: View {
                         Text("/ \(pages.count)")
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.white.opacity(0.72))
+                        if isLongStrip {
+                            Text("长图")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.92))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.78), in: Capsule())
+                        }
                     }
 
                     HStack(spacing: 6) {
@@ -1770,6 +1787,64 @@ struct ReaderScrubberPreviewOverlay: View {
             }
             .padding(.horizontal, 24)
         }
+    }
+
+    /// 韩漫长图专用「上 / 中 / 下」三格分镜胶片预览条（按宽高清采样 + 自动避开纯白/纯黑留白）
+    private func longStripFilmstripPreview(
+        frames: [UIImage],
+        availableSize: CGSize,
+        isLandscape: Bool
+    ) -> some View {
+        let labels = ["上", "中", "下"]
+        let maxHeight: CGFloat = isLandscape
+            ? max(88, min(126, availableSize.height * 0.28))
+            : max(124, min(176, availableSize.height * 0.22))
+        let maxTotalWidth = min(availableSize.width - 44, isLandscape ? 380 : 340)
+        let spacing: CGFloat = 6
+        let outerPadding: CGFloat = 7
+        let frameW = min(maxHeight / 1.38, max(64, (maxTotalWidth - outerPadding * 2 - spacing * 2) / 3.0))
+        let frameH = frameW * 1.38
+
+        return HStack(spacing: spacing) {
+            ForEach(0..<min(frames.count, 3), id: \.self) { idx in
+                ZStack(alignment: .bottomLeading) {
+                    Image(uiImage: frames[idx])
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: frameW, height: frameH)
+                        .clipped()
+
+                    LinearGradient(
+                        colors: [Color.clear, Color.black.opacity(0.62)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 24)
+
+                    Text(labels[idx])
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.94))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.52), in: Capsule())
+                        .padding(.leading, 5)
+                        .padding(.bottom, 5)
+                }
+                .frame(width: frameW, height: frameH)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.20), lineWidth: 0.7)
+                )
+            }
+        }
+        .padding(outerPadding)
+        .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.28), lineWidth: 1.0)
+        )
+        .shadow(color: .black.opacity(0.55), radius: 16, y: 8)
     }
 
     @ViewBuilder
