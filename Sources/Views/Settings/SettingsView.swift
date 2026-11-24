@@ -10,7 +10,7 @@ public struct SettingsView: View {
     @State private var showingClearAlert = false
 
     public var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             Form {
                 Section {
                     HStack(spacing: 16) {

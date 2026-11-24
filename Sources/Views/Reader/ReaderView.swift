@@ -981,7 +981,7 @@ public struct ReaderView: View {
 
                     Spacer()
 
-                    GlassEffectContainer(spacing: 8) {
+                    CompatGlassEffectContainer(spacing: 8) {
                         HStack(spacing: 8) {
                             readerProgressStyleMenuButton
 
@@ -1842,7 +1842,7 @@ private struct ReaderUpscalerSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             Form {
                 Section {
                     Button {
@@ -2007,7 +2007,7 @@ private struct ReaderUpscalerSheet: View {
                     )
                 }
             }
-            .scrollContentBackground(.hidden)
+            .compatScrollContentBackgroundHidden()
             .navigationTitle("画质超分与阅读设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -49,7 +49,7 @@ public struct MangaDetailView: View {
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("漫画详情")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        .compatNavigationBarHidden(false)
         .task {
             await loadChapters()
         }
@@ -112,9 +112,10 @@ public struct MangaDetailView: View {
                     let isSearchableAuthor = displayAuthor != "佚名" && displayAuthor != "绅士本"
                     if isSearchableAuthor {
                         NavigationLink(
-                            value: MangaSearchRoute(
+                            destination: MangaSearchView(
                                 initialQuery: displayAuthor,
                                 initialSourceID: currentManga.sourceID,
+                                suggestedTags: [],
                                 autoSubmit: true
                             )
                         ) {
@@ -148,9 +149,10 @@ public struct MangaDetailView: View {
                         HStack(spacing: 6) {
                             ForEach(tags, id: \.self) { tag in
                                 NavigationLink(
-                                    value: MangaSearchRoute(
+                                    destination: MangaSearchView(
                                         initialQuery: tag,
                                         initialSourceID: currentManga.sourceID,
+                                        suggestedTags: [],
                                         autoSubmit: true
                                     )
                                 ) {

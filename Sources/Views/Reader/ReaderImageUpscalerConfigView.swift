@@ -50,7 +50,7 @@ public struct ReaderImageUpscalerConfigView: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             ZStack {
                 Color.black.ignoresSafeArea()
 
@@ -193,9 +193,7 @@ public struct ReaderImageUpscalerConfigView: View {
                     .foregroundColor(.white)
                 }
             }
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.black.opacity(0.85), for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+            .compatToolbarBackgroundDark()
             .sheet(isPresented: $showingUpscalerFAQ) {
                 upscalerFAQSheet
             }
@@ -268,7 +266,7 @@ public struct ReaderImageUpscalerConfigView: View {
                 HStack {
                     Image(systemName: "sparkles")
                     Text(isEnhancing ? "重新预览" : "预览效果")
-                        .fontWeight(.semibold)
+                        .font(.body.weight(.semibold))
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
@@ -449,7 +447,7 @@ public struct ReaderImageUpscalerConfigView: View {
     // MARK: - FAQ 弹窗
 
     private var upscalerFAQSheet: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("关于 AI 画质增强")
@@ -494,7 +492,7 @@ public struct ReaderImageUpscalerConfigView: View {
     }
 
     private var anime4kFAQSheet: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Anime4K 各个模式的区别")

@@ -70,13 +70,13 @@ struct DiscoverLayoutCollectionView: View {
     }
 }
 
-/// 统一导航跳转包装器（main 分支采用 value-based NavigationLink，ios15 分支仅替换此处）
+/// 统一导航跳转包装器（配合 CompatNavigationContainer，全量兼容 iOS 15 ~ iOS 26）
 private struct DiscoverMangaLink<Label: View>: View {
     let manga: Manga
     @ViewBuilder let label: () -> Label
 
     var body: some View {
-        NavigationLink(value: manga) {
+        NavigationLink(destination: MangaDetailView(manga: manga)) {
             label()
         }
         .buttonStyle(.plain)

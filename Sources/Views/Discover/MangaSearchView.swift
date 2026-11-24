@@ -166,10 +166,10 @@ public struct MangaSearchView: View {
             }
             .navigationTitle("搜索漫画")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.visible, for: .navigationBar)
+            .compatNavigationBarHidden(false)
             .toolbar {
-                if hasSubmittedSearch && !isAggregateMode && !singleMangas.isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if hasSubmittedSearch && !isAggregateMode && !singleMangas.isEmpty {
                         Button {
                             jumpTargetPageInput = "\(currentPage)"
                             showingJumpSheet = true
@@ -375,37 +375,35 @@ public struct MangaSearchView: View {
                                 .buttonStyle(.plain)
                             }
 
-                            FlowChipLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-                                ForEach(store.searchHistory, id: \.self) { term in
-                                    HStack(spacing: 4) {
-                                        Button {
-                                            submitSearch(term, scrollProxy: scrollProxy)
-                                        } label: {
-                                            Text(term)
-                                                .font(.caption.weight(.medium))
-                                                .lineLimit(1)
-                                                .foregroundStyle(.primary)
-                                        }
-                                        .buttonStyle(.plain)
-
-                                        Button {
-                                            withAnimation(.easeInOut(duration: 0.18)) {
-                                                store.removeSearchHistory(term)
-                                            }
-                                        } label: {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: 9, weight: .bold))
-                                                .foregroundStyle(.secondary)
-                                                .padding(2)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .accessibilityLabel("删除历史记录 \(term)")
+                            FlowChipView(items: store.searchHistory, horizontalSpacing: 8, verticalSpacing: 8) { term in
+                                HStack(spacing: 4) {
+                                    Button {
+                                        submitSearch(term, scrollProxy: scrollProxy)
+                                    } label: {
+                                        Text(term)
+                                            .font(.caption.weight(.medium))
+                                            .lineLimit(1)
+                                            .foregroundStyle(.primary)
                                     }
-                                    .padding(.leading, 12)
-                                    .padding(.trailing, 8)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.secondarySystemFill), in: Capsule())
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            store.removeSearchHistory(term)
+                                        }
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundStyle(.secondary)
+                                            .padding(2)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("删除历史记录 \(term)")
                                 }
+                                .padding(.leading, 12)
+                                .padding(.trailing, 8)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemFill), in: Capsule())
                             }
                         }
                     }
@@ -416,21 +414,19 @@ public struct MangaSearchView: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
 
-                            FlowChipLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-                                ForEach(quickKeywords, id: \.self) { keyword in
-                                    Button {
-                                        submitSearch(keyword, scrollProxy: scrollProxy)
-                                    } label: {
-                                        Text(keyword)
-                                            .font(.caption.weight(.medium))
-                                            .lineLimit(1)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(Color.accentColor.opacity(0.11), in: Capsule())
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                    .buttonStyle(.plain)
+                            FlowChipView(items: quickKeywords, horizontalSpacing: 8, verticalSpacing: 8) { keyword in
+                                Button {
+                                    submitSearch(keyword, scrollProxy: scrollProxy)
+                                } label: {
+                                    Text(keyword)
+                                        .font(.caption.weight(.medium))
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.accentColor.opacity(0.11), in: Capsule())
+                                        .foregroundStyle(Color.accentColor)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -441,7 +437,7 @@ public struct MangaSearchView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
-        .scrollDismissesKeyboard(.interactively)
+        .compatScrollDismissesKeyboard()
     }
 
     private var searchTipsCard: some View {
@@ -563,7 +559,7 @@ public struct MangaSearchView: View {
 
                     LazyVGrid(columns: columns, spacing: 18) {
                         ForEach(singleMangas) { manga in
-                            NavigationLink(value: manga) {
+                            NavigationLink(destination: MangaDetailView(manga: manga)) {
                                 MangaGridCard(
                                     manga: manga,
                                     progress: store.progress(for: manga)
@@ -586,7 +582,7 @@ public struct MangaSearchView: View {
 
                     singlePaginationBar(scrollProxy: scrollProxy)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .compatScrollDismissesKeyboard()
                 .refreshable {
                     await performSingleSearchAsync(page: 1, isLoadMore: false, forceRefresh: true, scrollProxy: scrollProxy)
                 }
@@ -680,7 +676,7 @@ public struct MangaSearchView: View {
                         aggregateGroupedBody(scrollProxy: scrollProxy)
                     }
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .compatScrollDismissesKeyboard()
                 .refreshable {
                     await performAggregateSearchAsync(forceRefresh: true, scrollProxy: scrollProxy)
                 }
@@ -809,7 +805,7 @@ public struct MangaSearchView: View {
                             let previewItems = Array(state.mangas.prefix(12))
                             LazyVGrid(columns: columns, spacing: 16) {
                                 ForEach(previewItems) { manga in
-                                    NavigationLink(value: manga) {
+                                    NavigationLink(destination: MangaDetailView(manga: manga)) {
                                         MangaGridCard(
                                             manga: manga,
                                             progress: store.progress(for: manga),
@@ -889,7 +885,7 @@ public struct MangaSearchView: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 18) {
                         ForEach(state.mangas) { manga in
-                            NavigationLink(value: manga) {
+                            NavigationLink(destination: MangaDetailView(manga: manga)) {
                                 MangaGridCard(
                                     manga: manga,
                                     progress: store.progress(for: manga),
@@ -1099,7 +1095,7 @@ public struct MangaSearchView: View {
     }
 
     private func jumpPageSheet(scrollProxy: ScrollViewProxy) -> some View {
-        NavigationStack {
+        CompatNavigationContainer {
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
                     Text("搜索结果跳页")
@@ -1185,8 +1181,8 @@ public struct MangaSearchView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
             }
-            .presentationDetents([.height(340)])
-            .presentationDragIndicator(.visible)
+            .compatPresentationDetentsHeight(340)
+            .compatPresentationDragIndicatorVisible()
         }
     }
 
@@ -1625,69 +1621,124 @@ private struct SourceSearchOutcome: Sendable {
     let wasCancelled: Bool
 }
 
-/// iOS 16 原生自适应自动换行流式标签布局（用于搜索历史与快捷标签）
-private struct FlowChipLayout: Layout {
-    var horizontalSpacing: CGFloat = 8
-    var verticalSpacing: CGFloat = 8
+/// iOS 15 兼容流式标签布局（基于纯原生 VStack/HStack 测量折行，彻底避免 alignmentGuide 多次求值导致的错位与空白）
+private struct FlowChipView<Data: RandomAccessCollection, Content: View>: View where Data.Element: Hashable {
+    let items: Data
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+    let content: (Data.Element) -> Content
 
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        let itemProposal = ProposedViewSize(
-            width: maxWidth.isFinite ? maxWidth : nil,
-            height: nil
-        )
+    @State private var containerWidth: CGFloat = 0
+    @State private var itemWidths: [Int: CGFloat] = [:]
 
-        var currentX: CGFloat = 0
-        var currentY: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var maxLineWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(itemProposal)
-            if currentX > 0 && currentX + size.width > maxWidth {
-                currentX = 0
-                currentY += lineHeight + verticalSpacing
-                lineHeight = 0
-            }
-            maxLineWidth = max(maxLineWidth, currentX + size.width)
-            currentX += size.width + horizontalSpacing
-            lineHeight = max(lineHeight, size.height)
-        }
-
-        let totalHeight = subviews.isEmpty ? 0 : (currentY + lineHeight)
-        let resolvedWidth = proposal.width ?? maxLineWidth
-        return CGSize(width: resolvedWidth, height: totalHeight)
+    init(
+        items: Data,
+        horizontalSpacing: CGFloat = 8,
+        verticalSpacing: CGFloat = 8,
+        @ViewBuilder content: @escaping (Data.Element) -> Content
+    ) {
+        self.items = items
+        self.horizontalSpacing = horizontalSpacing
+        self.verticalSpacing = verticalSpacing
+        self.content = content
     }
 
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        let itemProposal = ProposedViewSize(width: bounds.width, height: nil)
-        var currentX = bounds.minX
-        var currentY = bounds.minY
-        var lineHeight: CGFloat = 0
+    var body: some View {
+        let itemArray = Array(items)
+        let rows = computeRows(count: itemArray.count)
 
-        for subview in subviews {
-            let size = subview.sizeThatFits(itemProposal)
-            if currentX > bounds.minX && currentX + size.width > bounds.maxX {
-                currentX = bounds.minX
-                currentY += lineHeight + verticalSpacing
-                lineHeight = 0
+        VStack(alignment: .leading, spacing: 0) {
+            // 零高度满宽测量锚点：独立获取父容器可用宽度，不受下方标签宽度影响且不产生额外垂直间距
+            Color.clear
+                .frame(height: 0)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear {
+                                if abs(containerWidth - geo.size.width) > 0.5 {
+                                    containerWidth = geo.size.width
+                                }
+                            }
+                            .onChange(of: geo.size.width) { newWidth in
+                                if abs(containerWidth - newWidth) > 0.5 {
+                                    containerWidth = newWidth
+                                }
+                            }
+                    }
+                )
+
+            VStack(alignment: .leading, spacing: verticalSpacing) {
+                ForEach(rows.indices, id: \.self) { rowIndex in
+                    HStack(spacing: horizontalSpacing) {
+                        ForEach(rows[rowIndex], id: \.self) { idx in
+                            content(itemArray[idx])
+                                .id(itemArray[idx])
+                                .fixedSize()
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: FlowChipWidthPreferenceKey.self,
+                                            value: [idx: geo.size.width]
+                                        )
+                                    }
+                                )
+                        }
+                    }
+                }
             }
-            subview.place(
-                at: CGPoint(x: currentX, y: currentY),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: min(size.width, bounds.width), height: size.height)
-            )
-            currentX += size.width + horizontalSpacing
-            lineHeight = max(lineHeight, size.height)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onPreferenceChange(FlowChipWidthPreferenceKey.self) { widths in
+            if widths != itemWidths {
+                itemWidths = widths
+            }
+        }
+    }
+
+    private func computeRows(count: Int) -> [[Int]] {
+        guard count > 0 else { return [] }
+        guard containerWidth > 1 else {
+            return (0..<count).map { [$0] }
+        }
+
+        var rows: [[Int]] = []
+        var currentRow: [Int] = []
+        var currentRowWidth: CGFloat = 0
+
+        for idx in 0..<count {
+            guard let itemWidth = itemWidths[idx] else {
+                if !currentRow.isEmpty {
+                    rows.append(currentRow)
+                    currentRow = []
+                    currentRowWidth = 0
+                }
+                rows.append([idx])
+                continue
+            }
+
+            if currentRow.isEmpty {
+                currentRow.append(idx)
+                currentRowWidth = itemWidth
+            } else if currentRowWidth + horizontalSpacing + itemWidth <= containerWidth + 0.5 {
+                currentRow.append(idx)
+                currentRowWidth += horizontalSpacing + itemWidth
+            } else {
+                rows.append(currentRow)
+                currentRow = [idx]
+                currentRowWidth = itemWidth
+            }
+        }
+
+        if !currentRow.isEmpty {
+            rows.append(currentRow)
+        }
+        return rows
+    }
+}
+
+private struct FlowChipWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

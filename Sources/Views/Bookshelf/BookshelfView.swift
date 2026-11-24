@@ -146,7 +146,7 @@ public struct BookshelfView: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             ZStack(alignment: .bottom) {
                 VStack(spacing: 0) {
                     bookshelfHeaderBar
@@ -180,14 +180,14 @@ public struct BookshelfView: View {
                             .refreshable {
                                 await checkBookshelfUpdates(forceAll: false, silent: false)
                             }
-                            .scrollIndicators(store.bookshelfLayoutStyle == .readingTimeline ? .hidden : .automatic)
+                            .compatScrollIndicatorsHidden(store.bookshelfLayoutStyle == .readingTimeline)
                             .background(
                                 (store.bookshelfLayoutStyle == .readingTimeline
                                     ? Color(uiColor: .systemGroupedBackground)
                                     : Color.clear)
                                 .ignoresSafeArea(edges: .bottom)
                             )
-                            .scrollDismissesKeyboard(.interactively)
+                            .compatScrollDismissesKeyboard()
                         }
                     }
                     .overlay(alignment: .top) {
@@ -209,18 +209,7 @@ public struct BookshelfView: View {
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isEditing)
             .navigationTitle("书架")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: Manga.self) { manga in
-                MangaDetailView(manga: manga)
-            }
-            .navigationDestination(for: MangaSearchRoute.self) { route in
-                MangaSearchView(
-                    initialQuery: route.initialQuery,
-                    initialSourceID: route.initialSourceID,
-                    suggestedTags: route.suggestedTags,
-                    autoSubmit: route.autoSubmit
-                )
-            }
+            .compatNavigationBarHidden(true)
             .fullScreenCover(item: $readerLaunchPayload) { payload in
                 ReaderView(
                     manga: payload.manga,
@@ -970,7 +959,7 @@ struct MangaGridCard: View {
             Text(manga.title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
-                .lineLimit(2, reservesSpace: true)
+                .compatLineLimitReservesSpace(2, fallbackHeight: 38)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 

@@ -13,14 +13,15 @@ permissions:
   contents: write
 
 jobs:
-  build-ipa:
+  build-ipa-ios26:
+    name: Build iOS 26 Liquid Glass IPA
     runs-on: macos-26
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode 26 (iOS 26 Liquid Glass SDK)
+      - name: Select Xcode 26 (iOS 26 SDK)
         run: |
           XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
           if [ -n "${XCODE_26}" ]; then
@@ -39,13 +40,13 @@ jobs:
           export HOMEBREW_NO_INSTALL_CLEANUP=1
           brew install xcodegen
 
-      - name: Fetch open-source upscaler engines (Waifu2x & Anime4K)
+      - name: Fetch open-source upscaler engines
         run: bash scripts/fetch_vendor.sh
 
-      - name: Generate Xcode project
-        run: xcodegen generate
+      - name: Generate Xcode project (iOS 26)
+        run: xcodegen generate --spec project.yml
 
-      - name: Build iOS Release (.app)
+      - name: Build iOS 26 Release (.app)
         run: |
           set -o pipefail
           xcodebuild \
@@ -66,12 +67,10 @@ jobs:
               exit 1
             }
 
-      - name: Package Unsigned IPA
+      - name: Package Unsigned IPA (iOS 26)
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/KedaOnlineReader.app"
           test -d "${APP_PATH}"
-          echo "=== Verifying Info.plist & LaunchScreen ==="
-          plutil -p "${APP_PATH}/Info.plist"
           plutil -p "${APP_PATH}/Info.plist" | grep -q "UILaunchStoryboardName"
           test -d "${APP_PATH}/LaunchScreen.storyboardc"
           rm -rf Payload KedaOnlineReader-unsigned.ipa
@@ -80,7 +79,7 @@ jobs:
           zip -qry KedaOnlineReader-unsigned.ipa Payload
           ls -lh KedaOnlineReader-unsigned.ipa
 
-      - name: Upload Unsigned IPA Artifact
+      - name: Upload Unsigned IPA Artifact (iOS 26)
         uses: actions/upload-artifact@v4
         with:
           name: KedaOnlineReader-unsigned-ipa
@@ -98,3 +97,88 @@ jobs:
           gh release create "${TAG}" KedaOnlineReader-unsigned.ipa \
             --title "Latest Build - iOS 26 Liquid Glass (${GITHUB_SHA::7})" \
             --notes "Automated unsigned iOS 26 build (commit ${GITHUB_SHA::7}). Requires iOS 26.0 or later."
+
+  build-ipa-ios15:
+    name: Build iOS 15 Compatible IPA
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16 (iOS 15+ Compatible SDK)
+        run: |
+          XCODE_16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "${XCODE_16}" ]; then
+            echo "Selecting ${XCODE_16}"
+            sudo xcode-select -s "${XCODE_16}/Contents/Developer"
+          else
+            echo "Xcode_16*.app not found, listing available Xcode installations:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || true
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep iphoneos || true
+
+      - name: Install XcodeGen
+        run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install xcodegen
+
+      - name: Fetch open-source upscaler engines
+        run: bash scripts/fetch_vendor.sh
+
+      - name: Generate Xcode project (iOS 15)
+        run: xcodegen generate --spec project-ios15.yml
+
+      - name: Build iOS 15 Release (.app)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project KedaOnlineReader.xcodeproj \
+            -scheme KedaOnlineReader \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build 2>&1 | tee xcodebuild.log || {
+              echo "========== XCODEBUILD ERRORS =========="
+              grep -E "(error:|fatal error:|BUILD FAILED)" xcodebuild.log | tail -n 30 | while IFS= read -r line; do
+                echo "::error::$line"
+              done
+              exit 1
+            }
+
+      - name: Package Unsigned IPA (iOS 15)
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/KedaOnlineReader.app"
+          test -d "${APP_PATH}"
+          plutil -p "${APP_PATH}/Info.plist" | grep -q "UILaunchStoryboardName"
+          test -d "${APP_PATH}/LaunchScreen.storyboardc"
+          rm -rf Payload KedaOnlineReader-iOS15-unsigned.ipa
+          mkdir -p Payload
+          cp -R "${APP_PATH}" Payload/
+          zip -qry KedaOnlineReader-iOS15-unsigned.ipa Payload
+          ls -lh KedaOnlineReader-iOS15-unsigned.ipa
+
+      - name: Upload Unsigned IPA Artifact (iOS 15)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KedaOnlineReader-iOS15-unsigned-ipa
+          path: KedaOnlineReader-iOS15-unsigned.ipa
+          retention-days: 30
+
+      - name: Publish to GitHub Release (latest-ios15)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="latest-ios15"
+          gh release delete "${TAG}" --yes 2>/dev/null || true
+          git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+          gh release create "${TAG}" KedaOnlineReader-iOS15-unsigned.ipa \
+            --title "Latest Build - iOS 15 Compatible (${GITHUB_SHA::7})" \
+            --notes "Automated unsigned iOS 15+ compatible build (commit ${GITHUB_SHA::7}). Requires iOS 15.0 or later."

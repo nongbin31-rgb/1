@@ -15,7 +15,7 @@ public struct ReaderBackgroundPickerSheet: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             Form {
                 // 1. 顶部模式选择器 (5 大模式)
                 backgroundModeSection
@@ -35,7 +35,7 @@ public struct ReaderBackgroundPickerSheet: View {
                 // 4. 书脊中缝立体光影控制
                 spineShadowSection
             }
-            .scrollContentBackground(.hidden)
+            .compatScrollContentBackgroundHidden()
             .navigationTitle("阅读背景与纸质")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -109,14 +109,14 @@ struct BookshelfLayoutCollectionView: View {
     }
 }
 
-// MARK: - 跨分支导航包装器（main 分支采用 value NavigationLink 配合 NavigationStack）
+// MARK: - 统一导航包装器（配合 CompatNavigationContainer，全量兼容 iOS 15 ~ iOS 26）
 
 private struct BookshelfMangaLink<Label: View>: View {
     let manga: Manga
     @ViewBuilder let label: () -> Label
 
     var body: some View {
-        NavigationLink(value: manga) {
+        NavigationLink(destination: MangaDetailView(manga: manga)) {
             label()
         }
         .buttonStyle(.plain)

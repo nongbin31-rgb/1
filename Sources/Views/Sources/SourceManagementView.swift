@@ -9,7 +9,7 @@ public struct SourceManagementView: View {
     @State private var showingResetAlert = false
 
     public var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             List {
                 Section("已配置的在线源") {
                     ForEach($store.sources) { $source in
@@ -99,7 +99,7 @@ private struct AddSourceSheet: View {
     @State private var refererHeader = ""
 
     var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             Form {
                 Section("基本信息") {
                     TextField("书源名称（如：自建漫画库）", text: $name)
@@ -174,7 +174,7 @@ private struct JSONSpecSheet: View {
     """
 
     var body: some View {
-        NavigationStack {
+        CompatNavigationContainer {
             ScrollView {
                 Text(specText)
                     .font(.system(.footnote, design: .monospaced))

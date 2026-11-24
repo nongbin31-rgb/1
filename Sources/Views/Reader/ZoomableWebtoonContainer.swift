@@ -100,40 +100,12 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
                             }
                         : nil
                     )
-                    // 双击手势：优先匹配双击，双击成功绝不触发单击
-                    .onTapGesture(count: 2) { location in
-                        impactFeedback.impactOccurred()
-
-                        if scale > 1.05 {
-                            // 已经处于放大状态：双击平滑恢复 1.0x
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                scale = 1.0
-                                offset = .zero
-                            }
-                            lastScale = 1.0
-                            lastOffset = .zero
-                        } else {
-                            // 处于常规 1.0x 状态：以双击落点为焦点，平滑聚焦放大至 2.6x
-                            let targetScale: CGFloat = 2.6
-                            let center = CGPoint(x: viewportSize.width * 0.5, y: viewportSize.height * 0.5)
-                            let targetOffsetX = (center.x - location.x) * (targetScale - 1.0)
-                            let targetOffsetY = (center.y - location.y) * (targetScale - 1.0)
-
-                            let clamped = clampOffset(
-                                CGSize(width: targetOffsetX, height: targetOffsetY),
-                                scale: targetScale,
-                                viewportSize: viewportSize,
-                                allowRubberBand: false
-                            )
-
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                scale = targetScale
-                                offset = clamped
-                            }
-                            lastScale = targetScale
-                            lastOffset = clamped
+                    // 双击手势：优先匹配双击，双击成功绝不触发单击（iOS 16+ 按双击落点聚焦放大，iOS 15 居中放大）
+                    .modifier(
+                        CompatWebtoonDoubleTapModifier { location in
+                            handleDoubleTap(at: location, viewportSize: viewportSize)
                         }
-                    }
+                    )
                     // 单击手势：唤起/隐藏阅读器控制栏
                     .onTapGesture(count: 1) {
                         onSingleTap()
@@ -205,5 +177,57 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
         }
 
         return CGSize(width: x, height: y)
+    }
+
+    private func handleDoubleTap(at location: CGPoint?, viewportSize: CGSize) {
+        impactFeedback.impactOccurred()
+
+        if scale > 1.05 {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                scale = 1.0
+                offset = .zero
+            }
+            lastScale = 1.0
+            lastOffset = .zero
+        } else {
+            let targetScale: CGFloat = 2.6
+            let targetOffset: CGSize
+            if let location {
+                let center = CGPoint(x: viewportSize.width * 0.5, y: viewportSize.height * 0.5)
+                let targetOffsetX = (center.x - location.x) * (targetScale - 1.0)
+                let targetOffsetY = (center.y - location.y) * (targetScale - 1.0)
+                targetOffset = clampOffset(
+                    CGSize(width: targetOffsetX, height: targetOffsetY),
+                    scale: targetScale,
+                    viewportSize: viewportSize,
+                    allowRubberBand: false
+                )
+            } else {
+                targetOffset = .zero
+            }
+
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                scale = targetScale
+                offset = targetOffset
+            }
+            lastScale = targetScale
+            lastOffset = targetOffset
+        }
+    }
+}
+
+private struct CompatWebtoonDoubleTapModifier: ViewModifier {
+    let action: (CGPoint?) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.onTapGesture(count: 2) { location in
+                action(location)
+            }
+        } else {
+            content.onTapGesture(count: 2) {
+                action(nil)
+            }
+        }
     }
 }
