@@ -169,18 +169,15 @@ public struct MangaDetailView: View {
 
                 HStack(spacing: 10) {
                     Button {
-                        if let progress = store.progress(for: currentManga),
-                           let resumeChapter = chapters.first(where: { $0.id == progress.chapterID }) {
+                        if let target = store.resolveResumeTarget(
+                            for: currentManga,
+                            chapters: chapters,
+                            allowRestartWhenCompleted: false
+                        ) {
                             launchPayload = ReaderLaunchPayload(
                                 chapters: chapters,
-                                initialChapter: resumeChapter,
-                                initialPageIndex: progress.pageIndex
-                            )
-                        } else if let first = chapters.first {
-                            launchPayload = ReaderLaunchPayload(
-                                chapters: chapters,
-                                initialChapter: first,
-                                initialPageIndex: 0
+                                initialChapter: target.chapter,
+                                initialPageIndex: target.pageIndex
                             )
                         }
                     } label: {

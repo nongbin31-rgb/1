@@ -672,9 +672,14 @@ public struct ReadingHistoryView: View {
 
                 if let progress,
                    !progress.isCompleted,
-                   let match = chapters.first(where: { $0.id == progress.chapterID }) {
-                    targetChapter = match
-                    targetPageIndex = progress.pageIndex
+                   let resolved = store.resolveResumeTarget(
+                       for: resolvedManga,
+                       fallbackManga: manga,
+                       chapters: chapters,
+                       allowRestartWhenCompleted: true
+                   ) {
+                    targetChapter = resolved.chapter
+                    targetPageIndex = resolved.pageIndex
                 } else if let histChapterID = item.lastChapterID,
                           let match = chapters.first(where: { $0.id == histChapterID }) {
                     targetChapter = match

@@ -189,6 +189,7 @@ public final class AppStore: ObservableObject {
         static let bookshelfGeekMatrixShowTitles = "keda_online_bookshelf_matrix_titles_v1"
         static let bookshelfAddedAt = "keda_online_bookshelf_added_at_v1"
         static let bookshelfChapterMeta = "keda_online_bookshelf_chapter_meta_v1"
+        static let lastAutoBookshelfUpdateCheckAt = "keda_online_last_auto_bookshelf_update_at_v1"
         static let readingHistory = "keda_online_reading_history_v1"
         static let pauseReadingHistory = "keda_online_pause_reading_history_v1"
         static let bookshelfGroups = "keda_online_bookshelf_groups_v1"
@@ -613,7 +614,101 @@ public final class AppStore: ObservableObject {
         )
         let didIncrease = (previous != nil && previous!.chapterCount > 0 && updated.chapterCount > previous!.chapterCount)
         bookshelfChapterMeta[key] = updated
+        reconcileReadingProgress(
+            for: key,
+            chapters: chapters,
+            previousChapterCount: previous?.chapterCount,
+            didIncrease: didIncrease
+        )
         return didIncrease
+    }
+
+    /// 章节列表更新时同步校准已有阅读进度的总话数与章节序数，避免连载更新后依然停留在「已读完 100%」
+    private func reconcileReadingProgress(
+        for key: String,
+        chapters: [MangaChapter],
+        previousChapterCount: Int?,
+        didIncrease: Bool
+    ) {
+        guard !chapters.isEmpty, let existing = readingProgress[key] else { return }
+
+        if existing.isManuallyMarkedCompleted {
+            guard didIncrease else { return }
+            let completedIndex = max(0, min(chapters.count - 2, (previousChapterCount ?? 1) - 1))
+            readingProgress[key] = ReadingProgress(
+                mangaKey: existing.mangaKey,
+                chapterID: existing.chapterID,
+                chapterTitle: existing.chapterTitle,
+                pageIndex: existing.pageIndex,
+                totalPages: existing.totalPages,
+                chapterIndex: completedIndex,
+                totalChapters: chapters.count,
+                updatedAt: existing.updatedAt
+            )
+            return
+        }
+
+        let matchedIndex = chapters.firstIndex(where: { $0.id == existing.chapterID }) ?? existing.chapterIndex
+        guard existing.totalChapters != chapters.count || existing.chapterIndex != matchedIndex else {
+            return
+        }
+
+        readingProgress[key] = ReadingProgress(
+            mangaKey: existing.mangaKey,
+            chapterID: existing.chapterID,
+            chapterTitle: existing.chapterTitle,
+            pageIndex: existing.pageIndex,
+            totalPages: existing.totalPages,
+            chapterIndex: matchedIndex,
+            totalChapters: chapters.count,
+            updatedAt: existing.updatedAt
+        )
+    }
+
+    /// 根据当前阅读进度解析续读目标：若上次已读到某话最后一页且后面有更新章节，则自动定位到下一话第 1 页
+    public func resolveResumeTarget(
+        for manga: Manga,
+        fallbackManga: Manga? = nil,
+        chapters: [MangaChapter],
+        allowRestartWhenCompleted: Bool = true
+    ) -> (chapter: MangaChapter, pageIndex: Int)? {
+        guard let firstChapter = chapters.first else { return nil }
+        let currentProgress = progress(for: manga) ?? fallbackManga.flatMap { progress(for: $0) }
+
+        guard let currentProgress else {
+            return (firstChapter, 0)
+        }
+        if allowRestartWhenCompleted && currentProgress.isCompleted {
+            return (firstChapter, 0)
+        }
+        guard let matchIndex = chapters.firstIndex(where: { $0.id == currentProgress.chapterID }) else {
+            return (firstChapter, 0)
+        }
+
+        let finishedCurrentChapter: Bool
+        if let totalPages = currentProgress.totalPages, totalPages > 0 {
+            finishedCurrentChapter = currentProgress.pageIndex >= totalPages - 1
+        } else {
+            finishedCurrentChapter = false
+        }
+
+        if finishedCurrentChapter, matchIndex + 1 < chapters.count {
+            return (chapters[matchIndex + 1], 0)
+        }
+        return (chapters[matchIndex], max(0, currentProgress.pageIndex))
+    }
+
+    /// 是否到达定时静默追更冷却时间（默认 6 小时）
+    public func shouldRunAutoBookshelfUpdateCheck(minInterval: TimeInterval = 6 * 3600) -> Bool {
+        guard let lastDate = UserDefaults.standard.object(forKey: Keys.lastAutoBookshelfUpdateCheckAt) as? Date else {
+            return true
+        }
+        return Date().timeIntervalSince(lastDate) >= minInterval
+    }
+
+    /// 记录最近一次自动/手动书架追更时间
+    public func markAutoBookshelfUpdateChecked() {
+        UserDefaults.standard.set(Date(), forKey: Keys.lastAutoBookshelfUpdateCheckAt)
     }
 
     /// 清除书架漫画的新章节红点提示

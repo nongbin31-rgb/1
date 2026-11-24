@@ -1027,30 +1027,21 @@ public struct BookshelfView: View {
 
             @MainActor
             func launchReader(resolvedManga: Manga, chapters: [MangaChapter]) {
-                guard let firstChapter = chapters.first else {
+                guard let target = store.resolveResumeTarget(
+                    for: resolvedManga,
+                    fallbackManga: manga,
+                    chapters: chapters,
+                    allowRestartWhenCompleted: true
+                ) else {
                     showHud("该漫画暂无可阅读章节")
                     return
-                }
-
-                let progress = store.progress(for: resolvedManga) ?? store.progress(for: manga)
-                let targetChapter: MangaChapter
-                let targetPageIndex: Int
-
-                if let progress,
-                   !progress.isCompleted,
-                   let resumeChapter = chapters.first(where: { $0.id == progress.chapterID }) {
-                    targetChapter = resumeChapter
-                    targetPageIndex = progress.pageIndex
-                } else {
-                    targetChapter = firstChapter
-                    targetPageIndex = 0
                 }
 
                 readerLaunchPayload = BookshelfReaderLaunchPayload(
                     manga: resolvedManga,
                     chapters: chapters,
-                    initialChapter: targetChapter,
-                    initialPageIndex: targetPageIndex
+                    initialChapter: target.chapter,
+                    initialPageIndex: target.pageIndex
                 )
             }
 
@@ -1084,11 +1075,20 @@ public struct BookshelfView: View {
         }
     }
 
-    /// 进入书架时对从未获取过话数的收藏做一次低并发静默补齐，避免冷启动空白
+    /// 进入书架时静默补齐空白话数，并在距上次自动追更满 6 小时后静默检查连载更新
     private func scheduleSilentChapterSyncIfNeeded() {
         guard !isCheckingUpdates else { return }
-        let hasUnsynced = store.bookshelf.contains { store.chapterMeta(for: $0) == nil }
-        guard hasUnsynced else { return }
+        let onlineBooks = store.bookshelf.filter { $0.sourceID != LocalMangaSource.sourceID }
+        guard !onlineBooks.isEmpty else { return }
+
+        let hasUnsynced = onlineBooks.contains { store.chapterMeta(for: $0) == nil }
+        let shouldAutoCheckOngoing = store.shouldRunAutoBookshelfUpdateCheck() && onlineBooks.contains { manga in
+            if let meta = store.chapterMeta(for: manga) {
+                return meta.isOngoing || MangaSerialStatusHelper.isOngoingStatus(manga.statusText)
+            }
+            return true
+        }
+        guard hasUnsynced || shouldAutoCheckOngoing else { return }
 
         backgroundSyncTask?.cancel()
         backgroundSyncTask = Task {
@@ -1096,7 +1096,7 @@ public struct BookshelfView: View {
         }
     }
 
-    /// 受控并发检查书架章节更新（下拉刷新 / 手动检查 / 静默补齐）
+    /// 受控并发检查书架章节更新（下拉刷新 / 手动检查 / 静默补齐与定时追更）
     private func checkBookshelfUpdates(forceAll: Bool, silent: Bool) async {
         guard !isCheckingUpdates, !store.bookshelf.isEmpty else { return }
 
@@ -1107,9 +1107,14 @@ public struct BookshelfView: View {
             }
             return
         }
+        let includeAutoOngoing = silent && store.shouldRunAutoBookshelfUpdateCheck()
         let targets: [Manga]
         if silent {
-            targets = allBooks.filter { store.chapterMeta(for: $0) == nil }
+            targets = allBooks.filter { manga in
+                guard let meta = store.chapterMeta(for: manga) else { return true }
+                guard includeAutoOngoing else { return false }
+                return meta.isOngoing || MangaSerialStatusHelper.isOngoingStatus(manga.statusText)
+            }
         } else if forceAll {
             targets = allBooks
         } else {
@@ -1168,7 +1173,7 @@ public struct BookshelfView: View {
                     let didIncrease = store.syncBookshelfChapterMeta(
                         manga: resolvedManga,
                         chapters: chapters,
-                        markUnreadIfIncreased: !silent
+                        markUnreadIfIncreased: true
                     )
                     if didIncrease {
                         updatedCount += 1
@@ -1189,6 +1194,10 @@ public struct BookshelfView: View {
                     }
                 }
             }
+        }
+
+        if syncedCount > 0 && (!silent || includeAutoOngoing) {
+            store.markAutoBookshelfUpdateChecked()
         }
 
         guard !silent, !Task.isCancelled else { return }
