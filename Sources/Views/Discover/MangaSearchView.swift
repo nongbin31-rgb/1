@@ -975,7 +975,7 @@ public struct MangaSearchView: View {
                 .foregroundStyle(.secondary)
             Text("当前没有启用的在线图源")
                 .font(.headline)
-            Text("请先在底部「在线源」标签页启用或添加图源后再搜索。")
+            Text("请先在「设置 → 在线源」启用或添加图源后再搜索。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1330,7 +1330,7 @@ public struct MangaSearchView: View {
               let adapter = store.adapter(for: source.id) else {
             singleMangas = []
             canLoadMore = false
-            singleErrorMessage = "当前没有启用的在线图源，请先在「在线源」页启用或添加。"
+            singleErrorMessage = "当前没有启用的在线图源，请先在「设置 → 在线源」启用或添加。"
             return
         }
 

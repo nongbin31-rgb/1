@@ -1,16 +1,31 @@
 import SwiftUI
 
-/// 在线图源管理页
+/// 在线图源管理页（支持作为独立页或嵌入设置页二级导航）
 public struct SourceManagementView: View {
     @EnvironmentObject private var store: AppStore
+
+    public let embeddedInNavigation: Bool
 
     @State private var showingAddSheet = false
     @State private var showingSpecSheet = false
     @State private var showingResetAlert = false
 
+    public init(embeddedInNavigation: Bool = false) {
+        self.embeddedInNavigation = embeddedInNavigation
+    }
+
     public var body: some View {
-        CompatNavigationContainer {
-            List {
+        if embeddedInNavigation {
+            sourceListContent
+        } else {
+            CompatNavigationContainer {
+                sourceListContent
+            }
+        }
+    }
+
+    private var sourceListContent: some View {
+        List {
                 Section("已配置的在线源") {
                     ForEach($store.sources) { $source in
                         HStack {
@@ -84,7 +99,6 @@ public struct SourceManagementView: View {
             } message: {
                 Text("下次请求将重新竞速测通最优的 JM 与 WNACG 镜像节点。")
             }
-        }
     }
 }
 

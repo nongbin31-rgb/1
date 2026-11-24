@@ -112,6 +112,12 @@ public final class AppStore: ObservableObject {
     @Published public var bookshelfChapterMeta: [String: BookshelfChapterMeta] = [:] {
         didSet { save(bookshelfChapterMeta, key: Keys.bookshelfChapterMeta) }
     }
+    @Published public var readingHistory: [ReadingHistoryItem] = [] {
+        didSet { save(readingHistory, key: Keys.readingHistory) }
+    }
+    @Published public var pauseReadingHistory: Bool = false {
+        didSet { save(pauseReadingHistory, key: Keys.pauseReadingHistory) }
+    }
     @Published public var searchHistory: [String] = [] {
         didSet { save(searchHistory, key: Keys.searchHistory) }
     }
@@ -169,6 +175,8 @@ public final class AppStore: ObservableObject {
         static let bookshelfGeekMatrixShowTitles = "keda_online_bookshelf_matrix_titles_v1"
         static let bookshelfAddedAt = "keda_online_bookshelf_added_at_v1"
         static let bookshelfChapterMeta = "keda_online_bookshelf_chapter_meta_v1"
+        static let readingHistory = "keda_online_reading_history_v1"
+        static let pauseReadingHistory = "keda_online_pause_reading_history_v1"
         static let searchHistory = "keda_online_search_history_v1"
         static let imageFilterConfig = "keda_online_image_filter_config_v1"
         static let readerPreloadMode = "keda_online_reader_preload_mode_v1"
@@ -255,6 +263,8 @@ public final class AppStore: ObservableObject {
         self.bookshelfGeekMatrixShowTitles = load(key: Keys.bookshelfGeekMatrixShowTitles) ?? true
         self.bookshelfAddedAt = load(key: Keys.bookshelfAddedAt) ?? [:]
         self.bookshelfChapterMeta = load(key: Keys.bookshelfChapterMeta) ?? [:]
+        self.readingHistory = load(key: Keys.readingHistory) ?? []
+        self.pauseReadingHistory = load(key: Keys.pauseReadingHistory) ?? false
         self.searchHistory = load(key: Keys.searchHistory) ?? []
         self.imageFilterConfig = load(key: Keys.imageFilterConfig) ?? ImageFilterConfig.defaultConfig()
         self.readerPreloadMode = load(key: Keys.readerPreloadMode) ?? .standard
@@ -532,10 +542,79 @@ public final class AppStore: ObservableObject {
         )
 
         recordReadingActivity(pageToken: "\(manga.compositeKey)#\(chapter.id)#\(pageIndex)")
+        recordHistoryRead(
+            manga: manga,
+            chapter: chapter,
+            pageIndex: pageIndex,
+            totalPages: resolvedTotalPages
+        )
     }
 
     public func progress(for manga: Manga) -> ReadingProgress? {
         progressMap[manga.compositeKey]
+    }
+
+    // MARK: - 浏览足迹（完整阅读历史）
+
+    private static let maxReadingHistoryCount = 200
+
+    public func sourceName(for sourceID: String) -> String {
+        sources.first(where: { $0.id == sourceID })?.name ?? "在线源"
+    }
+
+    /// 记录浏览漫画详情（同本自动去重置顶并保留已有阅读章节页码）
+    public func recordHistoryView(manga: Manga) {
+        guard !pauseReadingHistory else { return }
+        let key = manga.compositeKey
+        let existing = readingHistory.first(where: { $0.id == key })
+        let progressFallback = progressMap[key]
+
+        let entry = ReadingHistoryItem(
+            manga: manga,
+            viewedAt: Date(),
+            lastChapterID: existing?.lastChapterID ?? progressFallback?.chapterID,
+            lastChapterTitle: existing?.lastChapterTitle ?? progressFallback?.chapterTitle,
+            lastPageIndex: existing?.lastPageIndex ?? progressFallback?.pageIndex,
+            lastTotalPages: existing?.lastTotalPages ?? progressFallback?.totalPages
+        )
+        upsertReadingHistory(entry)
+    }
+
+    /// 记录实际阅读章节与页码（由阅读器进度更新自动联动触发）
+    public func recordHistoryRead(
+        manga: Manga,
+        chapter: MangaChapter,
+        pageIndex: Int,
+        totalPages: Int?
+    ) {
+        guard !pauseReadingHistory else { return }
+        let entry = ReadingHistoryItem(
+            manga: manga,
+            viewedAt: Date(),
+            lastChapterID: chapter.id,
+            lastChapterTitle: chapter.title,
+            lastPageIndex: pageIndex,
+            lastTotalPages: totalPages
+        )
+        upsertReadingHistory(entry)
+    }
+
+    public func removeHistory(key: String) {
+        readingHistory.removeAll { $0.id == key }
+    }
+
+    public func clearAllHistory() {
+        readingHistory.removeAll()
+    }
+
+    private func upsertReadingHistory(_ entry: ReadingHistoryItem) {
+        var updated = readingHistory
+        updated.removeAll { $0.id == entry.id }
+        updated.insert(entry, at: 0)
+        if updated.count > Self.maxReadingHistoryCount {
+            updated = Array(updated.prefix(Self.maxReadingHistoryCount))
+        }
+        readingHistory = updated
     }
 
     // MARK: - 阅读统计（时长 / 翻页 / 连续打卡）

@@ -51,6 +51,7 @@ public struct MangaDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .compatNavigationBarHidden(false)
         .task {
+            store.recordHistoryView(manga: currentManga)
             await loadChapters()
         }
         .fullScreenCover(item: $launchPayload) { payload in
@@ -627,6 +628,7 @@ public struct MangaDetailView: View {
                 chapters: detail.chapters,
                 markUnreadIfIncreased: false
             )
+            store.recordHistoryView(manga: detail.manga)
         } catch {
             store.clearUnreadUpdateFlag(for: manga)
             if !cachedOffline.isEmpty {

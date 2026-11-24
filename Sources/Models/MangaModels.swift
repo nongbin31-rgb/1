@@ -1071,6 +1071,40 @@ public struct BookshelfChapterBadgeInfo: Equatable, Sendable {
     }
 }
 
+/// 浏览足迹记录条目（独立于书架收藏，完整记录最近浏览/阅读过的漫画）
+public struct ReadingHistoryItem: Identifiable, Codable, Equatable, Sendable {
+    public var id: String { manga.compositeKey }
+    public var manga: Manga
+    public var viewedAt: Date
+    public var lastChapterID: String?
+    public var lastChapterTitle: String?
+    public var lastPageIndex: Int?
+    public var lastTotalPages: Int?
+
+    public init(
+        manga: Manga,
+        viewedAt: Date = Date(),
+        lastChapterID: String? = nil,
+        lastChapterTitle: String? = nil,
+        lastPageIndex: Int? = nil,
+        lastTotalPages: Int? = nil
+    ) {
+        self.manga = manga
+        self.viewedAt = viewedAt
+        self.lastChapterID = lastChapterID
+        self.lastChapterTitle = lastChapterTitle
+        self.lastPageIndex = lastPageIndex
+        self.lastTotalPages = lastTotalPages
+    }
+
+    public var progressRatio: Double? {
+        guard let pageIndex = lastPageIndex, let total = lastTotalPages, total > 0 else {
+            return nil
+        }
+        return min(1.0, max(0.0, Double(pageIndex + 1) / Double(total)))
+    }
+}
+
 /// 漫画详情页复合连载/话数展示描述模型
 public struct MangaDetailStatusDescriptor: Equatable, Sendable {
     public enum StatusKind: Equatable, Sendable {

@@ -3,7 +3,7 @@ import SwiftUI
 public enum AppTab: Hashable {
     case bookshelf
     case discover
-    case sources
+    case history
     case settings
 }
 
@@ -26,11 +26,11 @@ public struct RootTabView: View {
                 }
                 .tag(AppTab.discover)
 
-            SourceManagementView()
+            ReadingHistoryView(selectedTab: $selectedTab)
                 .tabItem {
-                    Label("在线源", systemImage: "network")
+                    Label("足迹", systemImage: "clock.arrow.circlepath")
                 }
-                .tag(AppTab.sources)
+                .tag(AppTab.history)
 
             SettingsView()
                 .tabItem {

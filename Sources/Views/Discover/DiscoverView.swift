@@ -716,7 +716,7 @@ public struct DiscoverView: View {
             mangas = []
             totalPages = nil
             canLoadMore = false
-            errorMessage = "当前没有启用的在线图源，请先在「在线源」页启用或添加。"
+            errorMessage = "当前没有启用的在线图源，请先在「设置 → 在线源」启用或添加。"
             return
         }
 

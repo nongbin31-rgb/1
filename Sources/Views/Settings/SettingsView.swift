@@ -46,6 +46,24 @@ public struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        SourceManagementView(embeddedInNavigation: true)
+                    } label: {
+                        HStack {
+                            Label("在线源管理", systemImage: "network")
+                            Spacer()
+                            Text("\(store.enabledSources.count) 个已启用")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("在线图源")
+                } footer: {
+                    Text("配置启用的漫画图源、重置优选镜像节点缓存或添加自定义 JSON 在线源。")
+                }
+
+                Section {
                     Toggle("启用 AI 画质增强（会有额外功耗）", isOn: $store.enableImageUpscaler)
 
                     if store.enableImageUpscaler {
