@@ -875,7 +875,7 @@ public struct DiscoverView: View {
 
     private func hasMorePages(fetchedCount: Int, source: MangaSourceConfig) -> Bool {
         switch source.kind {
-        case .demo:
+        case .demo, .local:
             return false
         case .jm, .wnacg:
             return fetchedCount >= UniformPaginator.defaultPageSize

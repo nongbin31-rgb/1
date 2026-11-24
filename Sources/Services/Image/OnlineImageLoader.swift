@@ -158,6 +158,19 @@ public actor OnlineImageLoader {
             return synthetic
         }
 
+        if urlString.hasPrefix("localmanga://") {
+            try Task.checkCancellation()
+            let rendered: UIImage? = await Task.detached(priority: .userInitiated) {
+                LocalMangaLibraryManager.shared.renderImage(for: urlString)
+            }.value
+            try Task.checkCancellation()
+            guard let localImage = rendered else {
+                throw MangaSourceError.decodingFailed("本地漫画页面读取失败")
+            }
+            memoryCache.setObject(localImage, forKey: cacheKey, cost: Self.memoryCost(of: localImage))
+            return localImage
+        }
+
         try Task.checkCancellation()
 
         // 优先命中永久离线下载目录（不受系统 Caches 清理影响），其次查临时浏览磁盘缓存
@@ -315,6 +328,9 @@ public actor OnlineImageLoader {
 
     /// 快速判断图片是否已存在于内存、离线下载目录或临时磁盘（不触发图片解码）
     public nonisolated func hasCachedImage(for urlString: String) -> Bool {
+        if urlString.hasPrefix("localmanga://") {
+            return true
+        }
         let identityKey = normalizedCacheKey(for: urlString)
         if memoryCache.object(forKey: identityKey as NSString) != nil {
             return true

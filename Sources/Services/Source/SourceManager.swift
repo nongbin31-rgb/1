@@ -313,6 +313,9 @@ public final class AppStore: ObservableObject {
     }
 
     public func adapter(for sourceID: String) -> (any MangaSourceProtocol)? {
+        if sourceID == LocalMangaSource.sourceID {
+            return LocalMangaSource()
+        }
         guard let config = sources.first(where: { $0.id == sourceID }) else { return nil }
         switch config.kind {
         case .demo:
@@ -323,6 +326,8 @@ public final class AppStore: ObservableObject {
             return JmMangaSource(config: config)
         case .wnacg:
             return WnacgMangaSource(config: config)
+        case .local:
+            return LocalMangaSource(config: config)
         }
     }
 
@@ -673,7 +678,29 @@ public final class AppStore: ObservableObject {
     private static let maxReadingHistoryCount = 200
 
     public func sourceName(for sourceID: String) -> String {
-        sources.first(where: { $0.id == sourceID })?.name ?? "在线源"
+        if sourceID == LocalMangaSource.sourceID {
+            return "本地漫画"
+        }
+        return sources.first(where: { $0.id == sourceID })?.name ?? "在线源"
+    }
+
+    /// 统一导入本地 CBZ / ZIP / PDF 漫画，并自动加入书架与同步章节快照
+    @discardableResult
+    public func importLocalMangaFiles(urls: [URL]) async -> (imported: [Manga], failedNames: [String]) {
+        let result = await LocalMangaLibraryManager.shared.importFiles(from: urls)
+        for manga in result.imported {
+            if !isInBookshelf(manga) {
+                bookshelf.insert(manga, at: 0)
+                bookshelfAddedAt[manga.compositeKey] = Date()
+            }
+            if let record = LocalMangaLibraryManager.shared.recordSnapshot(for: manga.id) {
+                let chapters = record.chapters.map {
+                    MangaChapter(id: $0.id, mangaID: record.id, title: $0.title, number: $0.number)
+                }
+                syncBookshelfChapterMeta(manga: manga, chapters: chapters, markUnreadIfIncreased: false)
+            }
+        }
+        return result
     }
 
     /// 记录浏览漫画详情（同本自动去重置顶并保留已有阅读章节页码）

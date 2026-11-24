@@ -12,6 +12,7 @@ public struct BookshelfView: View {
     // 自定义分组管理与选择弹窗状态
     @State private var showingGroupManagerSheet = false
     @State private var groupPickerContext: BookshelfGroupPickerContext?
+    @State private var showingLocalFileImporter = false
 
     // 批量管理多选状态
     @State private var isEditing = false
@@ -292,6 +293,31 @@ public struct BookshelfView: View {
                 }
                 .environmentObject(store)
             }
+            .fileImporter(
+                isPresented: $showingLocalFileImporter,
+                allowedContentTypes: LocalMangaLibraryManager.supportedImportContentTypes,
+                allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    Task {
+                        showHud("正在导入 \(urls.count) 个本地文件...", duration: 4.0)
+                        let outcome = await store.importLocalMangaFiles(urls: urls)
+                        if !outcome.imported.isEmpty {
+                            BookshelfHaptics.medium()
+                            if outcome.failedNames.isEmpty {
+                                showHud("已导入 \(outcome.imported.count) 部本地漫画")
+                            } else {
+                                showHud("导入成功 \(outcome.imported.count) 部，失败 \(outcome.failedNames.count) 部", duration: 3.0)
+                            }
+                        } else if !outcome.failedNames.isEmpty {
+                            showHud("导入失败：不支持的格式或压缩包无图片", duration: 3.0)
+                        }
+                    }
+                case .failure(let error):
+                    showHud("选择文件失败：\(error.localizedDescription)", duration: 2.8)
+                }
+            }
             .onAppear {
                 scheduleSilentChapterSyncIfNeeded()
             }
@@ -424,9 +450,15 @@ public struct BookshelfView: View {
                 }
             }
 
-            if !store.bookshelf.isEmpty {
-                Divider()
+            Divider()
 
+            Button {
+                showingLocalFileImporter = true
+            } label: {
+                Label("导入本地漫画 (CBZ/ZIP/PDF)", systemImage: "doc.badge.plus")
+            }
+
+            if !store.bookshelf.isEmpty {
                 Button {
                     showingGroupManagerSheet = true
                 } label: {
@@ -833,6 +865,16 @@ public struct BookshelfView: View {
             }
             .buttonStyle(.borderedProminent)
             .padding(.top, 4)
+
+            Button {
+                showingLocalFileImporter = true
+            } label: {
+                Label("导入本地漫画 (CBZ / ZIP / PDF)", systemImage: "doc.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1058,7 +1100,13 @@ public struct BookshelfView: View {
     private func checkBookshelfUpdates(forceAll: Bool, silent: Bool) async {
         guard !isCheckingUpdates, !store.bookshelf.isEmpty else { return }
 
-        let allBooks = store.bookshelf
+        let allBooks = store.bookshelf.filter { $0.sourceID != LocalMangaSource.sourceID }
+        guard !allBooks.isEmpty else {
+            if !silent {
+                showHud("本地漫画无需检查在线更新")
+            }
+            return
+        }
         let targets: [Manga]
         if silent {
             targets = allBooks.filter { store.chapterMeta(for: $0) == nil }

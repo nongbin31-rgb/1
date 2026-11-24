@@ -4,6 +4,7 @@ import SwiftUI
 public struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @ObservedObject private var downloadManager = OfflineDownloadManager.shared
+    @ObservedObject private var localLibrary = LocalMangaLibraryManager.shared
 
     @State private var cacheSizeText = "计算中..."
     @State private var offlineSizeText = "0.0 MB"
@@ -268,6 +269,24 @@ public struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        LocalLibraryView()
+                    } label: {
+                        HStack {
+                            Label("本地漫画库 (CBZ / ZIP / PDF)", systemImage: "doc.zipper")
+                            Spacer()
+                            if !localLibrary.records.isEmpty {
+                                Text("\(localLibrary.records.count) 部 · \(OfflineDownloadManager.formatBytes(localLibrary.totalDiskSizeBytes()))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("导入")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     NavigationLink {
                         OfflineDownloadsView()
                     } label: {

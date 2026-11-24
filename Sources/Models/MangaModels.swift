@@ -12,6 +12,7 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendab
     case genericJSON = "generic_json"
     case jm = "jm"
     case wnacg = "wnacg"
+    case local = "local"
 
     public var id: String { rawValue }
 
@@ -25,11 +26,13 @@ public enum MangaSourceKind: String, Codable, CaseIterable, Identifiable, Sendab
             return "禁漫天堂 (JMComic)"
         case .wnacg:
             return "绅士漫画 (WNACG)"
+        case .local:
+            return "本地漫画库"
         }
     }
 
     public var isBuiltin: Bool {
-        self == .demo || self == .jm || self == .wnacg
+        self == .demo || self == .jm || self == .wnacg || self == .local
     }
 }
 
