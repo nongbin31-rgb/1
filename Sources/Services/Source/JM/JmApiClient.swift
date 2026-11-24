@@ -559,9 +559,10 @@ public actor JmApiClient {
                 }
             }
         }
-        if let categoryTitle = extractCategoryTitle(data["category"], data["category_sub"]),
-           !tags.contains(categoryTitle) {
-            tags.insert(categoryTitle, at: 0)
+        for categoryTitle in extractCategoryTitles(data["category"], data["category_sub"]) {
+            if !tags.contains(categoryTitle) {
+                tags.insert(categoryTitle, at: 0)
+            }
         }
 
         var chapters: [MangaChapter] = []
@@ -745,10 +746,10 @@ public actor JmApiClient {
         let title = cleanField(raw["name"]) ?? fallbackTitle ?? "JM \(id)"
         let rawAuthor = raw["author"] ?? raw["authors"]
         let author = parseAuthor(rawAuthor, fallbackTitle: title)
-        let category = extractCategoryTitle(raw["category"], raw["category_sub"]) ?? "禁漫单行本"
+        let categoryTitles = extractCategoryTitles(raw["category"], raw["category_sub"])
         let latestChapter = cleanField(raw["latest_ep_name"])
 
-        var tags: [String] = [category]
+        var tags: [String] = categoryTitles.isEmpty ? ["单本"] : categoryTitles
         if let rawTags = raw["tags"] as? [Any] {
             for t in rawTags {
                 if let s = cleanField(t), !tags.contains(s) {
@@ -791,16 +792,23 @@ public actor JmApiClient {
         return formatted.isEmpty ? "佚名" : formatted
     }
 
-    private func extractCategoryTitle(_ rawCat: Any?, _ rawSubCat: Any?) -> String? {
+    private func extractCategoryTitles(_ rawCat: Any?, _ rawSubCat: Any?) -> [String] {
+        var titles: [String] = []
         for candidate in [rawCat, rawSubCat] {
+            var extracted: String?
             if let dict = candidate as? [String: Any], let title = cleanField(dict["title"]) {
-                return title
+                extracted = title
+            } else if let str = candidate as? String {
+                let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    extracted = trimmed
+                }
             }
-            if let str = candidate as? String, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return str.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let extracted, !titles.contains(extracted) {
+                titles.append(extracted)
             }
         }
-        return nil
+        return titles
     }
 
     private func cleanField(_ value: Any?) -> String? {

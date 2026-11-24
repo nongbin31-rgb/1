@@ -8,6 +8,7 @@ struct DiscoverLayoutCollectionView: View {
     let style: DiscoverLayoutStyle
     let mangas: [Manga]
     @ObservedObject var store: AppStore
+    var isMixedCategoryFeed: Bool = true
     let onItemAppear: (Manga) -> Void
 
     private let classicColumns = [
@@ -46,6 +47,7 @@ struct DiscoverLayoutCollectionView: View {
             DiscoverMagazineTodayView(
                 mangas: mangas,
                 store: store,
+                isMixedCategoryFeed: isMixedCategoryFeed,
                 onItemAppear: onItemAppear
             )
         }
@@ -872,6 +874,7 @@ private struct TactileBottomCornerShape: Shape {
 private struct DiscoverMagazineTodayView: View {
     let mangas: [Manga]
     @ObservedObject var store: AppStore
+    var isMixedCategoryFeed: Bool = true
     let onItemAppear: (Manga) -> Void
 
     private let compactGridColumns = [
@@ -1114,17 +1117,23 @@ private struct DiscoverMagazineTodayView: View {
                                 .lineLimit(1)
 
                             HStack(spacing: 4) {
-                                if !manga.statusText.isEmpty {
+                                let catPill = DiscoverCardTagResolver.resolveCategoryPill(for: manga)
+                                if isMixedCategoryFeed, let catPill {
+                                    DiscoverCategoryPillBadge(pill: catPill)
+                                    if !manga.statusText.isEmpty {
+                                        DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                            .fixedSize(horizontal: true, vertical: false)
+                                    }
+                                } else if !manga.statusText.isEmpty {
                                     DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
                                         .fixedSize(horizontal: true, vertical: false)
-                                } else {
-                                    let info = meta.groupName ?? (!manga.author.isEmpty ? manga.displayAuthor : "")
-                                    if !info.isEmpty {
-                                        Text(info)
-                                            .font(.system(size: 10.5))
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
+                                } else if let secondary = DiscoverCardTagResolver.resolveSecondaryLabel(for: manga, meta: meta) {
+                                    Text(secondary)
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                } else if let catPill {
+                                    DiscoverCategoryPillBadge(pill: catPill)
                                 }
                                 Spacer(minLength: 2)
                                 ReadingProgressRingView(
@@ -1173,14 +1182,33 @@ private struct DiscoverMagazineTodayView: View {
                     Spacer(minLength: 0)
 
                     HStack(spacing: 4) {
-                        if !manga.statusText.isEmpty {
-                            DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
-                                .fixedSize(horizontal: true, vertical: false)
-                        } else if let group = meta.groupName {
-                            Text(group)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                        let catPill = DiscoverCardTagResolver.resolveCategoryPill(for: manga)
+                        if isMixedCategoryFeed {
+                            if let catPill {
+                                DiscoverCategoryPillBadge(pill: catPill)
+                            }
+                            if !manga.statusText.isEmpty {
+                                DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            } else if catPill == nil,
+                                      let secondary = DiscoverCardTagResolver.resolveSecondaryLabel(for: manga, meta: meta) {
+                                Text(secondary)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        } else {
+                            if !manga.statusText.isEmpty {
+                                DiscoverStatusBadgeLabel(statusText: manga.statusText, compact: true)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            } else if let secondary = DiscoverCardTagResolver.resolveSecondaryLabel(for: manga, meta: meta) {
+                                Text(secondary)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            } else if let catPill {
+                                DiscoverCategoryPillBadge(pill: catPill)
+                            }
                         }
 
                         if let progress {
@@ -1222,6 +1250,93 @@ private struct DiscoverMagazineTodayView: View {
 }
 
 // MARK: - Shared Micro Subviews & Compat Helpers
+
+private struct DiscoverCategoryPill: Equatable {
+    let title: String
+    let tint: Color
+}
+
+/// 发现页紧凑卡片标签归一化解析器（将杂乱简繁体分类提炼为高辨识度 2 字彩色微标，并杜绝卡片左下角空白）
+private enum DiscoverCardTagResolver {
+    static func resolveCategoryPill(for manga: Manga) -> DiscoverCategoryPill? {
+        let lowerTags = manga.tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let lowerTitle = manga.title.lowercased()
+
+        func matches(_ keywords: [String]) -> Bool {
+            for kw in keywords {
+                if lowerTags.contains(where: { $0.contains(kw) }) || lowerTitle.contains(kw) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        if matches(["韩漫", "韓漫", "webtoon", "manhwa", "条漫", "條漫", "长条", "長條", "韩国", "韓國"]) {
+            return DiscoverCategoryPill(title: "韩漫", tint: .cyan)
+        }
+        if matches(["同人", "同人志", "同人誌", "doujin"]) {
+            return DiscoverCategoryPill(title: "同人", tint: .purple)
+        }
+        if matches(["短篇", "短編"]) {
+            return DiscoverCategoryPill(title: "短篇", tint: .pink)
+        }
+        if matches(["美漫", "欧美", "歐美"]) {
+            return DiscoverCategoryPill(title: "美漫", tint: .indigo)
+        }
+        if matches(["3d", "cg"]) {
+            return DiscoverCategoryPill(title: "3D", tint: .teal)
+        }
+        if matches(["写真", "寫真", "cosplay"]) {
+            return DiscoverCategoryPill(title: "写真", tint: .pink)
+        }
+        if matches(["单行本", "單行本", "单本", "單本", "禁漫单行本", "tankoubon"]) {
+            return DiscoverCategoryPill(title: "单本", tint: .orange)
+        }
+        if matches(["其他類", "其他类", "其他"]) {
+            return DiscoverCategoryPill(title: "其他", tint: Color.secondary)
+        }
+
+        // 回退至任意非状态类标签
+        if let first = manga.tags.first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            let short = String(first.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4))
+            return DiscoverCategoryPill(title: short, tint: Color.accentColor)
+        }
+        return nil
+    }
+
+    static func resolveSecondaryLabel(for manga: Manga, meta: MangaTitleMetadata) -> String? {
+        let author = manga.displayAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !author.isEmpty && author != "佚名" && author != "未知作者" {
+            return author
+        }
+        if let group = meta.groupName, !group.isEmpty {
+            return group
+        }
+        let extraTags = MangaTitleMetadataParser.displayTags(for: manga, metadata: meta, limit: 2)
+        if let tag = extraTags.first(where: {
+            let t = $0.lowercased()
+            return !t.contains("韩漫") && !t.contains("韓漫") && !t.contains("单本") && !t.contains("單本") && !t.contains("同人")
+        }) {
+            return tag
+        }
+        return nil
+    }
+}
+
+private struct DiscoverCategoryPillBadge: View {
+    let pill: DiscoverCategoryPill
+
+    var body: some View {
+        Text(pill.title)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(pill.tint)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 5.5)
+            .padding(.vertical, 1.5)
+            .background(pill.tint.opacity(0.14), in: Capsule())
+    }
+}
 
 private struct DiscoverStatusBadgeLabel: View {
     let statusText: String

@@ -38,6 +38,19 @@ public struct DiscoverView: View {
         return adapter.exploreCategories
     }
 
+    /// 当前发现页分类是否为「最新 / 排行 / 全部」等混合品类流（用于在卡片上突出展示韩漫/同人/单本微胶囊）
+    private var isCurrentCategoryMixedFeed: Bool {
+        let currentID = selectedCategoryID.isEmpty ? (activeCategories.first?.id ?? "") : selectedCategoryID
+        if currentID.isEmpty || currentID.hasPrefix("0:") || currentID == "0" || currentID == "all" {
+            return true
+        }
+        if let title = activeCategories.first(where: { $0.id == currentID })?.title {
+            let mixedKeywords = ["最新", "排行", "全部", "热门", "推薦", "推荐", "精选"]
+            return mixedKeywords.contains { title.contains($0) }
+        }
+        return false
+    }
+
     /// 从当前已加载漫画中提取高频标签，供搜索页快捷标签使用
     private var suggestedSearchTags: [String] {
         var counts: [String: Int] = [:]
@@ -174,7 +187,8 @@ public struct DiscoverView: View {
                                 DiscoverLayoutCollectionView(
                                     style: store.discoverLayoutStyle,
                                     mangas: mangas,
-                                    store: store
+                                    store: store,
+                                    isMixedCategoryFeed: isCurrentCategoryMixedFeed
                                 ) { manga in
                                     if store.discoverPaginationMode == .infiniteScroll,
                                        manga.id == mangas.last?.id,
