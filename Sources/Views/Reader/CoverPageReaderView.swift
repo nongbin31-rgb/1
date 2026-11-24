@@ -169,6 +169,7 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
     private var panGesture: UIPanGestureRecognizer!
     private var isTransitioning = false
     private var isZoomed = false
+    private var inFlightTargetIndex: Int?
     private var pendingTargetIndex: Int?
 
     // 手势拖拽会话状态
@@ -412,6 +413,8 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
         case .began:
             activeIntent = .none
             isAtBoundary = false
+            pendingTargetIndex = nil
+            inFlightTargetIndex = nil
 
         case .changed:
             if activeIntent == .none {
@@ -662,12 +665,14 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
 
         incomingVC = nil
         activeIntent = .none
+        inFlightTargetIndex = nil
         topSlotView.transform = .identity
         shadowGradientLayer.opacity = 0.0
 
-        // 消化排队的程序化导航
-        if let nextTarget = pendingTargetIndex, nextTarget != currentDisplayIndex {
-            pendingTargetIndex = nil
+        // 无条件消费并清空排队导航，避免与当前页相等的旧请求残留并在下次手势翻页后回跳
+        let queuedTarget = pendingTargetIndex
+        pendingTargetIndex = nil
+        if let nextTarget = queuedTarget, nextTarget != currentDisplayIndex {
             requestNavigation(to: nextTarget, animated: false)
         }
     }
@@ -719,16 +724,21 @@ public final class CoverPageViewController: UIViewController, UIGestureRecognize
         }
 
         if isTransitioning {
-            pendingTargetIndex = newIndex
+            if inFlightTargetIndex != newIndex {
+                pendingTargetIndex = newIndex
+            }
             return
         }
 
         guard animated else {
+            inFlightTargetIndex = nil
+            pendingTargetIndex = nil
             displayPage(at: newIndex)
             return
         }
 
         isTransitioning = true
+        inFlightTargetIndex = newIndex
         let wantsNext = newIndex > currentDisplayIndex
         targetIndex = newIndex
         activeIntent = wantsNext ? .toNext : .toPrev

@@ -180,6 +180,7 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
         var currentDisplayIndex: Int = 0
         var lastExternalJumpNonce: Int = 0
         private var isTransitioning = false
+        private var inFlightTargetIndex: Int?
         private var pendingTargetIndex: Int?
         private let feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
 
@@ -198,12 +199,15 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             }
 
             if isTransitioning {
-                pendingTargetIndex = targetIndex
+                if inFlightTargetIndex != targetIndex {
+                    pendingTargetIndex = targetIndex
+                }
                 return
             }
 
             guard let targetVC = createViewController(for: targetIndex) else { return }
             isTransitioning = true
+            inFlightTargetIndex = targetIndex
 
             // 日漫与常规漫方向映射：日漫向右翻回旧页（reverse），向左翻看新页（forward）
             let movingForward = parent.isRightToLeft ? (targetIndex < currentDisplayIndex) : (targetIndex > currentDisplayIndex)
@@ -216,12 +220,14 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             pageViewController?.setViewControllers([targetVC], direction: direction, animated: animated) { [weak self] _ in
                 guard let self = self else { return }
                 self.isTransitioning = false
+                self.inFlightTargetIndex = nil
                 self.currentDisplayIndex = targetIndex
                 self.parent.currentPageIndex = targetIndex
 
-                // 消化排队的跳转请求
-                if let next = self.pendingTargetIndex, next != targetIndex {
-                    self.pendingTargetIndex = nil
+                // 无条件消费并清空排队的跳转请求，防止同页残留导致下次手动翻页回跳
+                let queuedTarget = self.pendingTargetIndex
+                self.pendingTargetIndex = nil
+                if let next = queuedTarget, next != targetIndex {
                     self.requestNavigation(to: next, animated: false)
                 }
             }
@@ -256,6 +262,8 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             willTransitionTo pendingViewControllers: [UIViewController]
         ) {
             isTransitioning = true
+            inFlightTargetIndex = nil
+            pendingTargetIndex = nil
         }
 
         public func pageViewController(
@@ -265,14 +273,16 @@ public struct StablePageCurlReaderView: UIViewControllerRepresentable {
             transitionCompleted completed: Bool
         ) {
             isTransitioning = false
+            inFlightTargetIndex = nil
             if completed, let currentVC = pageViewController.viewControllers?.first as? ComicPageHostingController {
                 currentDisplayIndex = currentVC.pageIndex
                 parent.currentPageIndex = currentVC.pageIndex
                 playPageFeedback()
             }
 
-            if let next = pendingTargetIndex {
-                pendingTargetIndex = nil
+            let queuedTarget = pendingTargetIndex
+            pendingTargetIndex = nil
+            if let next = queuedTarget, next != currentDisplayIndex {
                 requestNavigation(to: next, animated: false)
             }
         }
