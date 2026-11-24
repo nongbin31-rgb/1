@@ -111,7 +111,7 @@ public final class LocalMangaLibraryManager: ObservableObject {
     public static let shared = LocalMangaLibraryManager()
 
     /// 支持导入的 UniformTypeIdentifier 列表（兼容 CBZ / ZIP / PDF / EPUB 及被识别为通用 data 的文件）
-    public static var supportedImportContentTypes: [UTType] {
+    public nonisolated static var supportedImportContentTypes: [UTType] {
         var types: [UTType] = []
         let candidates: [UTType?] = [
             UTType("org.comicbook.cbz-archive"),

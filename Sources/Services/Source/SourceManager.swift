@@ -630,12 +630,12 @@ public final class AppStore: ObservableObject {
         previousChapterCount: Int?,
         didIncrease: Bool
     ) {
-        guard !chapters.isEmpty, let existing = readingProgress[key] else { return }
+        guard !chapters.isEmpty, let existing = progressMap[key] else { return }
 
         if existing.isManuallyMarkedCompleted {
             guard didIncrease else { return }
             let completedIndex = max(0, min(chapters.count - 2, (previousChapterCount ?? 1) - 1))
-            readingProgress[key] = ReadingProgress(
+            progressMap[key] = ReadingProgress(
                 mangaKey: existing.mangaKey,
                 chapterID: existing.chapterID,
                 chapterTitle: existing.chapterTitle,
@@ -653,7 +653,7 @@ public final class AppStore: ObservableObject {
             return
         }
 
-        readingProgress[key] = ReadingProgress(
+        progressMap[key] = ReadingProgress(
             mangaKey: existing.mangaKey,
             chapterID: existing.chapterID,
             chapterTitle: existing.chapterTitle,
