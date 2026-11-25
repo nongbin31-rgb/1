@@ -423,6 +423,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         format.opaque = true
+        format.preferredRange = .standard
         let bounded = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
@@ -465,19 +466,24 @@ public final class ReaderTextureCache: @unchecked Sendable {
         guard let cgImg = image.cgImage else { return 0.85 }
         let sampleSize = 8
         var pixels = [UInt8](repeating: 0, count: sampleSize * sampleSize)
-        guard let ctx = CGContext(
-            data: &pixels,
-            width: sampleSize,
-            height: sampleSize,
-            bitsPerComponent: 8,
-            bytesPerRow: sampleSize,
-            space: CGColorSpaceCreateDeviceGray(),
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else {
-            return 0.85
+        let drew: Bool = pixels.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress,
+                  let ctx = CGContext(
+                      data: baseAddress,
+                      width: sampleSize,
+                      height: sampleSize,
+                      bitsPerComponent: 8,
+                      bytesPerRow: sampleSize,
+                      space: CGColorSpaceCreateDeviceGray(),
+                      bitmapInfo: CGImageAlphaInfo.none.rawValue
+                  ) else {
+                return false
+            }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+            return true
         }
-        ctx.interpolationQuality = .medium
-        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+        guard drew else { return 0.85 }
         let total = pixels.reduce(0) { $0 + Int($1) }
         return CGFloat(total) / CGFloat(pixels.count * 255)
     }
@@ -731,6 +737,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         format.opaque = true
+        format.preferredRange = .standard
         let squareImg = UIGraphicsImageRenderer(size: cropSize, format: format).image { _ in
             image.draw(in: CGRect(x: originX, y: originY, width: drawW, height: drawH))
         }
@@ -769,6 +776,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         format.opaque = true
+        format.preferredRange = .standard
         let patchImg = UIGraphicsImageRenderer(size: tilePxSize, format: format).image { _ in
             image.draw(in: CGRect(x: originX, y: originY, width: drawW, height: drawH))
         }
@@ -810,38 +818,58 @@ public final class ReaderTextureCache: @unchecked Sendable {
     }
 
     private static func extractRGBABytes(from image: UIImage, width: Int, height: Int) -> [UInt8]? {
-        guard let cgImg = image.cgImage else { return nil }
+        guard width > 0, height > 0, let cgImg = image.cgImage else { return nil }
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-        guard let ctx = CGContext(
-            data: &bytes,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else {
-            return nil
+        let drew: Bool = bytes.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress,
+                  let ctx = CGContext(
+                      data: baseAddress,
+                      width: width,
+                      height: height,
+                      bitsPerComponent: 8,
+                      bytesPerRow: width * 4,
+                      space: colorSpace,
+                      bitmapInfo: bitmapInfo
+                  ) else {
+                return false
+            }
+            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
         }
-        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return bytes
+        return drew ? bytes : nil
     }
 
     private static func makeUIImage(fromRGBABytes bytes: [UInt8], width: Int, height: Int, scale: CGFloat) -> UIImage? {
+        let byteCount = width * height * 4
+        guard width > 0, height > 0, bytes.count >= byteCount else {
+            return nil
+        }
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-        var mutableBytes = bytes
-        guard let ctx = CGContext(
-            data: &mutableBytes,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ), let outCG = ctx.makeImage() else {
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        )
+        // 由 CoreGraphics 持有不可变 CFData，规避 Swift 临时指针越界或 Release 优化下提前释放导致图像失效
+        let cfData: CFData? = bytes.withUnsafeBufferPointer { buf in
+            guard let baseAddress = buf.baseAddress else { return nil }
+            return Data(bytes: baseAddress, count: byteCount) as CFData
+        }
+        guard let cfData,
+              let provider = CGDataProvider(data: cfData),
+              let outCG = CGImage(
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: width * 4,
+                  space: colorSpace,
+                  bitmapInfo: bitmapInfo,
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: true,
+                  intent: .defaultIntent
+              ) else {
             return nil
         }
         return UIImage(cgImage: outCG, scale: scale, orientation: .up)
@@ -1655,21 +1683,16 @@ public struct PaperTextureOverlayView: View {
                     let denseTile = ReaderTextureCache.shared.seamlessDenseTileImage(for: texture) ?? img
 
                     ZStack {
-                        ZStack {
-                            if let neutralTile, clampedTint < 0.999 {
-                                Image(uiImage: neutralTile)
-                                    .interpolation(.medium)
-                                    .resizable(resizingMode: .tile)
-                            }
-                            if clampedTint > 0.001 || neutralTile == nil {
-                                Image(uiImage: denseTile)
-                                    .interpolation(.medium)
-                                    .resizable(resizingMode: .tile)
-                                    .opacity(neutralTile == nil ? 1.0 : clampedTint)
-                            }
-                        }
-                        .blendMode(.multiply)
+                        // 必须保持 .opacity 在内、.blendMode(.multiply) 在最外，与经典纹理及前景对齐，
+                        // 避免 iOS 15 SwiftUI 离屏透明组阻断正片叠底与纸浆底色融合。
+                        bitmapTileContent(
+                            neutralTile: neutralTile,
+                            coloredTile: denseTile,
+                            clampedTint: clampedTint,
+                            isolateDualTint: true
+                        )
                         .opacity(mip.coarse)
+                        .blendMode(.multiply)
 
                         if mip.fine > 0.005,
                            let fineImg = ReaderTextureCache.shared.fineDetailTextureImage(
@@ -1757,19 +1780,12 @@ public struct PaperTextureOverlayView: View {
                                 Color.clear
                                     .frame(width: viewW, height: viewH)
                                     .overlay(alignment: .topLeading) {
-                                        ZStack {
-                                            if let neutralTileImg, clampedTint < 0.999 {
-                                                Image(uiImage: neutralTileImg)
-                                                    .interpolation(.medium)
-                                                    .resizable(resizingMode: .tile)
-                                            }
-                                            if clampedTint > 0.001 || neutralTileImg == nil {
-                                                Image(uiImage: tileImg)
-                                                    .interpolation(.medium)
-                                                    .resizable(resizingMode: .tile)
-                                                    .opacity(neutralTileImg == nil ? 1.0 : clampedTint)
-                                            }
-                                        }
+                                        bitmapTileContent(
+                                            neutralTile: neutralTileImg,
+                                            coloredTile: tileImg,
+                                            clampedTint: clampedTint,
+                                            isolateDualTint: false
+                                        )
                                         .frame(width: viewW + tileW * 2.0, height: viewH + tileH * 2.0)
                                         .offset(x: -phaseX, y: -phaseY)
                                     }
@@ -1806,6 +1822,43 @@ public struct PaperTextureOverlayView: View {
                     .allowsHitTesting(false)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func bitmapTileContent(
+        neutralTile: UIImage?,
+        coloredTile: UIImage,
+        clampedTint: Double,
+        isolateDualTint: Bool
+    ) -> some View {
+        if clampedTint <= 0.001, let neutralTile {
+            Image(uiImage: neutralTile)
+                .interpolation(.medium)
+                .resizable(resizingMode: .tile)
+        } else if clampedTint < 0.999, let neutralTile {
+            if isolateDualTint {
+                dualTintTileStack(neutralTile: neutralTile, coloredTile: coloredTile, clampedTint: clampedTint)
+                    .compositingGroup()
+            } else {
+                dualTintTileStack(neutralTile: neutralTile, coloredTile: coloredTile, clampedTint: clampedTint)
+            }
+        } else {
+            Image(uiImage: coloredTile)
+                .interpolation(.medium)
+                .resizable(resizingMode: .tile)
+        }
+    }
+
+    private func dualTintTileStack(neutralTile: UIImage, coloredTile: UIImage, clampedTint: Double) -> some View {
+        ZStack {
+            Image(uiImage: neutralTile)
+                .interpolation(.medium)
+                .resizable(resizingMode: .tile)
+            Image(uiImage: coloredTile)
+                .interpolation(.medium)
+                .resizable(resizingMode: .tile)
+                .opacity(clampedTint)
         }
     }
 

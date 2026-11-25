@@ -295,6 +295,8 @@ public struct ZoomableImageView: UIViewRepresentable {
                         updateZoomMipmapBlend(zoomScale: currentZoom)
                     } else {
                         imageView.neutralTextureOverlayView.backgroundColor = .clear
+                        imageView.neutralTextureOverlayView.layer.magnificationFilter = .linear
+                        imageView.neutralTextureOverlayView.layer.minificationFilter = .linear
                         imageView.textureOverlayView.backgroundColor = .clear
                         imageView.textureOverlayView.contentMode = .scaleToFill
                         imageView.textureOverlayView.layer.magnificationFilter = .linear

@@ -692,6 +692,7 @@ public struct ReaderView: View {
                         grainDensity: store.readerClassicGrainDensity
                     )
                 }
+                .compositingGroup()
                 .ignoresSafeArea()
             }
         }
