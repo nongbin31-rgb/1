@@ -117,10 +117,11 @@ public actor OnlineImageLoader {
         return URLSession(configuration: config)
     }()
 
-    private let memoryCache = SendableImageCache(
-        countLimit: 60,
-        totalCostLimit: 160 * 1024 * 1024
-    )
+    private let memoryCache: SendableImageCache = {
+        let memGB = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        let limit = memGB >= 5.5 ? 120 * 1024 * 1024 : 80 * 1024 * 1024
+        return SendableImageCache(countLimit: 40, totalCostLimit: limit)
+    }()
 
     private let diskDirectory: URL
     private let offlineImagesDirectory: URL
@@ -288,6 +289,11 @@ public actor OnlineImageLoader {
             }
             entry.task?.cancel()
         }
+    }
+
+    /// 仅清空原图内存缓存（保留磁盘缓存，供系统内存警告联动调用）
+    public func clearMemoryCache() {
+        memoryCache.removeAllObjects()
     }
 
     public func clearAllCache() {

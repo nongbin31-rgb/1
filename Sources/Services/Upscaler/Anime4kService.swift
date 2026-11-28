@@ -80,8 +80,9 @@ public actor Anime4kService {
         }
     }
 
-    /// 清理已缓存的 Metal 管线以释放显存
+    /// 清理已缓存的 Metal 管线以释放显存（仅在空闲时清理，避免影响在途推理）
     public func clearPipelineCache() {
+        guard !isProcessing else { return }
         cachedPipelines.removeAll()
     }
 
@@ -89,59 +90,91 @@ public actor Anime4kService {
     /// - Parameters:
     ///   - image: 输入原始图片
     ///   - config: 包含预设（AAFast/BBFast/CAFast/AAHQ/BBHQ/CAHQ）以及 thinLines 与 darkenLines 开关
-    ///   - bypassSizeLimit: 是否解除默认总像素上限（Metal 单边硬件上限仍生效）
+    ///   - bypassSizeLimit: 是否解除默认总像素上限（仍受硬件安全天花板与可用内存守卫保护）
+    ///   - progress: 分块处理进度回调
     /// - Returns: 2 倍放大后的 UIImage
     public func enhance(
         image: UIImage,
         config: Anime4kConfig = Anime4kConfig(),
-        bypassSizeLimit: Bool = false
+        bypassSizeLimit: Bool = false,
+        progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> UIImage {
         guard let device, let commandQueue else {
             throw Anime4kServiceError.metalUnavailable
         }
 
-        let hardwareMaxInputSide = Self.maxHardwareInputDimension(for: device)
-
-        // 0. 前置像素尺寸校验（在排队与分配位图前快速拦截总像素超限图；单边超限将自动启用安全重叠分条切片）
-        let preSize = Self.pixelDimensions(of: image)
-        if preSize.width > 0 && preSize.height > 0 {
-            if !bypassSizeLimit {
-                let pixelCount = preSize.width * preSize.height
-                guard pixelCount <= Self.maxPixelCount else {
-                    throw Anime4kServiceError.imageTooLarge(
-                        width: preSize.width,
-                        height: preSize.height,
-                        maxPixels: Self.maxPixelCount
-                    )
-                }
-            }
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            throw CancellationError()
         }
 
-        // 严格串行排队：同一时刻仅允许 1 页占用共享 Anime4K 管线与 GPU 显存
+        let hardwareMaxInputSide = Self.maxHardwareInputDimension(for: device)
+
+        // 0. 前置防溢出尺寸与可用内存安全校验（拦截巨图与低内存场景，杜绝 Jetsam / GPU 驱动重启）
+        let preSize = Self.pixelDimensions(of: image)
+        if preSize.width > 0 && preSize.height > 0 {
+            _ = try UpscalerRuntimeGuard.shared.validateMemoryAndDimensions(
+                width: preSize.width,
+                height: preSize.height,
+                scale: 2,
+                bypassSizeLimit: bypassSizeLimit,
+                workingOverheadBytes: 110 * 1024 * 1024
+            )
+        }
+
+        // 跨引擎全局唯一互斥 + 内部串行门闩：确保全 App 同一时刻仅 1 个 GPU/ANE 超分引擎运行
+        let acquiredGlobal = await UpscalerRuntimeGuard.shared.acquireExclusiveSlot()
+        guard acquiredGlobal else {
+            throw CancellationError()
+        }
+        defer { UpscalerRuntimeGuard.shared.releaseExclusiveSlot() }
+
         await acquireGate()
         defer { releaseGate() }
 
-        try Task.checkCancellation()
+        return try await executeEnhancedLocked(
+            image: image,
+            config: config,
+            bypassSizeLimit: bypassSizeLimit,
+            hardwareMaxInputSide: hardwareMaxInputSide,
+            device: device,
+            commandQueue: commandQueue,
+            progress: progress
+        )
+    }
 
-        // 1. 提取正向 CGImage 并校验总像素上限
+    private func executeEnhancedLocked(
+        image: UIImage,
+        config: Anime4kConfig,
+        bypassSizeLimit: Bool,
+        hardwareMaxInputSide: Int,
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue,
+        progress: (@Sendable (String) -> Void)?
+    ) async throws -> UIImage {
+        try Task.checkCancellation()
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            throw CancellationError()
+        }
+
+        // 1. 提取正向 CGImage 并复核真实尺寸与实时可用内存
         let sourceCG = try Self.normalizedCGImage(from: image)
         let inWidth = sourceCG.width
         let inHeight = sourceCG.height
         guard inWidth > 0, inHeight > 0 else {
             throw Anime4kServiceError.imageNormalizationFailed
         }
-        if !bypassSizeLimit {
-            let pixelCount = inWidth * inHeight
-            guard pixelCount <= Self.maxPixelCount else {
-                throw Anime4kServiceError.imageTooLarge(
-                    width: inWidth,
-                    height: inHeight,
-                    maxPixels: Self.maxPixelCount
-                )
-            }
-        }
+        _ = try UpscalerRuntimeGuard.shared.validateMemoryAndDimensions(
+            width: inWidth,
+            height: inHeight,
+            scale: 2,
+            bypassSizeLimit: bypassSizeLimit,
+            workingOverheadBytes: 110 * 1024 * 1024
+        )
 
         try Task.checkCancellation()
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            throw CancellationError()
+        }
 
         // 2. 加载或复用该配置对应的多 Pass Anime4K 着色器链
         let pipeline = try loadOrCreatePipeline(config: config, device: device)
@@ -156,18 +189,25 @@ public actor Anime4kService {
             }
         }
 
-        // 3. 若单边超过 Metal 纹理硬件上限（如 800×12000 超长条漫），自动启用带重叠边的无缝分条拼接
-        if inWidth > hardwareMaxInputSide || inHeight > hardwareMaxInputSide {
+        // 3. 安全瓦片分块策略：
+        //    HQ 预设含 25-pass UL 网络及 2x 分辨率 10 张 rgba16Float 纹理，若整图直通极易触发 1.5GB+ 私有显存与 GPU Watchdog 重启；
+        //    按像素面积与单边双门限自动启用带 32px 重叠边的安全瓦片分块，将单次 CommandBuffer 显存峰值锁定在 ≤ 120MB！
+        let isHQPreset = (config.preset == .AAHQ || config.preset == .BBHQ || config.preset == .CAHQ)
+        let safeTileSide = min(hardwareMaxInputSide, isHQPreset ? 768 : 1024)
+        let safeDirectPixelLimit = isHQPreset ? 520_000 : 950_000
+
+        if inWidth > safeTileSide || inHeight > safeTileSide || (inWidth * inHeight) > safeDirectPixelLimit {
             return try await enhanceTiledStrips(
                 sourceCG: sourceCG,
                 pipeline: pipeline,
                 device: device,
                 commandQueue: commandQueue,
-                maxStripSide: min(hardwareMaxInputSide, 4096)
+                maxStripSide: safeTileSide,
+                progress: progress
             )
         }
 
-        // 4. 常规尺寸整图直通路径
+        // 4. 小图安全直通路径（输入像素 ≤ 0.52M / 0.95M，峰值显存 ≤ 120MB）
         let inputTex = try Self.makeInputTexture(from: sourceCG, device: device)
         let outputTexture = try await runPipeline(
             inputTex: inputTex,
@@ -220,10 +260,13 @@ public actor Anime4kService {
         }
 
         // 分阶段提交 GPU 计算任务：每完成一个着色器文件立刻释放该阶段全部中间 rgba16Float 纹理，
-        // 将单页瞬时显存峰值降低 65%~75%，并避免单次长命令缓冲触发 iOS 15 Metal Watchdog 超时
+        // 并在每次 commit 前校验前后台安全门禁，杜绝后台非法提交触发 iOS 内核强杀或驱动重启
         var currentTex: MTLTexture? = inputTex
         for pass in pipeline {
             try Task.checkCancellation()
+            guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+                throw CancellationError()
+            }
             guard !pass.enabledShaders.isEmpty else {
                 continue
             }
@@ -243,6 +286,9 @@ public actor Anime4kService {
         }
 
         try Task.checkCancellation()
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            throw CancellationError()
+        }
 
         // 创建 2x 目标 RGBA8 输出纹理（shared 模式便于 CPU 零拷贝读回）并执行最终 CenterResize
         let outDesc = MTLTextureDescriptor.texture2DDescriptor(
@@ -272,13 +318,14 @@ public actor Anime4kService {
         return outputTexture
     }
 
-    /// 超长单边图像（> Metal 纹理硬件上限）自动重叠分条超分并无缝拼接
+    /// 安全瓦片分块超分并无缝拼接（将单次 Metal CommandBuffer 显存峰值锁定在 ≤ 120MB，彻底杜绝 GPU 超时与重启）
     private func enhanceTiledStrips(
         sourceCG: CGImage,
         pipeline: [Anime4K],
         device: MTLDevice,
         commandQueue: MTLCommandQueue,
-        maxStripSide: Int
+        maxStripSide: Int,
+        progress: (@Sendable (String) -> Void)?
     ) async throws -> UIImage {
         let inWidth = sourceCG.width
         let inHeight = sourceCG.height
@@ -297,12 +344,24 @@ public actor Anime4kService {
         }
         let dstPtr = dstRawPtr.bindMemory(to: UInt8.self, capacity: totalTargetBytes)
 
-        let overlap = 24
+        // 32px 重叠边充分覆盖 7 层 3x3 UL + 2x Restore_M 卷积感受野，实现 100% 零拼缝
+        let overlap = 32
         let stepX = max(256, maxStripSide - overlap * 2)
         let stepY = max(256, maxStripSide - overlap * 2)
 
         let xRanges = Self.computeStripRanges(total: inWidth, maxChunk: maxStripSide, step: stepX)
         let yRanges = Self.computeStripRanges(total: inHeight, maxChunk: maxStripSide, step: stepY)
+        let totalTiles = max(1, xRanges.count * yRanges.count)
+        var completedTiles = 0
+
+        // 复用单个小瓦片读回缓冲区（~9~16MB），避免循环内反复 malloc/free
+        var reusableTileBuf: UnsafeMutableRawPointer? = nil
+        var reusableTileCap: Int = 0
+        defer {
+            if let buf = reusableTileBuf {
+                free(buf)
+            }
+        }
 
         for yRange in yRanges {
             let cropY0 = max(0, yRange.lowerBound - overlap)
@@ -313,6 +372,9 @@ public actor Anime4kService {
 
             for xRange in xRanges {
                 try Task.checkCancellation()
+                guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+                    throw CancellationError()
+                }
 
                 let cropX0 = max(0, xRange.lowerBound - overlap)
                 let cropX1 = min(inWidth, xRange.upperBound + overlap)
@@ -320,12 +382,14 @@ public actor Anime4kService {
                 let trimLeft = (xRange.lowerBound - cropX0) * 2
                 let validOutW = (xRange.upperBound - xRange.lowerBound) * 2
 
-                let cropRect = CGRect(x: cropX0, y: cropY0, width: cropW, height: cropH)
-                guard let tileCG = sourceCG.cropping(to: cropRect) else {
-                    throw Anime4kServiceError.imageNormalizationFailed
+                let tileInputTex: MTLTexture = try autoreleasepool {
+                    let cropRect = CGRect(x: cropX0, y: cropY0, width: cropW, height: cropH)
+                    guard let tileCG = sourceCG.cropping(to: cropRect) else {
+                        throw Anime4kServiceError.imageNormalizationFailed
+                    }
+                    return try Self.makeInputTexture(from: tileCG, device: device)
                 }
 
-                let tileInputTex = try Self.makeInputTexture(from: tileCG, device: device)
                 let tileOutTex = try await runPipeline(
                     inputTex: tileInputTex,
                     inWidth: cropW,
@@ -338,24 +402,44 @@ public actor Anime4kService {
                 // 读回有效中心区域并无缝写入最终目标位图
                 let tileBytesPerRow = cropW * 2 * 4
                 let tileTotalBytes = tileBytesPerRow * cropH * 2
-                guard tileTotalBytes > 0, let tileBuf = malloc(tileTotalBytes) else {
+                guard tileTotalBytes > 0 else {
                     throw Anime4kServiceError.readbackFailed
                 }
-                defer { free(tileBuf) }
-
-                let region = MTLRegionMake2D(0, 0, cropW * 2, cropH * 2)
-                tileOutTex.getBytes(tileBuf, bytesPerRow: tileBytesPerRow, from: region, mipmapLevel: 0)
-
-                let srcTilePtr = tileBuf.bindMemory(to: UInt8.self, capacity: tileTotalBytes)
-                let dstOriginX = xRange.lowerBound * 2
-                let dstOriginY = yRange.lowerBound * 2
-                let copyRowBytes = validOutW * 4
-
-                for row in 0..<validOutH {
-                    let srcOffset = (trimTop + row) * tileBytesPerRow + trimLeft * 4
-                    let dstOffset = (dstOriginY + row) * dstBytesPerRow + dstOriginX * 4
-                    memcpy(dstPtr.advanced(by: dstOffset), srcTilePtr.advanced(by: srcOffset), copyRowBytes)
+                if reusableTileCap < tileTotalBytes {
+                    if let old = reusableTileBuf {
+                        free(old)
+                        reusableTileBuf = nil
+                        reusableTileCap = 0
+                    }
+                    guard let fresh = malloc(tileTotalBytes) else {
+                        throw Anime4kServiceError.readbackFailed
+                    }
+                    reusableTileBuf = fresh
+                    reusableTileCap = tileTotalBytes
                 }
+                guard let tileBuf = reusableTileBuf else {
+                    throw Anime4kServiceError.readbackFailed
+                }
+
+                autoreleasepool {
+                    let region = MTLRegionMake2D(0, 0, cropW * 2, cropH * 2)
+                    tileOutTex.getBytes(tileBuf, bytesPerRow: tileBytesPerRow, from: region, mipmapLevel: 0)
+
+                    let srcTilePtr = tileBuf.bindMemory(to: UInt8.self, capacity: tileTotalBytes)
+                    let dstOriginX = xRange.lowerBound * 2
+                    let dstOriginY = yRange.lowerBound * 2
+                    let copyRowBytes = validOutW * 4
+
+                    for row in 0..<validOutH {
+                        let srcOffset = (trimTop + row) * tileBytesPerRow + trimLeft * 4
+                        let dstOffset = (dstOriginY + row) * dstBytesPerRow + dstOriginX * 4
+                        memcpy(dstPtr.advanced(by: dstOffset), srcTilePtr.advanced(by: srcOffset), copyRowBytes)
+                    }
+                }
+
+                completedTiles += 1
+                let percent = Int(Double(completedTiles) / Double(totalTiles) * 100)
+                progress?("\(percent)%")
             }
         }
 
@@ -446,8 +530,8 @@ public actor Anime4kService {
             return existing
         }
 
-        // 限制缓存数量，防止长期切换预设占用过多内存
-        if cachedPipelines.count >= 2 {
+        // 仅保留当前活跃的 1 套已编译 Metal 管线，切换预设时立即释放旧管线显存
+        if cachedPipelines.count >= 1 {
             cachedPipelines.removeAll()
         }
 

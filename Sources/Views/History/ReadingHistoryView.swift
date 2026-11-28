@@ -207,7 +207,7 @@ public struct ReadingHistoryView: View {
 
     private var historyHeaderBar: some View {
         HStack(alignment: .center, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 Text("足迹")
                     .font(.largeTitle.bold())
                     .foregroundStyle(.primary)

@@ -46,7 +46,7 @@ public final class ComicPageSlot: ObservableObject {
 
         let targetFilterSig = filterConfig.cacheSignature
 
-        // 动态调滤镜极速响应快路径：原图已在内存，且超分配置/开启状态未变，仅调整滤镜参数时直接对现有成品跑 CoreImage 滤镜
+        // 动态调滤镜极速响应快路径：原图已在内存，且超分配置/开启状态未变，仅调整滤镜参数时优先命中缓存，未命中异步跑 CoreImage 滤镜（绝不阻塞主线程）
         if let existingOriginal = originalImage {
             if !isEnabled {
                 if lastIsEnabled == false {
@@ -58,9 +58,19 @@ public final class ComicPageSlot: ObservableObject {
                         upscalerConfig: nil,
                         isUpscaled: false
                     )
-                    let finalImage = filterConfig.hasActiveFilters
-                        ? ImageFilterPipeline.shared.process(image: existingOriginal, cacheKey: filterKey, config: filterConfig)
-                        : existingOriginal
+                    let finalImage: UIImage
+                    if !filterConfig.hasActiveFilters {
+                        finalImage = existingOriginal
+                    } else if let cached = ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig) {
+                        finalImage = cached
+                    } else {
+                        finalImage = await ImageFilterPipeline.shared.processAsync(
+                            image: existingOriginal,
+                            cacheKey: filterKey,
+                            config: filterConfig
+                        )
+                        guard !Task.isCancelled, loadedPageID == page.id else { return }
+                    }
                     self.lastAppliedFilterSignature = targetFilterSig
                     self.displayImage = finalImage
                     self.isLoading = false
@@ -75,9 +85,19 @@ public final class ComicPageSlot: ObservableObject {
                     upscalerConfig: config,
                     isUpscaled: existingProcessed.appliedModel != nil
                 )
-                let finalImage = filterConfig.hasActiveFilters
-                    ? ImageFilterPipeline.shared.process(image: existingProcessed.image, cacheKey: filterKey, config: filterConfig)
-                    : existingProcessed.image
+                let finalImage: UIImage
+                if !filterConfig.hasActiveFilters {
+                    finalImage = existingProcessed.image
+                } else if let cached = ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig) {
+                    finalImage = cached
+                } else {
+                    finalImage = await ImageFilterPipeline.shared.processAsync(
+                        image: existingProcessed.image,
+                        cacheKey: filterKey,
+                        config: filterConfig
+                    )
+                    guard !Task.isCancelled, loadedPageID == page.id else { return }
+                }
                 self.lastAppliedFilterSignature = targetFilterSig
                 self.displayImage = finalImage
                 self.isLoading = false
@@ -185,19 +205,27 @@ public final class ComicPageSlot: ObservableObject {
         guard let original = rawLoadedImage else { return }
         self.originalImage = original
 
-        // 【原子化滤镜门禁】：先根据当前滤镜配置生成 1x 基准底图，绝不在屏幕上提前暴露未处理的原图
+        // 【原子化滤镜门禁】：先根据当前滤镜配置异步生成 1x 基准底图，绝不在屏幕上提前暴露未处理的原图，也绝不在主线程同步阻塞
         let rawFilterKey = ImageFilterPipeline.cacheKey(
             pageURL: page.imageURL,
             upscalerConfig: nil,
             isUpscaled: false
         )
-        let baselineFilteredImage = filterConfig.hasActiveFilters
-            ? ImageFilterPipeline.shared.process(
+        let baselineFilteredImage: UIImage
+        if !filterConfig.hasActiveFilters {
+            baselineFilteredImage = original
+        } else if let cachedRaw = ImageFilterPipeline.shared.cachedImage(cacheKey: rawFilterKey, config: filterConfig) {
+            baselineFilteredImage = cachedRaw
+        } else {
+            baselineFilteredImage = await ImageFilterPipeline.shared.processAsync(
                 image: original,
                 cacheKey: rawFilterKey,
                 config: filterConfig
             )
-            : original
+            guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                return
+            }
+        }
 
         // 若超分未启用，直接呈现带滤镜的原图，首帧即是最终效果，绝无二次跳变闪烁
         guard isEnabled else {
@@ -252,8 +280,11 @@ public final class ComicPageSlot: ObservableObject {
             return
         }
         self.processed = result
-        self.lastIsEnabled = true
-        self.lastAppliedConfig = config
+        // 仅在真正完成超分或明确跳过（带 notice）时记录状态；后台暂停中止时不锁死配置以便回前台重试
+        if result.appliedModel != nil || result.notice != nil {
+            self.lastIsEnabled = true
+            self.lastAppliedConfig = config
+        }
 
         let finalImage: UIImage
         if filterConfig.hasActiveFilters {
@@ -262,11 +293,18 @@ public final class ComicPageSlot: ObservableObject {
                 upscalerConfig: config,
                 isUpscaled: result.appliedModel != nil
             )
-            finalImage = ImageFilterPipeline.shared.process(
-                image: result.image,
-                cacheKey: filterKey,
-                config: filterConfig
-            )
+            if let cached = ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig) {
+                finalImage = cached
+            } else {
+                finalImage = await ImageFilterPipeline.shared.processAsync(
+                    image: result.image,
+                    cacheKey: filterKey,
+                    config: filterConfig
+                )
+                guard !Task.isCancelled, loadGeneration == currentGeneration, loadedPageID == page.id else {
+                    return
+                }
+            }
         } else {
             finalImage = result.image
         }
@@ -433,8 +471,8 @@ public struct ComicPageCellView: View {
                             ProgressView().tint(.white)
                             Text(
                                 slot.upscaleProgress.isEmpty
-                                    ? "正在执行 \(config.model.displayName) 2x 超分..."
-                                    : "正在执行 \(config.model.displayName) 2x 超分 \(slot.upscaleProgress)"
+                                    ? "正在执行 \(config.model.displayName) \(config.outputScaleFactor)x 超分..."
+                                    : "正在执行 \(config.model.displayName) \(config.outputScaleFactor)x 超分 \(slot.upscaleProgress)"
                             )
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.white)

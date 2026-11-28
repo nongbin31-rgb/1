@@ -4,20 +4,41 @@ import UIKit
 
 /// 非隔离的通知观察者令牌，确保 deinit 自动反注册而无 Swift 并发隔离冲突
 private final class MemoryWarningObserverToken {
-    private let token: NSObjectProtocol
+    private let tokens: [NSObjectProtocol]
 
-    init(onWarning: @escaping @Sendable () -> Void) {
-        self.token = NotificationCenter.default.addObserver(
+    init(
+        onWarning: @escaping @Sendable () -> Void,
+        onBackground: @escaping @Sendable () -> Void
+    ) {
+        let nc = NotificationCenter.default
+        let t1 = nc.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
             queue: .main
         ) { _ in
             onWarning()
         }
+        let t2 = nc.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            onBackground()
+        }
+        let t3 = nc.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            onBackground()
+        }
+        self.tokens = [t1, t2, t3]
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(token)
+        for token in tokens {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 }
 
@@ -69,11 +90,18 @@ public final class ReaderPreloadCoordinator: ObservableObject {
     private var memoryWarningToken: MemoryWarningObserverToken?
 
     public init() {
-        self.memoryWarningToken = MemoryWarningObserverToken { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.handleMemoryWarning()
+        self.memoryWarningToken = MemoryWarningObserverToken(
+            onWarning: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleMemoryWarning()
+                }
+            },
+            onBackground: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.cancelL2Task()
+                }
             }
-        }
+        )
     }
 
     // MARK: - 外部驱动接口
@@ -346,7 +374,18 @@ public final class ReaderPreloadCoordinator: ObservableObject {
     }
 
     private var isSystemHealthyForUpscalerPreload: Bool {
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            return false
+        }
+        if UpscalerRuntimeGuard.shared.isInMemoryWarningCooldown {
+            return false
+        }
         if let cooldownUntil = memoryWarningCooldownUntil, Date() < cooldownUntil {
+            return false
+        }
+        // 可用进程内存低于 320MB 时暂停后台 L2 预超分，将内存余量完全让给当前前台展示页
+        if let avail = UpscalerRuntimeGuard.shared.availableProcessMemoryBytes(),
+           avail < 320 * 1024 * 1024 {
             return false
         }
         let processInfo = ProcessInfo.processInfo

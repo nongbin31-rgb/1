@@ -373,7 +373,7 @@ public struct BookshelfView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
                     Text("书架")
                         .font(.largeTitle.bold())
                         .foregroundStyle(.primary)
@@ -406,6 +406,19 @@ public struct BookshelfView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("进入批量管理")
                 }
+
+                Button {
+                    showingLocalFileImporter = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 32, height: 32)
+                        .background(Color(uiColor: .secondarySystemFill), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("导入本地漫画")
 
                 bookshelfOptionsMenu
 
@@ -469,17 +482,9 @@ public struct BookshelfView: View {
                 }
             }
 
-            Divider()
-
-            Button {
-                DispatchQueue.main.async {
-                    showingLocalFileImporter = true
-                }
-            } label: {
-                Label("导入本地漫画 (CBZ/ZIP/PDF/EPUB)", systemImage: "doc.badge.plus")
-            }
-
             if !store.bookshelf.isEmpty {
+                Divider()
+
                 Button {
                     showingGroupManagerSheet = true
                 } label: {

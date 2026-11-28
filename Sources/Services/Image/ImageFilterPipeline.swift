@@ -18,8 +18,9 @@ public final class ImageFilterPipeline: @unchecked Sendable {
             .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         ]
         self.ciContext = CIContext(options: options)
-        self.cache.countLimit = 64
-        self.cache.totalCostLimit = 150 * 1024 * 1024 // 150MB 内存缓存保护
+        let memGB = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        self.cache.countLimit = 32
+        self.cache.totalCostLimit = memGB >= 5.5 ? 100 * 1024 * 1024 : 64 * 1024 * 1024
 
         self.memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -51,6 +52,11 @@ public final class ImageFilterPipeline: @unchecked Sendable {
         let fullCacheKey: NSString? = cacheKey.map { "\($0)_\(signature)" as NSString }
         if let key = fullCacheKey, let cached = cache.object(forKey: key) {
             return cached
+        }
+
+        // 后台/非活跃状态禁止触发 CoreImage Metal 渲染，防止后台 GPU 提交被系统强杀
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            return image
         }
 
         guard let cgImage = image.cgImage else {
@@ -97,10 +103,12 @@ public final class ImageFilterPipeline: @unchecked Sendable {
             orientation: image.imageOrientation
         )
 
-        // 写入缓存
+        // 写入缓存（单张超过 48MB 的超分大图不常驻滤镜缓存，避免与超分 L1 形成双份百兆驻留）
         if let key = fullCacheKey {
             let cost = cgImage.width * cgImage.height * 4
-            cache.setObject(resultImage, forKey: key, cost: cost)
+            if cost > 0 && cost <= 48 * 1024 * 1024 {
+                cache.setObject(resultImage, forKey: key, cost: cost)
+            }
         }
 
         return resultImage

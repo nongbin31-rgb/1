@@ -91,23 +91,23 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
         progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> UIImage {
         try Task.checkCancellation()
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            throw CancellationError()
+        }
 
         let scale = model.scaleFactor
         let (width, height) = Self.pixelDimensions(of: image)
         guard width >= Self.minDimension && height >= Self.minDimension else {
             throw Anime4kCoreMLServiceError.imageTooSmall(width: width, height: height)
         }
-        if !bypassSizeLimit {
-            let outPixels = width * scale * height * scale
-            guard outPixels > 0 && outPixels <= Self.maxOutputPixelCount else {
-                throw Anime4kCoreMLServiceError.outputTooLarge(
-                    width: width,
-                    height: height,
-                    scale: scale,
-                    maxOutputPixels: Self.maxOutputPixelCount
-                )
-            }
-        }
+        let workingOverhead = scale >= 4 ? 140 * 1024 * 1024 : 96 * 1024 * 1024
+        _ = try UpscalerRuntimeGuard.shared.validateMemoryAndDimensions(
+            width: width,
+            height: height,
+            scale: scale,
+            bypassSizeLimit: bypassSizeLimit,
+            workingOverheadBytes: workingOverhead
+        )
 
         // 仅当方向非 .up 或缺失 cgImage 时做规范化预解码
         let preparedImage: UIImage
@@ -122,11 +122,25 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
 
         try Task.checkCancellation()
 
+        // 跨引擎全局互斥执行：确保与 Anime4K Metal / Waifu2x / 预览页绝不并发争抢显存与 ANE
+        let acquiredGlobal = await UpscalerRuntimeGuard.shared.acquireExclusiveSlot()
+        guard acquiredGlobal else {
+            throw CancellationError()
+        }
+        defer { UpscalerRuntimeGuard.shared.releaseExclusiveSlot() }
+
         let cancelFlag = Anime4kCoreMLCancellationFlag()
+        let bgToken = UpscalerRuntimeGuard.shared.registerActiveCancellation {
+            cancelFlag.cancel()
+        }
+        defer {
+            UpscalerRuntimeGuard.shared.unregisterActiveCancellation(bgToken)
+        }
+
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                serialQueue.async {
-                    if cancelFlag.isCancelled {
+                self.serialQueue.async {
+                    if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
                         continuation.resume(throwing: CancellationError())
                         return
                     }
@@ -135,6 +149,7 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
                             let result = try self.runTiledInference(
                                 image: preparedImage,
                                 model: model,
+                                bypassSizeLimit: bypassSizeLimit,
                                 cancelFlag: cancelFlag,
                                 progress: progress
                             )
@@ -150,15 +165,16 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
         }
     }
 
-    // MARK: - CoreML 原生动态 Batch 分块推理
+    // MARK: - CoreML 原生固定 Batch 分块推理
 
     private func runTiledInference(
         image: UIImage,
         model: Anime4kCoreMLModel,
+        bypassSizeLimit: Bool,
         cancelFlag: Anime4kCoreMLCancellationFlag,
         progress: (@Sendable (String) -> Void)?
     ) throws -> UIImage {
-        if cancelFlag.isCancelled {
+        if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
             throw CancellationError()
         }
 
@@ -169,8 +185,17 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
         let width = cgImage.width
         let height = cgImage.height
         let scale = model.scaleFactor
-        let targetWidth = width * scale
-        let targetHeight = height * scale
+        let workingOverhead = scale >= 4 ? 140 * 1024 * 1024 : 96 * 1024 * 1024
+        let validated = try UpscalerRuntimeGuard.shared.validateMemoryAndDimensions(
+            width: width,
+            height: height,
+            scale: scale,
+            bypassSizeLimit: bypassSizeLimit,
+            workingOverheadBytes: workingOverhead
+        )
+        let targetWidth = validated.targetWidth
+        let targetHeight = validated.targetHeight
+        let targetBytes = validated.targetBytes
 
         // 1. 提取原图 8-bit sRGB RGBA 像素缓冲
         let srcBytes = width * height * 4
@@ -201,7 +226,6 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
         let srcPtr = srcRawPtr.bindMemory(to: UInt8.self, capacity: srcBytes)
 
         // 2. 分配目标大图 RGBA8 缓冲（零拷贝移交 CGDataProvider）
-        let targetBytes = targetWidth * targetHeight * 4
         guard targetBytes > 0, let dstRawPtr = malloc(targetBytes) else {
             throw Anime4kCoreMLServiceError.memoryAllocationFailed
         }
@@ -228,7 +252,7 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
             throw Anime4kCoreMLServiceError.inferenceFailed("分块切片失败")
         }
 
-        if cancelFlag.isCancelled {
+        if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
             throw CancellationError()
         }
 
@@ -238,22 +262,30 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
         }
         let mlModel = try getOrLoadMLModel(at: modelURL)
 
-        // 5. 准备动态 4D Batch 输入张量 [B, 3, 128, 128]
-        //    iOS 16+ ANE 批量送入 4 块大幅提升吞吐；4x 大输出模型限制为 2 块以控制瞬时峰值显存；iOS 15 保持 1 块稳妥
+        // 5. 准备固定 4D Batch 输入张量 [B, 3, 128, 128]
+        //    4x 模型内部特征图极大，固定 batch=1 控制 ANE 峰值显存；3x 固定 batch=2；1x/2x 固定 batch=4；
+        //    尾批不足时直接复用同一固定 shape（空槽拷贝尾块并在输出时丢弃），彻底消除 ANE 动态 shape 重编译！
         let maxBatchSize: Int
         if #available(iOS 16.0, *) {
-            maxBatchSize = scale >= 4 ? min(2, totalTiles) : min(4, totalTiles)
+            if scale >= 4 {
+                maxBatchSize = 1
+            } else if scale == 3 {
+                maxBatchSize = min(2, totalTiles)
+            } else {
+                maxBatchSize = min(4, totalTiles)
+            }
         } else {
             maxBatchSize = 1
         }
 
-        // 缓存主批次 MLMultiArray（满批直接复用，尾批若不足再按精确 batch 构造一次）
         let primaryInputArray = try MLMultiArray(
             shape: [NSNumber(value: maxBatchSize), 3, NSNumber(value: inputSize), NSNumber(value: inputSize)],
             dataType: .float32
         )
         let primaryStrides = Self.extract4DStrides(from: primaryInputArray, batch: maxBatchSize, tileSize: inputSize)
         let primaryProvider = Anime4kCoreMLFeatureProvider(input: primaryInputArray)
+        let inputCapacity = max(primaryInputArray.count, primaryStrides.minRequiredCount)
+        let inputPtr = primaryInputArray.dataPointer.bindMemory(to: Float.self, capacity: inputCapacity)
 
         // 复用行级 vDSP 临时缓冲
         var rowR = [Float](repeating: 0, count: validOutBlockSize)
@@ -265,56 +297,36 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
 
         let inv255: Float = 1.0 / 255.0
 
-        // 6. 逐批推理并裁去四周 overlap 边距拼回目标大图
+        // 6. 逐批推理并裁去四周 overlap 边距拼回目标大图（固定 shape 零重编译）
         var cursor = 0
         while cursor < totalTiles {
-            if cancelFlag.isCancelled {
+            if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
                 throw CancellationError()
             }
 
             let batchCount = min(maxBatchSize, totalTiles - cursor)
 
             try autoreleasepool {
-                let inputArray: MLMultiArray
-                let inStrides: Tensor4DStrides
-                let provider: Anime4kCoreMLFeatureProvider
-
-                if batchCount == maxBatchSize {
-                    inputArray = primaryInputArray
-                    inStrides = primaryStrides
-                    provider = primaryProvider
-                } else {
-                    let tailArray = try MLMultiArray(
-                        shape: [NSNumber(value: batchCount), 3, NSNumber(value: inputSize), NSNumber(value: inputSize)],
-                        dataType: .float32
-                    )
-                    inputArray = tailArray
-                    inStrides = Self.extract4DStrides(from: tailArray, batch: batchCount, tileSize: inputSize)
-                    provider = Anime4kCoreMLFeatureProvider(input: tailArray)
-                }
-
-                let inputCapacity = max(inputArray.count, inStrides.minRequiredCount)
-                let inputPtr = inputArray.dataPointer.bindMemory(to: Float.self, capacity: inputCapacity)
-
-                // 填充本批所有分块至 [B, 3, 128, 128]
-                for b in 0..<batchCount {
-                    let rect = rects[cursor + b]
+                // 填充本批所有分块至固定 [maxBatchSize, 3, 128, 128]（尾批多余空槽复用尾块，避免数值异常且不改变张量形状）
+                for b in 0..<maxBatchSize {
+                    let tileIndex = cursor + min(b, batchCount - 1)
+                    let rect = rects[tileIndex]
                     let originX = Int(rect.origin.x)
                     let originY = Int(rect.origin.y)
-                    let batchBase = b * inStrides.bStride
+                    let batchBase = b * primaryStrides.bStride
                     let rBase = batchBase
-                    let gBase = batchBase + inStrides.cStride
-                    let bBase = batchBase + inStrides.cStride * 2
+                    let gBase = batchBase + primaryStrides.cStride
+                    let bBase = batchBase + primaryStrides.cStride * 2
 
                     for py in 0..<inputSize {
                         let sampleY = min(max(originY - margin + py, 0), height - 1)
                         let rowOffset = sampleY * width
-                        let planeRow = py * inStrides.yStride
+                        let planeRow = py * primaryStrides.yStride
 
                         for px in 0..<inputSize {
                             let sampleX = min(max(originX - margin + px, 0), width - 1)
                             let pixelIdx = (rowOffset + sampleX) * 4
-                            let offset = planeRow + px * inStrides.xStride
+                            let offset = planeRow + px * primaryStrides.xStride
 
                             inputPtr[rBase + offset] = Float(srcPtr[pixelIdx]) * inv255
                             inputPtr[gBase + offset] = Float(srcPtr[pixelIdx + 1]) * inv255
@@ -323,13 +335,17 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
                     }
                 }
 
+                if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
+                    throw CancellationError()
+                }
+
                 // 执行 CoreML 推理
-                let prediction = try mlModel.prediction(from: provider)
+                let prediction = try mlModel.prediction(from: primaryProvider)
                 guard let outputArray = prediction.featureValue(for: "Identity")?.multiArrayValue else {
                     throw Anime4kCoreMLServiceError.inferenceFailed("未找到输出层 Identity")
                 }
 
-                let outStrides = Self.extract4DStrides(from: outputArray, batch: batchCount, tileSize: fullOutTileSize)
+                let outStrides = Self.extract4DStrides(from: outputArray, batch: maxBatchSize, tileSize: fullOutTileSize)
 
                 for b in 0..<batchCount {
                     let rect = rects[cursor + b]
@@ -633,7 +649,7 @@ public final class Anime4kCoreMLService: @unchecked Sendable {
             return cached
         }
 
-        if mlModelCache.count >= 2 {
+        if mlModelCache.count >= 1 {
             mlModelCache.removeAll()
         }
 

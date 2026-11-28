@@ -118,7 +118,7 @@ private final class ReaderPageSlot: ObservableObject {
             currentLoadedURL = page.imageURL
         }
 
-        // 动态调滤镜极速响应快路径：原图已在内存，且超分配置/开启状态未变，仅调整滤镜参数时直接对现有成品跑 CoreImage 滤镜
+        // 动态调滤镜极速响应快路径：原图已在内存，且超分配置/开启状态未变，仅调整滤镜参数时优先命中缓存，未命中异步执行 CoreImage 滤镜
         if let existingOriginal = originalImage {
             if !isEnabled {
                 if lastIsEnabled == false {
@@ -130,9 +130,19 @@ private final class ReaderPageSlot: ObservableObject {
                         upscalerConfig: nil,
                         isUpscaled: false
                     )
-                    let finalImage = filterConfig.hasActiveFilters
-                        ? ImageFilterPipeline.shared.process(image: existingOriginal, cacheKey: filterKey, config: filterConfig)
-                        : existingOriginal
+                    let finalImage: UIImage
+                    if !filterConfig.hasActiveFilters {
+                        finalImage = existingOriginal
+                    } else if let cached = ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig) {
+                        finalImage = cached
+                    } else {
+                        finalImage = await ImageFilterPipeline.shared.processAsync(
+                            image: existingOriginal,
+                            cacheKey: filterKey,
+                            config: filterConfig
+                        )
+                        guard !Task.isCancelled, currentLoadedURL == page.imageURL else { return }
+                    }
                     self.lastAppliedFilterSignature = targetFilterSig
                     self.displayImage = finalImage
                     self.isLoading = false
@@ -147,9 +157,19 @@ private final class ReaderPageSlot: ObservableObject {
                     upscalerConfig: config,
                     isUpscaled: existingProcessed.appliedModel != nil
                 )
-                let finalImage = filterConfig.hasActiveFilters
-                    ? ImageFilterPipeline.shared.process(image: existingProcessed.image, cacheKey: filterKey, config: filterConfig)
-                    : existingProcessed.image
+                let finalImage: UIImage
+                if !filterConfig.hasActiveFilters {
+                    finalImage = existingProcessed.image
+                } else if let cached = ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig) {
+                    finalImage = cached
+                } else {
+                    finalImage = await ImageFilterPipeline.shared.processAsync(
+                        image: existingProcessed.image,
+                        cacheKey: filterKey,
+                        config: filterConfig
+                    )
+                    guard !Task.isCancelled, currentLoadedURL == page.imageURL else { return }
+                }
                 self.lastAppliedFilterSignature = targetFilterSig
                 self.displayImage = finalImage
                 self.isLoading = false
@@ -256,19 +276,25 @@ private final class ReaderPageSlot: ObservableObject {
         recordAspectRatioIfValid(from: original, for: page.imageURL)
         self.originalImage = original
 
-        // 【原子化滤镜门禁】：先根据当前滤镜配置生成 1x 基准底图，绝不在屏幕上提前暴露未处理的原图
+        // 【原子化滤镜门禁】：先根据当前滤镜配置异步生成 1x 基准底图，绝不在屏幕上提前暴露未处理的原图，也绝不阻塞主线程
         let rawFilterKey = ImageFilterPipeline.cacheKey(
             pageURL: page.imageURL,
             upscalerConfig: nil,
             isUpscaled: false
         )
-        let baselineFilteredImage = filterConfig.hasActiveFilters
-            ? ImageFilterPipeline.shared.process(
+        let baselineFilteredImage: UIImage
+        if !filterConfig.hasActiveFilters {
+            baselineFilteredImage = original
+        } else if let cachedRaw = ImageFilterPipeline.shared.cachedImage(cacheKey: rawFilterKey, config: filterConfig) {
+            baselineFilteredImage = cachedRaw
+        } else {
+            baselineFilteredImage = await ImageFilterPipeline.shared.processAsync(
                 image: original,
                 cacheKey: rawFilterKey,
                 config: filterConfig
             )
-            : original
+            guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
+        }
 
         // 若超分未启用，直接呈现带滤镜的原图，首帧即是最终效果，绝无二次跳变闪烁
         guard isEnabled else {
@@ -320,8 +346,10 @@ private final class ReaderPageSlot: ObservableObject {
         )
         guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
         self.processed = result
-        self.lastIsEnabled = true
-        self.lastAppliedConfig = config
+        if result.appliedModel != nil || result.notice != nil {
+            self.lastIsEnabled = true
+            self.lastAppliedConfig = config
+        }
 
         let finalImage: UIImage
         if filterConfig.hasActiveFilters {
@@ -330,11 +358,16 @@ private final class ReaderPageSlot: ObservableObject {
                 upscalerConfig: config,
                 isUpscaled: result.appliedModel != nil
             )
-            finalImage = ImageFilterPipeline.shared.process(
-                image: result.image,
-                cacheKey: filterKey,
-                config: filterConfig
-            )
+            if let cached = ImageFilterPipeline.shared.cachedImage(cacheKey: filterKey, config: filterConfig) {
+                finalImage = cached
+            } else {
+                finalImage = await ImageFilterPipeline.shared.processAsync(
+                    image: result.image,
+                    cacheKey: filterKey,
+                    config: filterConfig
+                )
+                guard !Task.isCancelled, loadGeneration == currentGeneration else { return }
+            }
         } else {
             finalImage = result.image
         }
@@ -1274,16 +1307,18 @@ public struct ReaderView: View {
                         )
                     }
 
-                    HStack {
+                    HStack(spacing: 6) {
                         Button {
                             switchChapter(delta: -1)
                         } label: {
                             Label("上一话", systemImage: "backward.end")
                                 .font(.caption)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                         .disabled((currentChapterArrayIndex ?? 0) <= 0)
 
-                        Spacer()
+                        Spacer(minLength: 4)
 
                         Button {
                             showBackgroundPickerSheet = true
@@ -1291,6 +1326,8 @@ public struct ReaderView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: store.preferredReaderBackground.systemIcon)
                                 Text(store.preferredReaderBackground == .texture ? store.readerTextureType.shortName : store.preferredReaderBackground.title)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.82)
                             }
                             .font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 10)
@@ -1299,26 +1336,42 @@ public struct ReaderView: View {
                             .foregroundStyle(.white)
                         }
 
-                        Spacer()
+                        Spacer(minLength: 4)
 
                         Button {
                             showUpscalerSheet = true
                         } label: {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(width: 36, height: 36)
-                                .background(store.enableImageUpscaler ? Color.accentColor : Color.white.opacity(0.2), in: Circle())
+                            if store.enableImageUpscaler {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "sparkles")
+                                    Text(store.upscalerConfig.model.displayName)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.82)
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(Color.accentColor, in: Capsule())
                                 .foregroundStyle(.white)
+                            } else {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.white.opacity(0.2), in: Circle())
+                                    .foregroundStyle(.white)
+                            }
                         }
                         .accessibilityLabel(store.enableImageUpscaler ? "画质增强（\(store.upscalerConfig.model.displayName)）" : "画质增强")
 
-                        Spacer()
+                        Spacer(minLength: 4)
 
                         Button {
                             switchChapter(delta: 1)
                         } label: {
                             Label("下一话", systemImage: "forward.end")
                                 .font(.caption)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                         .disabled({
                             guard let idx = currentChapterArrayIndex else { return true }
@@ -2480,8 +2533,8 @@ private struct ReaderUpscalerSheet: View {
                 } footer: {
                     Text(
                         config.bypassSizeLimit
-                            ? "已解除 4800 万输出像素限制，超巨图或 4x 模式可能内存飙升或闪退；Anime4K 超长条漫已支持自动分条拼接。"
-                            : "默认采用 4800 万输出像素智能保护（等价 2x 12M 输入 / 4x 3M 输入）；Anime4K 超长单边自动分条拼接。"
+                            ? "已放宽至硬件安全上限（最高 \(ImageUpscalerConfig.hardMaxOutputPixelCount / 1_000_000)M 输出像素，仍保留实时可用内存与后台 GPU 防重启保护）。"
+                            : "已按机型物理内存自适应安全上限（\(ImageUpscalerConfig.maxOutputPixelCountThreshold / 1_000_000)M 输出像素）+ Metal 瓦片低显存分块保护。"
                     )
                 }
             }

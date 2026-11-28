@@ -153,7 +153,7 @@ private struct BookshelfItemInteractiveWrapper<Content: View>: View {
     }
 }
 
-// MARK: - 1. 聚焦续读视图 (Apple Books Focus + 3-Col Shelf)
+// MARK: - 1. 聚焦续读视图 (Apple Books Focus + Pinch-to-Zoom Shelf)
 
 private struct BookshelfFocusShelfView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -168,6 +168,48 @@ private struct BookshelfFocusShelfView: View {
     @Binding var focusFilter: BookshelfFocusFilter
     @ObservedObject var store: AppStore
     let callbacks: BookshelfViewCallbacks
+
+    /// 聚焦续读下方书架每行列数（默认 4 本，支持双指捏合在 2~5 本间无缝切换并持久化记忆）
+    @AppStorage("bookshelf_focus_grid_columns_v2") private var storedCompactColumns: Int = 4
+    @AppStorage("bookshelf_focus_grid_columns_regular_v2") private var storedRegularColumns: Int = 5
+    @State private var pinchAnchorScale: CGFloat = 1.0
+    @State private var zoomHudText: String?
+    @State private var zoomHudTask: Task<Void, Never>?
+
+    private var minColumnCount: Int {
+        horizontalSizeClass == .regular ? 3 : 2
+    }
+
+    private var maxColumnCount: Int {
+        horizontalSizeClass == .regular ? 7 : 5
+    }
+
+    private var effectiveColumnCount: Int {
+        let raw = horizontalSizeClass == .regular ? storedRegularColumns : storedCompactColumns
+        return min(max(raw, minColumnCount), maxColumnCount)
+    }
+
+    private var gridHorizontalSpacing: CGFloat {
+        switch effectiveColumnCount {
+        case ...2: return 14
+        case 3:    return 12
+        case 4:    return 9
+        default:   return 7
+        }
+    }
+
+    private var gridRowSpacing: CGFloat {
+        switch effectiveColumnCount {
+        case ...2: return 20
+        case 3:    return 18
+        case 4:    return 14
+        default:   return 12
+        }
+    }
+
+    private var gridHorizontalPadding: CGFloat {
+        effectiveColumnCount >= 5 ? 12 : (effectiveColumnCount == 4 ? 14 : 16)
+    }
 
     /// 优先选取最近阅读且尚未读完的漫画作为焦点卡，次选最近阅读，若全部未读则取首本收藏
     private var heroManga: Manga? {
@@ -189,10 +231,41 @@ private struct BookshelfFocusShelfView: View {
     }
 
     private var gridColumns: [GridItem] {
-        if horizontalSizeClass == .regular {
-            return [GridItem(.adaptive(minimum: 118, maximum: 156), spacing: 14, alignment: .top)]
+        Array(
+            repeating: GridItem(.flexible(), spacing: gridHorizontalSpacing, alignment: .top),
+            count: effectiveColumnCount
+        )
+    }
+
+    private func updateColumnCount(_ newCount: Int) {
+        let clamped = min(max(newCount, minColumnCount), maxColumnCount)
+        guard clamped != effectiveColumnCount else { return }
+
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+            if horizontalSizeClass == .regular {
+                storedRegularColumns = clamped
+            } else {
+                storedCompactColumns = clamped
+            }
         }
-        return Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 3)
+        BookshelfHaptics.light()
+        showZoomHud("每行 \(clamped) 本")
+    }
+
+    private func showZoomHud(_ text: String) {
+        zoomHudTask?.cancel()
+        withAnimation(.easeOut(duration: 0.16)) {
+            zoomHudText = text
+        }
+        zoomHudTask = Task {
+            try? await Task.sleep(nanoseconds: 1_100_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    zoomHudText = nil
+                }
+            }
+        }
     }
 
     private func count(for filter: BookshelfFocusFilter) -> Int {
@@ -223,6 +296,7 @@ private struct BookshelfFocusShelfView: View {
                     isLaunching: launchingMangaKey == hero.compositeKey,
                     callbacks: callbacks
                 )
+                .padding(.horizontal, 16)
             }
 
             // 快捷状态筛选胶囊栏
@@ -259,7 +333,6 @@ private struct BookshelfFocusShelfView: View {
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.horizontal, -16)
 
             if displayedBooks.isEmpty {
                 VStack(spacing: 10) {
@@ -284,35 +357,75 @@ private struct BookshelfFocusShelfView: View {
                     .buttonStyle(.plain)
                 }
                 .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 44)
             } else {
-                LazyVGrid(columns: gridColumns, spacing: 18) {
-                    ForEach(displayedBooks, id: \.compositeKey) { manga in
-                        let progress = store.progress(for: manga)
-                        let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
-                        let isSelected = selectedKeys.contains(manga.compositeKey)
+                ZStack(alignment: .top) {
+                    LazyVGrid(columns: gridColumns, spacing: gridRowSpacing) {
+                        ForEach(displayedBooks, id: \.compositeKey) { manga in
+                            let progress = store.progress(for: manga)
+                            let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
+                            let isSelected = selectedKeys.contains(manga.compositeKey)
 
-                        BookshelfItemInteractiveWrapper(
-                            manga: manga,
-                            progress: progress,
-                            isEditing: isEditing,
-                            callbacks: callbacks
-                        ) {
-                            BookshelfFocusGridCard(
+                            BookshelfItemInteractiveWrapper(
                                 manga: manga,
                                 progress: progress,
-                                chapterBadge: chapterBadge,
                                 isEditing: isEditing,
-                                isSelected: isSelected
-                            )
+                                callbacks: callbacks
+                            ) {
+                                BookshelfFocusGridCard(
+                                    manga: manga,
+                                    progress: progress,
+                                    chapterBadge: chapterBadge,
+                                    columnCount: effectiveColumnCount,
+                                    isEditing: isEditing,
+                                    isSelected: isSelected
+                                )
+                            }
                         }
+                    }
+                    .padding(.horizontal, gridHorizontalPadding)
+
+                    if let zoomHudText {
+                        Text(zoomHudText)
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.76), in: Capsule())
+                            .padding(.top, 6)
+                            .allowsHitTesting(false)
+                            .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
                 }
             }
         }
-        .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 16)
+        .simultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    guard value.isFinite, value > 0 else { return }
+                    let ratio = value / max(pinchAnchorScale, 0.01)
+                    if ratio <= 0.80 {
+                        // 双指收拢：缩小封面，每行显示更多本（最多 5 本 / iPad 7 本）
+                        pinchAnchorScale = value
+                        updateColumnCount(effectiveColumnCount + 1)
+                    } else if ratio >= 1.24 {
+                        // 双指张开：放大封面，每行显示更少本（最少 2 本 / iPad 3 本）
+                        pinchAnchorScale = value
+                        updateColumnCount(effectiveColumnCount - 1)
+                    }
+                }
+                .onEnded { _ in
+                    pinchAnchorScale = 1.0
+                }
+        )
+        .onDisappear {
+            zoomHudTask?.cancel()
+            zoomHudTask = nil
+        }
     }
 }
 
@@ -570,11 +683,12 @@ private struct BookshelfHeroResumeCard: View {
     }
 }
 
-/// 聚焦续读 3 列卡片（统一收敛为封面底部 3.5pt 进度轨 + 清洗后双行书名 + 状态页码底行）
+/// 聚焦续读自适应多列卡片（根据 2~5 列密度自适应圆角、角标、书名与进度行排版）
 private struct BookshelfFocusGridCard: View {
     let manga: Manga
     let progress: ReadingProgress?
     let chapterBadge: BookshelfChapterBadgeInfo?
+    let columnCount: Int
     let isEditing: Bool
     let isSelected: Bool
 
@@ -588,67 +702,88 @@ private struct BookshelfFocusGridCard: View {
         return "P\(progress.pageIndex + 1)"
     }
 
+    private var isDense: Bool { columnCount >= 4 }
+    private var isUltraDense: Bool { columnCount >= 5 }
+
+    private var coverCornerRadius: CGFloat {
+        isUltraDense ? 7 : (isDense ? 8 : 10)
+    }
+
+    private var progressBarHeight: CGFloat {
+        isUltraDense ? 2.5 : (isDense ? 3.0 : 3.5)
+    }
+
+    private var titleFontSize: CGFloat {
+        isUltraDense ? 10.0 : (isDense ? 11.2 : 12.5)
+    }
+
+    private var titleBlockHeight: CGFloat {
+        isUltraDense ? 25 : (isDense ? 29 : 33)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: isUltraDense ? 4 : (isDense ? 5 : 6)) {
             AsyncMangaCoverView(
                 urlString: manga.coverURL,
                 headers: manga.coverHeaders,
-                cornerRadius: 10
+                cornerRadius: coverCornerRadius
             )
             .frame(maxWidth: .infinity)
             .aspectRatio(3.0 / 4.2, contentMode: .fit)
             .overlay(alignment: .topTrailing) {
                 if !isEditing, let chapterBadge {
                     BookshelfCoverChapterBadge(
-                        text: chapterBadge.text,
+                        text: isDense ? chapterBadge.compactText : chapterBadge.text,
                         hasUnreadUpdate: chapterBadge.hasUnreadUpdate,
-                        compact: false
+                        compact: isDense
                     )
-                    .padding(.top, 5)
-                    .padding(.trailing, 5)
+                    .padding(.top, isDense ? 3.5 : 5)
+                    .padding(.trailing, isDense ? 3.5 : 5)
                 }
             }
             .overlay(alignment: .bottom) {
                 if let progress {
-                    BookshelfCoverBottomProgressBar(progress: progress, height: 3.5)
+                    BookshelfCoverBottomProgressBar(progress: progress, height: progressBarHeight)
                 }
             }
             .overlay {
                 if isEditing {
-                    BookshelfSelectionOverlay(isSelected: isSelected, cornerRadius: 10, compact: true)
+                    BookshelfSelectionOverlay(isSelected: isSelected, cornerRadius: coverCornerRadius, compact: true)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: coverCornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: coverCornerRadius, style: .continuous)
                     .strokeBorder(
                         isEditing && isSelected ? Color.accentColor : Color.primary.opacity(0.08),
                         lineWidth: isEditing && isSelected ? 2 : 0.5
                     )
             )
-            .shadow(color: .black.opacity(0.10), radius: 5, y: 2.5)
+            .shadow(color: .black.opacity(0.10), radius: isDense ? 3.5 : 5, y: isDense ? 1.8 : 2.5)
 
             Text(meta.cleanTitle)
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.system(size: titleFontSize, weight: isUltraDense ? .medium : .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, minHeight: 33, maxHeight: 33, alignment: .topLeading)
+                .frame(maxWidth: .infinity, minHeight: titleBlockHeight, maxHeight: titleBlockHeight, alignment: .topLeading)
 
-            HStack(spacing: 4) {
-                if !manga.statusText.isEmpty {
-                    BookshelfStatusDotText(statusText: manga.statusText)
-                } else if !manga.author.isEmpty {
-                    Text(manga.displayAuthor)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+            HStack(spacing: 3) {
+                if !isDense {
+                    if !manga.statusText.isEmpty {
+                        BookshelfStatusDotText(statusText: manga.statusText)
+                    } else if !manga.author.isEmpty {
+                        Text(manga.displayAuthor)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 4)
                 }
 
-                Spacer(minLength: 4)
-
                 Text(rightProgressLabel)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: isUltraDense ? 9.0 : (isDense ? 9.5 : 10), weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(
                         progress?.isCompleted == true
@@ -657,8 +792,12 @@ private struct BookshelfFocusGridCard: View {
                     )
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+
+                if isDense {
+                    Spacer(minLength: 0)
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 14, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: isUltraDense ? 12 : 14, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }

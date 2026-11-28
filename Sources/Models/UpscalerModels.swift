@@ -338,13 +338,34 @@ public struct ImageUpscalerConfig: Codable, Equatable, Hashable {
     /// 智能跳过高清原图宽度阈值（0 表示关闭；非 0 时原图宽度 ≥ 阈值且放大倍率 > 1 则自动跳过超分）
     public var smartSkipMinWidth: Int
 
-    /// 默认最大允许输入总像素（2x 引擎等价 1200 万输入像素）
-    public static let maxPixelCountThreshold: Int = 12_000_000
+    /// 默认最大允许输入总像素（2x 引擎等价 800 万输入像素）
+    public static let maxPixelCountThreshold: Int = 8_000_000
 
-    /// 默认最大允许输出总像素（4800 万输出像素 ≈ 192MB RGBA8，兼容 2x 12M 输入、4x 3M 输入、1x 48M 输入，防 Jetsam OOM）
-    public static let maxOutputPixelCountThreshold: Int = 48_000_000
+    /// 按设备物理内存自适应的安全输出总像素上限（兼顾 WindowServer IOSurface 显存，防 Jetsam 与重启）
+    /// - 3GB 机型：16M 输出像素（≈ 64MB RGBA8）
+    /// - 4GB 机型：24M 输出像素（≈ 96MB RGBA8）
+    /// - 6GB+ 机型：32M 输出像素（≈ 128MB RGBA8）
+    public static let maxOutputPixelCountThreshold: Int = {
+        let memGB = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        if memGB >= 5.5 {
+            return 32_000_000
+        } else if memGB >= 3.5 {
+            return 24_000_000
+        } else {
+            return 16_000_000
+        }
+    }()
 
-    /// Anime4K / Metal 单次 2x 纹理输入单边硬件上限（超过此单边将自动启用重叠分条无缝拼接）
+    /// 即使开启「解除超分尺寸限制」也强制生效的硬件绝对天花板，杜绝撑爆系统合成器或整机重启
+    public static let hardMaxOutputPixelCount: Int = {
+        let memGB = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        return memGB >= 5.5 ? 48_000_000 : 32_000_000
+    }()
+
+    /// 任何引擎输出单边绝对上限（匹配 Apple GPU 2D 纹理与 CoreAnimation 硬件极限）
+    public static let hardMaxOutputDimension: Int = 16384
+
+    /// Anime4K / Metal 单次 2x 纹理输入单边硬件上限（超过安全瓦片阈值将自动启用重叠分块无缝拼接）
     public static let maxMetalInputDimension: Int = 8192
 
     /// Anime4K 官方进阶说明文档链接

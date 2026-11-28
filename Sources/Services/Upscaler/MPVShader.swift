@@ -195,10 +195,13 @@ public struct MPVShader: Sendable {
                     current?.save = splitted[1]
                 case "WIDTH":
                     if splitted.count == 4 {
+                        guard let factor = Float(splitted[2]), factor.isFinite, factor > 0 else {
+                            throw GLSLError.parseFail(line)
+                        }
                         if splitted[3] == "*" {
-                            current?.width = (String(splitted[1].split(separator: ".")[0]), Float(splitted[2])!)
+                            current?.width = (String(splitted[1].split(separator: ".")[0]), factor)
                         } else if splitted[3] == "/" {
-                            current?.width = (String(splitted[1].split(separator: ".")[0]), 1.0 / Float(splitted[2])!)
+                            current?.width = (String(splitted[1].split(separator: ".")[0]), 1.0 / factor)
                         } else {
                             throw GLSLError.parseFail(line)
                         }
@@ -207,10 +210,13 @@ public struct MPVShader: Sendable {
                     }
                 case "HEIGHT":
                     if splitted.count == 4 {
+                        guard let factor = Float(splitted[2]), factor.isFinite, factor > 0 else {
+                            throw GLSLError.parseFail(line)
+                        }
                         if splitted[3] == "*" {
-                            current?.height = (String(splitted[1].split(separator: ".")[0]), Float(splitted[2])!)
+                            current?.height = (String(splitted[1].split(separator: ".")[0]), factor)
                         } else if splitted[3] == "/" {
-                            current?.height = (String(splitted[1].split(separator: ".")[0]), 1.0 / Float(splitted[2])!)
+                            current?.height = (String(splitted[1].split(separator: ".")[0]), 1.0 / factor)
                         } else {
                             throw GLSLError.parseFail(line)
                         }

@@ -31,7 +31,7 @@ public final class Anime4K: @unchecked Sendable {
 
     public var enabledShaders: [MPVShader] = []
     public var pipelineStates: [MTLComputePipelineState] = []
-    public var finalResizePS: MTLComputePipelineState!
+    public var finalResizePS: MTLComputePipelineState?
     public var textureMap: [[String: MTLTexture]] = []
     public var nearestSamplerStates: [MTLSamplerState] = []
     public var linearSamplerStates: [MTLSamplerState] = []
@@ -255,6 +255,17 @@ public final class Anime4K: @unchecked Sendable {
         }
         textureMap[bufferIndex]["output"] = outTex
 
+        // 预计算每个中间纹理的最后消费 Pass 索引，编码完成后立即释放引用，降低单阶段显存峰值
+        var lastUsePassIndex: [String: Int] = [:]
+        for idx in 0..<enabledShaders.count {
+            let s = enabledShaders[idx]
+            for rawName in s.inputTextureNames {
+                let resolved = (rawName == "HOOKED" ? (s.hook ?? rawName) : rawName)
+                lastUsePassIndex[resolved] = idx
+            }
+        }
+        let finalOutputName = enabledShaders.last?.outputTextureName ?? "output"
+
         for i in 0..<enabledShaders.count {
             let shader = enabledShaders[i]
             var passOutputW = textureInW
@@ -336,6 +347,13 @@ public final class Anime4K: @unchecked Sendable {
             )
             encoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
             encoder.endEncoding()
+
+            // 本 Pass 结束后，立刻释放不再被后续 Pass 引用的中间纹理
+            for (texName, lastIdx) in lastUsePassIndex where lastIdx == i {
+                if texName != "output" && texName != finalOutputName && texName != "MAIN" && texName != "NATIVE" {
+                    textureMap[bufferIndex].removeValue(forKey: texName)
+                }
+            }
         }
 
         // 安全获取最终输出纹理，杜绝强制解包闪退

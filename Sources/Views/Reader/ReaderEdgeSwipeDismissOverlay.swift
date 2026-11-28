@@ -89,8 +89,8 @@ public struct ReaderSwipeBackContainer<Content: View>: View {
             let dragOffset = max(swipeState.offset, 0)
 
             ZStack {
-                // 仅在发生左滑位移时渲染底层纯白/深色揭示画布与圆形进度环指示器，常态零渲染开销
-                if dragOffset > 0.5 || swipeState.isDragging {
+                // 仅在跟手拖拽期间渲染右侧窄条底布与圆环进度指示器；触发关闭后立刻撤去，绝不闪现整屏白页与居中圆叉
+                if !isCommittingDismiss && (dragOffset > 0.5 || swipeState.isDragging) {
                     revealBackgroundColor
                         .frame(width: containerSize.width, height: containerSize.height)
                         .allowsHitTesting(false)
@@ -102,19 +102,20 @@ public struct ReaderSwipeBackContainer<Content: View>: View {
                     .allowsHitTesting(false)
                 }
 
-                // 漫画内容与背景整体随手指向左平移
+                // 漫画内容与背景整体随手指向左平移（仅在拖拽揭示阶段偏移，松手关闭立即恢复整页直接退场）
+                let activeOffset = isCommittingDismiss ? 0 : dragOffset
                 content
                     .frame(width: containerSize.width, height: containerSize.height)
                     .clipped()
                     .shadow(
-                        color: dragOffset > 0.5
+                        color: activeOffset > 0.5
                             ? Color.black.opacity(isDarkRevealCanvas ? 0.36 : 0.08)
                             : Color.clear,
-                        radius: dragOffset > 0.5 ? 10 : 0,
-                        x: dragOffset > 0.5 ? 3 : 0,
+                        radius: activeOffset > 0.5 ? 10 : 0,
+                        x: activeOffset > 0.5 ? 3 : 0,
                         y: 0
                     )
-                    .offset(x: -dragOffset)
+                    .offset(x: -activeOffset)
 
                 #if canImport(UIKit)
                 ReaderRightToLeftSwipeInstaller(
@@ -132,7 +133,7 @@ public struct ReaderSwipeBackContainer<Content: View>: View {
                         }
                     },
                     onCommitDismiss: {
-                        commitDismissAnimation(containerWidth: containerSize.width)
+                        commitDismiss()
                     }
                 )
                 .frame(width: 0, height: 0)
@@ -178,23 +179,11 @@ public struct ReaderSwipeBackContainer<Content: View>: View {
         .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.80), value: isReady)
     }
 
-    private func commitDismissAnimation(containerWidth: CGFloat) {
+    private func commitDismiss() {
         guard !isCommittingDismiss else { return }
         isCommittingDismiss = true
-
-        let targetOffset = max(containerWidth, 320)
-        withAnimation(.easeOut(duration: 0.18)) {
-            swipeState = ReaderSwipeDismissState(
-                offset: targetOffset,
-                progress: 1.0,
-                isDragging: false,
-                isReadyToDismiss: true
-            )
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.17) {
-            onDismiss()
-        }
+        swipeState = ReaderSwipeDismissState()
+        onDismiss()
     }
 }
 
@@ -350,17 +339,19 @@ private struct ReaderRightToLeftSwipeInstaller: UIViewRepresentable {
         }
 
         private func dismissThreshold(for containerWidth: CGFloat) -> CGFloat {
-            min(max(containerWidth * 0.27, 96), 132)
+            // 刚好容纳 38pt 进度圆环并留出舒适边距，拉到此处圆环即满
+            min(max(containerWidth * 0.24, 86), 104)
         }
 
         private func mappedVisualOffset(rawDistance: CGFloat, containerWidth: CGFloat) -> CGFloat {
             let clampedRaw = max(rawDistance, 0)
-            let directLimit = containerWidth * 0.62
-            if clampedRaw <= directLimit {
+            let threshold = dismissThreshold(for: containerWidth)
+            if clampedRaw <= threshold {
                 return clampedRaw
             }
-            let excess = clampedRaw - directLimit
-            return min(directLimit + excess * 0.35, containerWidth * 0.80)
+            // 拉满圆环后施加强阻尼限位（最多微弹 12pt），绝不再拖出大片空白底布
+            let excess = clampedRaw - threshold
+            return threshold + min(12, excess * 0.10)
         }
 
         // MARK: - UIGestureRecognizerDelegate

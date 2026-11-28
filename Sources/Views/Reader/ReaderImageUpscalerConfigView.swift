@@ -223,8 +223,8 @@ public struct ReaderImageUpscalerConfigView: View {
 
             Text(
                 store.upscalerConfig.bypassSizeLimit
-                    ? "已解除 4800 万输出像素限制，超巨图或 4x 模式可能触发高内存占用或闪退（Anime4K 支持超长单边自动分条拼接）。"
-                    : "默认按输出总像素上限（4800 万像素，等价 2x 12M 输入 / 4x 3M 输入）智能保护；Anime4K 超长条漫已支持自动分条无缝拼接。"
+                    ? "已放宽至硬件安全上限（最高 \(ImageUpscalerConfig.hardMaxOutputPixelCount / 1_000_000)M 输出像素），仍保留实时可用内存与后台 GPU 保护防重启。"
+                    : "已按设备内存自适应输出上限（\(ImageUpscalerConfig.maxOutputPixelCountThreshold / 1_000_000)M 像素）与 Metal 瓦片分块保护，兼顾高画质与低显存稳定运行。"
             )
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.6))
@@ -446,7 +446,13 @@ public struct ReaderImageUpscalerConfigView: View {
                 result = try await Anime4kService.shared.enhance(
                     image: target,
                     config: store.upscalerConfig.anime4k,
-                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit
+                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit,
+                    progress: { pct in
+                        DispatchQueue.main.async {
+                            guard self.previewGeneration == generation else { return }
+                            self.enhanceProgressText = pct
+                        }
+                    }
                 )
             case .anime4kCoreML:
                 result = try await Anime4kCoreMLService.shared.enhance(

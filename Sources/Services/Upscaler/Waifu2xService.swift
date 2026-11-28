@@ -70,11 +70,18 @@ public final class Waifu2xService: @unchecked Sendable {
 
     private init() {}
 
+    /// 清理已缓存的 Waifu2x 模型权重以释放内存
+    public func clearModelCache() {
+        modelCacheLock.lock()
+        mlModelCache.removeAll()
+        modelCacheLock.unlock()
+    }
+
     /// 执行 Waifu2x 2x 超分辨率放大
     /// - Parameters:
     ///   - image: 输入原始图像
     ///   - model: 10 组模型之一（漫画/照片，不同降噪等级）
-    ///   - bypassSizeLimit: 是否解除默认总像素上限
+    ///   - bypassSizeLimit: 是否解除默认总像素上限（仍受硬件天花板与可用内存守卫保护）
     ///   - progress: 进度回调 (0% ~ 100%)
     /// - Returns: 2 倍放大后的高清 UIImage
     public func enhance(
@@ -84,22 +91,22 @@ public final class Waifu2xService: @unchecked Sendable {
         progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> UIImage {
         try Task.checkCancellation()
+        guard UpscalerRuntimeGuard.shared.isGPUExecutionPermitted else {
+            throw CancellationError()
+        }
 
-        // 1. 先检查像素尺寸（避免超限图先做位图解码浪费内存）
+        // 1. 先检查像素尺寸与实时可用内存（避免超限或低内存下分配位图触发闪退/重启）
         let (width, height) = Self.pixelDimensions(of: image)
         guard width >= Self.minDimension && height >= Self.minDimension else {
             throw Waifu2xServiceError.imageTooSmall(width: width, height: height)
         }
-        if !bypassSizeLimit {
-            let pixelCount = width * height
-            guard pixelCount <= Self.maxPixelCount else {
-                throw Waifu2xServiceError.imageTooLarge(
-                    width: width,
-                    height: height,
-                    maxPixels: Self.maxPixelCount
-                )
-            }
-        }
+        _ = try UpscalerRuntimeGuard.shared.validateMemoryAndDimensions(
+            width: width,
+            height: height,
+            scale: 2,
+            bypassSizeLimit: bypassSizeLimit,
+            workingOverheadBytes: 120 * 1024 * 1024
+        )
 
         // 2. 若原图已是正向 CGImage 则免去冗余中间拷贝，仅方向非 .up 或缺失 cgImage 时预解码规范化
         let preparedImage: UIImage
@@ -114,12 +121,25 @@ public final class Waifu2xService: @unchecked Sendable {
 
         try Task.checkCancellation()
 
-        // 3. 在专用串行队列中排队执行 CoreML 原生分块推理，支持 Swift Task 协作式即时取消
+        // 3. 跨引擎全局唯一互斥 + 专用串行队列执行 CoreML 分块推理，支持 Task 取消与后台瞬停
+        let acquiredGlobal = await UpscalerRuntimeGuard.shared.acquireExclusiveSlot()
+        guard acquiredGlobal else {
+            throw CancellationError()
+        }
+        defer { UpscalerRuntimeGuard.shared.releaseExclusiveSlot() }
+
         let cancelFlag = Waifu2xCancellationFlag()
+        let bgToken = UpscalerRuntimeGuard.shared.registerActiveCancellation {
+            cancelFlag.cancel()
+        }
+        defer {
+            UpscalerRuntimeGuard.shared.unregisterActiveCancellation(bgToken)
+        }
+
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                serialQueue.async {
-                    if cancelFlag.isCancelled {
+                self.serialQueue.async {
+                    if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
                         continuation.resume(throwing: CancellationError())
                         return
                     }
@@ -128,6 +148,7 @@ public final class Waifu2xService: @unchecked Sendable {
                             let result = try self.runCoreMLTiledInference(
                                 image: preparedImage,
                                 model: model,
+                                bypassSizeLimit: bypassSizeLimit,
                                 cancelFlag: cancelFlag,
                                 progress: progress
                             )
@@ -148,10 +169,11 @@ public final class Waifu2xService: @unchecked Sendable {
     private func runCoreMLTiledInference(
         image: UIImage,
         model: Waifu2xModel,
+        bypassSizeLimit: Bool,
         cancelFlag: Waifu2xCancellationFlag,
         progress: (@Sendable (String) -> Void)?
     ) throws -> UIImage {
-        if cancelFlag.isCancelled {
+        if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
             throw CancellationError()
         }
 
@@ -161,6 +183,13 @@ public final class Waifu2xService: @unchecked Sendable {
 
         let width = cgImage.width
         let height = cgImage.height
+        let validated = try UpscalerRuntimeGuard.shared.validateMemoryAndDimensions(
+            width: width,
+            height: height,
+            scale: 2,
+            bypassSizeLimit: bypassSizeLimit,
+            workingOverheadBytes: 120 * 1024 * 1024
+        )
 
         // 1. 提取原图 8-bit RGBA 像素数据（推理结束后立刻释放）
         let srcBytes = width * height * 4
@@ -196,11 +225,11 @@ public final class Waifu2xService: @unchecked Sendable {
         let inputTileSize = blockSize + 2 * shrinkSize // 156
         let outputTileSize = blockSize * 2 // 284
         let outScale = 2
-        let targetWidth = width * outScale
-        let targetHeight = height * outScale
+        let targetWidth = validated.targetWidth
+        let targetHeight = validated.targetHeight
 
         // 分配目标大图像素缓冲区（零拷贝移交 CGDataProvider，彻底消除 Data(dstPixels) 双倍内存峰值）
-        let targetBytes = targetWidth * targetHeight * 4
+        let targetBytes = validated.targetBytes
         guard targetBytes > 0, let dstRawPtr = malloc(targetBytes) else {
             throw Waifu2xServiceError.memoryAllocationFailed
         }
@@ -220,7 +249,7 @@ public final class Waifu2xService: @unchecked Sendable {
             throw Waifu2xServiceError.inferenceFailed("分块切片失败")
         }
 
-        if cancelFlag.isCancelled {
+        if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
             throw CancellationError()
         }
 
@@ -231,10 +260,10 @@ public final class Waifu2xService: @unchecked Sendable {
         let mlModel = try getOrLoadMLModel(at: modelURL)
 
         // 5. 准备可复用的 Float32 输入 MLMultiArray 池 [3, 156, 156]
-        //    iOS 16+ 使用 MLArrayBatchProvider 4 块并发喂给 ANE/GPU；iOS 15 保持单块稳定路径，内存与带宽较 Double 减半
+        //    iOS 16+ 限制为 2 块批量喂给 ANE/GPU，兼顾速度与低显存峰值；iOS 15 保持单块稳定路径
         let batchSize: Int
         if #available(iOS 16.0, *) {
-            batchSize = min(4, totalTiles)
+            batchSize = min(2, totalTiles)
         } else {
             batchSize = 1
         }
@@ -270,10 +299,10 @@ public final class Waifu2xService: @unchecked Sendable {
 
         let inv255: Float = 1.0 / 255.0
 
-        // 6. 按批执行推理并填充目标缓冲区（每批前检查取消标志，翻页/切配置即时释放队列）
+        // 6. 按批执行推理并填充目标缓冲区（每批前检查取消与前后台状态，切后台立即中止防 ANE/GPU 崩溃）
         var cursor = 0
         while cursor < totalTiles {
-            if cancelFlag.isCancelled {
+            if cancelFlag.isCancelled || !UpscalerRuntimeGuard.shared.isGPUExecutionPermitted {
                 throw CancellationError()
             }
 
@@ -710,8 +739,8 @@ public final class Waifu2xService: @unchecked Sendable {
             return cached
         }
 
-        // 限制模型缓存上限，避免连续切换模型后常驻过多权重内存
-        if mlModelCache.count >= 2 {
+        // 仅常驻当前使用的 1 个模型权重，切换模型或收到内存警告时立即释放
+        if mlModelCache.count >= 1 {
             mlModelCache.removeAll()
         }
 
