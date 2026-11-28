@@ -1,5 +1,36 @@
 import SwiftUI
 
+/// 条漫单页实测高宽比缓存（非响应式引用容器：避免每加载一张图片触发整个 ReaderView / LazyVStack 全量重绘）
+@MainActor
+private final class WebtoonAspectRatioCache {
+    private var ratios: [String: CGFloat] = [:]
+
+    nonisolated init() {}
+
+    func ratio(for pageID: String) -> CGFloat? {
+        ratios[pageID]
+    }
+
+    func record(pageID: String, imageSize: CGSize) {
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+        let aspect = imageSize.height / imageSize.width
+        guard aspect.isFinite, aspect > 0 else { return }
+        ratios[pageID] = aspect
+    }
+
+    func clear() {
+        ratios.removeAll()
+    }
+
+    /// 占位高度与真实图片渲染高度共享同一物理像素对齐公式，确保占位/实图切换 0 像素高度跳变
+    nonisolated static func alignedHeight(contentWidth: CGFloat, aspectRatio: CGFloat, scale: CGFloat) -> CGFloat {
+        let safeScale = max(scale, 1.0)
+        let pixelSize = 1.0 / safeScale
+        let rawHeight = contentWidth * aspectRatio
+        return max(pixelSize, ceil(rawHeight * safeScale) / safeScale)
+    }
+}
+
 /// 单页加载与超分状态模型
 @MainActor
 private final class ReaderPageSlot: ObservableObject {
@@ -11,11 +42,49 @@ private final class ReaderPageSlot: ObservableObject {
     @Published var upscaleProgress: String = ""
     @Published var errorMessage: String?
 
+    /// 记住当前页已实测的真实高宽比（即使离开视口释放大图内存也保留，杜绝高度坍缩回默认占位高）
+    private(set) var lastMeasuredAspectRatio: CGFloat?
+    private(set) var isActivelyLoading = false
+
+    private var lastMeasuredURL: String?
     private var currentLoadedURL: String?
     private var lastAppliedConfig: ImageUpscalerConfig?
     private var lastIsEnabled: Bool?
     private var lastAppliedFilterSignature: String?
     private var loadGeneration: UInt64 = 0
+    private var isCurrentlyVisible = false
+    private var pendingReleaseTask: Task<Void, Never>?
+
+    func markVisible() {
+        isCurrentlyVisible = true
+        pendingReleaseTask?.cancel()
+        pendingReleaseTask = nil
+    }
+
+    /// 延迟释放离开视口的大图内存：避免 LazyVStack 边缘 1px 弹性抖动触发 onDisappear <-> .task 死循环
+    func scheduleMemoryRelease(delayNanoseconds: UInt64 = 650_000_000) {
+        isCurrentlyVisible = false
+        pendingReleaseTask?.cancel()
+        pendingReleaseTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, !self.isCurrentlyVisible else { return }
+            self.pendingReleaseTask = nil
+            self.releaseMemoryPreservingState()
+        }
+    }
+
+    private func recordAspectRatioIfValid(from image: UIImage, for url: String) {
+        guard image.size.width > 0, image.size.height > 0 else { return }
+        let ratio = image.size.height / image.size.width
+        if ratio.isFinite, ratio > 0 {
+            lastMeasuredAspectRatio = ratio
+            lastMeasuredURL = url
+        }
+    }
 
     func loadAndProcess(
         page: MangaPage,
@@ -24,11 +93,19 @@ private final class ReaderPageSlot: ObservableObject {
         transitionAfterUpscaled: Bool,
         filterConfig: ImageFilterConfig = ImageFilterConfig.defaultConfig()
     ) async {
+        pendingReleaseTask?.cancel()
+        pendingReleaseTask = nil
+        isActivelyLoading = true
+        defer { isActivelyLoading = false }
         errorMessage = nil
 
         let targetFilterSig = filterConfig.cacheSignature
 
         // 若当前 Slot 被复用于不同页面或不同章节 URL，彻底重置旧图像与状态，坚决防止复用上一话旧图
+        if lastMeasuredURL != page.imageURL {
+            lastMeasuredAspectRatio = nil
+            lastMeasuredURL = nil
+        }
         if currentLoadedURL != page.imageURL {
             originalImage = nil
             processed = nil
@@ -94,6 +171,7 @@ private final class ReaderPageSlot: ObservableObject {
                     : memOriginal
                 if let fastDisplay {
                     loadGeneration &+= 1
+                    recordAspectRatioIfValid(from: memOriginal, for: page.imageURL)
                     self.originalImage = memOriginal
                     self.processed = ProcessedPageImage(
                         image: memOriginal,
@@ -125,6 +203,7 @@ private final class ReaderPageSlot: ObservableObject {
                     : memUpscaled
                 if let fastDisplay {
                     loadGeneration &+= 1
+                    recordAspectRatioIfValid(from: memOriginal, for: page.imageURL)
                     self.originalImage = memOriginal
                     self.processed = ProcessedPageImage(
                         image: memUpscaled,
@@ -174,6 +253,7 @@ private final class ReaderPageSlot: ObservableObject {
         }
 
         guard let original = rawLoadedImage else { return }
+        recordAspectRatioIfValid(from: original, for: page.imageURL)
         self.originalImage = original
 
         // 【原子化滤镜门禁】：先根据当前滤镜配置生成 1x 基准底图，绝不在屏幕上提前暴露未处理的原图
@@ -280,8 +360,10 @@ private final class ReaderPageSlot: ObservableObject {
         return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
     }
 
-    /// 释放大图内存，防止 LazyVStack 长列表堆积爆内存
+    /// 释放大图内存，防止 LazyVStack 长列表堆积爆内存（保留 lastMeasuredAspectRatio 防止占位高度回弹坍缩）
     func releaseMemoryPreservingState() {
+        pendingReleaseTask?.cancel()
+        pendingReleaseTask = nil
         loadGeneration &+= 1
         isUpscaling = false
         upscaleProgress = ""
@@ -340,6 +422,9 @@ public struct ReaderView: View {
     @State private var programmaticJumpToken = UUID()
     @State private var externalJumpNonce = 0
     @State private var cachedPageAspectRatios: [String: CGFloat] = [:]
+    @State private var webtoonAspectCache = WebtoonAspectRatioCache()
+    @State private var webtoonPageIndexDebounceTask: Task<Void, Never>? = nil
+    @State private var progressPersistDebounceTask: Task<Void, Never>? = nil
 
     public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter, initialPageIndex: Int? = nil) {
         self.manga = manga
@@ -535,6 +620,10 @@ public struct ReaderView: View {
             await loadChapterPages()
         }
         .onDisappear {
+            webtoonPageIndexDebounceTask?.cancel()
+            webtoonPageIndexDebounceTask = nil
+            progressPersistDebounceTask?.cancel()
+            progressPersistDebounceTask = nil
             preloader.cancelAll()
             thumbnailStore.cancelHoverPrefetch()
             if !pages.isEmpty {
@@ -571,14 +660,7 @@ public struct ReaderView: View {
                 refreshPageCacheSnapshot()
             }
             guard !isRestoringInitialPage, !pages.isEmpty else { return }
-            store.updateProgress(
-                manga: manga,
-                chapter: currentChapter,
-                pageIndex: newIndex,
-                totalPages: pages.count,
-                chapterIndex: currentChapterArrayIndex,
-                totalChapters: chapters.count
-            )
+            scheduleProgressPersist(pageIndex: newIndex)
             triggerAutoFollowTranslationIfNeeded(for: newIndex)
         }
         .onChange(of: preloadSettingsSignature) { _ in
@@ -760,8 +842,7 @@ public struct ReaderView: View {
         if activeLayoutMode == .verticalWebtoon && !isCompareMode {
             GeometryReader { geo in
                 let contentWidth = geo.size.width
-                let scale = UIScreen.main.scale
-                let pixelOverlap = 1.0 / scale
+                let bottomBufferHeight = max(safeAreaInsetsResolved.bottom, 24) + 28
 
                 ZoomableWebtoonContainer(
                     onSingleTap: {
@@ -791,19 +872,14 @@ public struct ReaderView: View {
                                         imageOnlyBackdrop: store.readerImageOnlyBackdrop,
                                         texturePhaseAnchor: .namedSpace("webtoon_scroll_content"),
                                         textureReferenceSize: geo.size,
-                                        cachedAspectRatio: cachedPageAspectRatios[page.id],
+                                        aspectCache: webtoonAspectCache,
                                         onStatusUpdate: { text in
                                             if page.index == currentPageIndex {
                                                 currentHUDText = text
                                             }
                                         },
                                         onImageLoaded: { img in
-                                            if img.size.width > 0, img.size.height > 0 {
-                                                let aspect = img.size.height / img.size.width
-                                                if cachedPageAspectRatios[page.id] == nil {
-                                                    cachedPageAspectRatios[page.id] = aspect
-                                                }
-                                            }
+                                            webtoonAspectCache.record(pageID: page.id, imageSize: img.size)
                                             if page.index == currentPageIndex {
                                                 capturedPreviewImage = img
                                             }
@@ -816,13 +892,17 @@ public struct ReaderView: View {
                                         }
                                     )
                                     .id(page.index)
-                                    .padding(.bottom, -pixelOverlap)
                                     .onAppear {
                                         if !isRestoringInitialPage && !isProgrammaticJumping {
-                                            currentPageIndex = page.index
+                                            scheduleWebtoonPageIndexUpdate(page.index)
                                         }
                                     }
                                 }
+
+                                // 底部安全缓冲垫：吸收触底弹性回弹，避免 ScrollView 底边直接挤压最后一张 Cell 触发重排震荡
+                                Color.clear
+                                    .frame(height: bottomBufferHeight)
+                                    .id("webtoon_bottom_spacer")
                             }
                             .coordinateSpace(name: "webtoon_scroll_content")
                             .background(WebtoonScrollIndicatorSyncView(showsIndicator: showsSystemIndicator))
@@ -1646,17 +1726,65 @@ public struct ReaderView: View {
         }
     }
 
+    /// 条漫滚动页码防抖更新：避免触底或快速滑动时多页同时 onAppear 造成 currentPageIndex 高频震荡
+    private func scheduleWebtoonPageIndexUpdate(_ index: Int) {
+        guard index != currentPageIndex else { return }
+        webtoonPageIndexDebounceTask?.cancel()
+        webtoonPageIndexDebounceTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 90_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, !isRestoringInitialPage, !isProgrammaticJumping else { return }
+            if pages.indices.contains(index), currentPageIndex != index {
+                currentPageIndex = index
+            }
+        }
+    }
+
+    /// 进度落盘防抖：避免条漫滑动期间主线程高频同步 JSON 编码写 UserDefaults 与触发 AppStore 全树重绘
+    private func scheduleProgressPersist(pageIndex: Int) {
+        let chapterSnapshot = currentChapter
+        let totalPagesSnapshot = pages.count
+        let chapterIndexSnapshot = currentChapterArrayIndex
+        let totalChaptersSnapshot = chapters.count
+
+        progressPersistDebounceTask?.cancel()
+        progressPersistDebounceTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 320_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, currentChapter.id == chapterSnapshot.id else { return }
+            store.updateProgress(
+                manga: manga,
+                chapter: chapterSnapshot,
+                pageIndex: pageIndex,
+                totalPages: totalPagesSnapshot,
+                chapterIndex: chapterIndexSnapshot,
+                totalChapters: totalChaptersSnapshot
+            )
+        }
+    }
+
     private func switchChapter(delta: Int) {
         guard let currentIndex = currentChapterArrayIndex else { return }
         let targetIndex = currentIndex + delta
         guard chapters.indices.contains(targetIndex) else { return }
         let nextChapter = chapters[targetIndex]
+        webtoonPageIndexDebounceTask?.cancel()
+        webtoonPageIndexDebounceTask = nil
+        progressPersistDebounceTask?.cancel()
+        progressPersistDebounceTask = nil
         thumbnailStore.cancelHoverPrefetch()
         isScrubbingProgress = false
         returnAnchorPageIndex = nil
         anchorJumpDestinationIndex = nil
         isProgrammaticJumping = false
         cachedPageAspectRatios.removeAll()
+        webtoonAspectCache.clear()
         store.updateProgress(
             manga: manga,
             chapter: currentChapter,
@@ -1675,6 +1803,8 @@ public struct ReaderView: View {
     /// 统一处理进度条松手跳转或回跳锚点定位，避免拖动过程高频写回页码导致滑块抽动
     private func commitProgressJump(to targetIndex: Int, originIndex: Int?, recordAnchor: Bool) {
         guard pages.indices.contains(targetIndex) else { return }
+        webtoonPageIndexDebounceTask?.cancel()
+        webtoonPageIndexDebounceTask = nil
 
         if targetIndex == returnAnchorPageIndex {
             returnAnchorPageIndex = nil
@@ -1774,12 +1904,17 @@ public struct ReaderView: View {
     }
 
     private func applyLoadedChapterPages(_ loadedPages: [MangaPage], targetIndex: Int) {
+        webtoonPageIndexDebounceTask?.cancel()
+        webtoonPageIndexDebounceTask = nil
+        progressPersistDebounceTask?.cancel()
+        progressPersistDebounceTask = nil
         self.pages = loadedPages
         self.isScrubbingProgress = false
         self.returnAnchorPageIndex = nil
         self.anchorJumpDestinationIndex = nil
         self.isProgrammaticJumping = false
         self.cachedPageAspectRatios.removeAll()
+        self.webtoonAspectCache.clear()
         let resolvedIndex = min(targetIndex, max(0, loadedPages.count - 1))
         self.currentPageIndex = resolvedIndex
         self.isRestoringInitialPage = (resolvedIndex > 0)
@@ -1868,7 +2003,7 @@ private struct VerticalMangaPageCell: View {
     var imageOnlyBackdrop: ReaderImageOnlyBackdrop = .paperTint
     var texturePhaseAnchor: TexturePhaseAnchor = .local
     var textureReferenceSize: CGSize? = nil
-    var cachedAspectRatio: CGFloat? = nil
+    let aspectCache: WebtoonAspectRatioCache
     let onStatusUpdate: (String) -> Void
     var onImageLoaded: ((UIImage) -> Void)? = nil
     var onPageReady: ((Int) -> Void)? = nil
@@ -1877,10 +2012,17 @@ private struct VerticalMangaPageCell: View {
     @ObservedObject private var translationManager = MangaTranslationManager.shared
 
     private var resolvedPlaceholderHeight: CGFloat {
-        guard contentWidth > 0, let ratio = cachedAspectRatio, ratio > 0 else {
-            return 380
+        let scale = UIScreen.main.scale
+        if contentWidth > 0, let ratio = slot.lastMeasuredAspectRatio ?? aspectCache.ratio(for: page.id), ratio > 0 {
+            return WebtoonAspectRatioCache.alignedHeight(
+                contentWidth: contentWidth,
+                aspectRatio: ratio,
+                scale: scale
+            )
         }
-        return max(160, ceil(contentWidth * ratio))
+        // 未实测页面使用更贴近漫画常规高度的占位值，减少底部多页同时挤入视口造成剧烈高度暴涨
+        guard contentWidth > 0 else { return 480 }
+        return max(480, ceil(contentWidth * 1.35))
     }
 
     private var shouldApplyImageTexture: Bool {
@@ -1897,9 +2039,13 @@ private struct VerticalMangaPageCell: View {
                 if contentWidth > 0, displayImage.size.width > 0 {
                     let scale = UIScreen.main.scale
                     let pixelSize = 1.0 / scale
-                    let rawHeight = contentWidth * (displayImage.size.height / displayImage.size.width)
-                    // 向上对齐物理像素，彻底杜绝向下取整造成的像素缺失
-                    let alignedHeight = max(pixelSize, ceil(rawHeight * scale) / scale)
+                    let aspect = displayImage.size.height / displayImage.size.width
+                    // 与占位态共享完全一致的物理像素对齐高度，杜绝占位/实图切换产生任何亚像素跳变
+                    let alignedHeight = WebtoonAspectRatioCache.alignedHeight(
+                        contentWidth: contentWidth,
+                        aspectRatio: aspect,
+                        scale: scale
+                    )
 
                     // 透明漫画兜底白底，避免透出底层静态背景造成纹理重影
                     if shouldApplyImageTexture {
@@ -2057,10 +2203,17 @@ private struct VerticalMangaPageCell: View {
             }
         }
         .task(id: "\(page.id)::\(config.reloadKey)::\(isEnabled)::\(filterConfig.cacheSignature)") {
+            slot.markVisible()
             await triggerLoad()
         }
+        .onAppear {
+            slot.markVisible()
+            if slot.displayImage == nil && !slot.isActivelyLoading && slot.errorMessage == nil {
+                Task { await triggerLoad() }
+            }
+        }
         .onDisappear {
-            slot.releaseMemoryPreservingState()
+            slot.scheduleMemoryRelease()
         }
     }
 
