@@ -12,16 +12,16 @@ enum ReaderScrubSpeed: Equatable {
     var scale: Double {
         switch self {
         case .fast:   return 1.0
-        case .medium: return 0.5
-        case .fine:   return 0.25
+        case .medium: return 0.35
+        case .fine:   return 0.12
         }
     }
 
     var label: String {
         switch self {
-        case .fast:   return "高速寻页 (1.0x) · 上拉微调"
-        case .medium: return "中速微调 (0.5x)"
-        case .fine:   return "逐页精调 (0.25x)"
+        case .fast:   return "常规寻页 · 上拉更慢精调"
+        case .medium: return "中速微调 (0.35x)"
+        case .fine:   return "逐页精调 (0.12x)"
         }
     }
 
@@ -31,6 +31,27 @@ enum ReaderScrubSpeed: Equatable {
         case .medium: return .yellow
         case .fine:   return .green
         }
+    }
+
+    /// 速度自适应阻尼：慢速寻页时自动施加平滑减速（长章节尤其明显），快速大幅拉动时顺滑恢复全速跨页
+    func dampedDeltaPages(
+        dx: CGFloat,
+        usableWidth: CGFloat,
+        maxIndex: Int,
+        isRightToLeft: Bool
+    ) -> Double {
+        guard usableWidth > 0, maxIndex > 0 else { return 0 }
+        let absDx = abs(dx)
+        let longChapterFactor: Double = maxIndex > 40
+            ? max(0.36, 1.0 - min(Double(maxIndex - 40) / 240.0, 0.64))
+            : 0.72
+        let u = Double(min(max((absDx - 1.2) / 9.5, 0.0), 1.0))
+        let smoothBlend = u * u * (3.0 - 2.0 * u)
+        let adaptiveMultiplier = longChapterFactor + (1.0 - longChapterFactor) * smoothBlend
+
+        let deltaRatio = Double(dx / usableWidth)
+        let signedRatio = isRightToLeft ? -deltaRatio : deltaRatio
+        return signedRatio * Double(maxIndex) * scale * adaptiveMultiplier
     }
 }
 
@@ -369,7 +390,7 @@ struct ReaderMicroCapsuleActiveBar: View {
     let onScrubEnd: (Int) -> Void
 
     @State private var isDragging = false
-    @State private var dragStartFraction: Double = 0
+    @State private var lastTranslationX: CGFloat = 0
     @State private var currentFraction: Double = 0
     @State private var activeSpeed: ReaderScrubSpeed = .fast
     @State private var lastHapticPageIndex: Int? = nil
@@ -493,37 +514,46 @@ struct ReaderMicroCapsuleActiveBar: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        let targetFraction: Double
                         if !isDragging {
+                            feedbackGenerator.prepare()
                             isDragging = true
-                            dragStartFraction = activeFraction
+                            lastTranslationX = value.translation.width
                             currentFraction = activeFraction
                             activeSpeed = .fast
                             lastHapticPageIndex = displayedPageIndex
+                            onSpeedChanged(.fast)
                             onScrubBegin(activeFraction)
-                        }
-
-                        // 纵向拉离检视调速档位
-                        let verticalLift = value.translation.height
-                        let nextSpeed: ReaderScrubSpeed
-                        if verticalLift < -70 {
-                            nextSpeed = .fine
-                        } else if verticalLift < -35 {
-                            nextSpeed = .medium
+                            targetFraction = activeFraction
                         } else {
-                            nextSpeed = .fast
-                        }
+                            // 纵向拉离检视调速档位
+                            let verticalLift = value.translation.height
+                            let nextSpeed: ReaderScrubSpeed
+                            if verticalLift < -72 {
+                                nextSpeed = .fine
+                            } else if verticalLift < -34 {
+                                nextSpeed = .medium
+                            } else {
+                                nextSpeed = .fast
+                            }
 
-                        if nextSpeed != activeSpeed {
-                            activeSpeed = nextSpeed
-                            onSpeedChanged(nextSpeed)
-                            feedbackGenerator.selectionChanged()
-                        }
+                            if nextSpeed != activeSpeed {
+                                activeSpeed = nextSpeed
+                                onSpeedChanged(nextSpeed)
+                                feedbackGenerator.selectionChanged()
+                            }
 
-                        let rawDelta = Double(value.translation.width / usableWidth) * Double(maxIndex)
-                        let directionalDelta = isRightToLeft ? -rawDelta : rawDelta
-                        let scaledDelta = directionalDelta * activeSpeed.scale
-                        let targetFraction = min(max(dragStartFraction + scaledDelta, 0), Double(maxIndex))
-                        currentFraction = targetFraction
+                            let dx = value.translation.width - lastTranslationX
+                            lastTranslationX = value.translation.width
+                            let deltaPages = nextSpeed.dampedDeltaPages(
+                                dx: dx,
+                                usableWidth: usableWidth,
+                                maxIndex: maxIndex,
+                                isRightToLeft: isRightToLeft
+                            )
+                            targetFraction = min(max(currentFraction + deltaPages, 0), Double(maxIndex))
+                            currentFraction = targetFraction
+                        }
                         onScrubChanged(targetFraction)
 
                         let targetIndex = min(max(Int(targetFraction.rounded()), 0), max(totalPages - 1, 0))
@@ -532,8 +562,11 @@ struct ReaderMicroCapsuleActiveBar: View {
                             feedbackGenerator.selectionChanged()
                         }
                     }
-                    .onEnded { value in
+                    .onEnded { _ in
                         isDragging = false
+                        lastTranslationX = 0
+                        activeSpeed = .fast
+                        onSpeedChanged(.fast)
                         let finalIndex = min(max(Int(currentFraction.rounded()), 0), max(totalPages - 1, 0))
                         onScrubEnd(finalIndex)
                     }
@@ -730,9 +763,12 @@ struct ReaderScrubberTrackBar: View {
 
                             let dx = value.translation.width - lastTranslationX
                             lastTranslationX = value.translation.width
-                            let deltaRatio = dx / usableWidth
-                            let signedRatio = isRightToLeft ? -deltaRatio : deltaRatio
-                            let deltaPages = Double(signedRatio) * Double(maxIndex) * nextSpeed.scale
+                            let deltaPages = nextSpeed.dampedDeltaPages(
+                                dx: dx,
+                                usableWidth: usableWidth,
+                                maxIndex: maxIndex,
+                                isRightToLeft: isRightToLeft
+                            )
                             nextFraction = min(max(trackedFraction + deltaPages, 0), Double(maxIndex))
                             trackedFraction = nextFraction
                         }
@@ -782,6 +818,7 @@ private struct ReaderForeEdgeActiveBar: View {
 
     @State private var isDragging = false
     @State private var trackedFraction: Double = 0
+    @State private var lastTranslationX: CGFloat = 0
     @State private var lastHapticPageIndex: Int? = nil
     private let feedbackGenerator = UISelectionFeedbackGenerator()
     private let leafCount = 34
@@ -847,17 +884,30 @@ private struct ReaderForeEdgeActiveBar: View {
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .local)
                         .onChanged { value in
-                            let clamped = min(max(value.location.x / width, 0), 1)
-                            let logical = isRightToLeft ? (1.0 - clamped) : clamped
-                            let nextFraction = min(max(Double(logical) * Double(maxIndex), 0), Double(maxIndex))
-
+                            let nextFraction: Double
                             if !isDragging {
+                                let clamped = min(max(value.location.x / width, 0), 1)
+                                let logical = isRightToLeft ? (1.0 - clamped) : clamped
+                                let tappedFraction = min(max(Double(logical) * Double(maxIndex), 0), Double(maxIndex))
                                 feedbackGenerator.prepare()
                                 lastHapticPageIndex = currentPageIndex
                                 isDragging = true
-                                trackedFraction = nextFraction
+                                lastTranslationX = value.translation.width
+                                trackedFraction = tappedFraction
+                                nextFraction = tappedFraction
                                 onScrubBegin(nextFraction)
                             } else {
+                                let liftDistance = -value.translation.height
+                                let speed: ReaderScrubSpeed = liftDistance > 84 ? .fine : (liftDistance > 38 ? .medium : .fast)
+                                let dx = value.translation.width - lastTranslationX
+                                lastTranslationX = value.translation.width
+                                let deltaPages = speed.dampedDeltaPages(
+                                    dx: dx,
+                                    usableWidth: width,
+                                    maxIndex: maxIndex,
+                                    isRightToLeft: isRightToLeft
+                                )
+                                nextFraction = min(max(trackedFraction + deltaPages, 0), Double(maxIndex))
                                 trackedFraction = nextFraction
                             }
 
@@ -872,6 +922,7 @@ private struct ReaderForeEdgeActiveBar: View {
                             let finalFraction = isDragging ? trackedFraction : Double(currentPageIndex)
                             let finalIndex = min(max(Int(finalFraction.rounded()), 0), max(totalPages - 1, 0))
                             isDragging = false
+                            lastTranslationX = 0
                             lastHapticPageIndex = nil
                             onScrubEnd(finalIndex)
                         }
@@ -913,7 +964,7 @@ private struct ReaderVernierDialActiveBar: View {
     @State private var trackedFraction: Double = 0
     @State private var lastHapticPageIndex: Int? = nil
     private let feedbackGenerator = UISelectionFeedbackGenerator()
-    private let tickSpacing: CGFloat = 13.0
+    private let tickSpacing: CGFloat = 22.0
 
     private var maxIndex: Int { max(totalPages - 1, 1) }
 
@@ -1055,6 +1106,7 @@ private struct ReaderHeatmapActiveBar: View {
 
     @State private var isDragging = false
     @State private var trackedFraction: Double = 0
+    @State private var lastTranslationX: CGFloat = 0
     @State private var lastHapticPageIndex: Int? = nil
     private let feedbackGenerator = UISelectionFeedbackGenerator()
 
@@ -1146,18 +1198,31 @@ private struct ReaderHeatmapActiveBar: View {
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .local)
                             .onChanged { value in
-                                let clampedX = min(max(value.location.x - thumbRadius, 0), usableWidth)
-                                let vRatio = clampedX / usableWidth
-                                let lRatio = isRightToLeft ? (1.0 - vRatio) : vRatio
-                                let next = min(max(Double(lRatio) * Double(maxIndex), 0), Double(maxIndex))
-
+                                let next: Double
                                 if !isDragging {
+                                    let clampedX = min(max(value.location.x - thumbRadius, 0), usableWidth)
+                                    let vRatio = clampedX / usableWidth
+                                    let lRatio = isRightToLeft ? (1.0 - vRatio) : vRatio
+                                    let tapped = min(max(Double(lRatio) * Double(maxIndex), 0), Double(maxIndex))
                                     feedbackGenerator.prepare()
                                     lastHapticPageIndex = currentPageIndex
                                     isDragging = true
-                                    trackedFraction = next
+                                    lastTranslationX = value.translation.width
+                                    trackedFraction = tapped
+                                    next = tapped
                                     onScrubBegin(next)
                                 } else {
+                                    let liftDistance = -value.translation.height
+                                    let speed: ReaderScrubSpeed = liftDistance > 84 ? .fine : (liftDistance > 38 ? .medium : .fast)
+                                    let dx = value.translation.width - lastTranslationX
+                                    lastTranslationX = value.translation.width
+                                    let deltaPages = speed.dampedDeltaPages(
+                                        dx: dx,
+                                        usableWidth: usableWidth,
+                                        maxIndex: maxIndex,
+                                        isRightToLeft: isRightToLeft
+                                    )
+                                    next = min(max(trackedFraction + deltaPages, 0), Double(maxIndex))
                                     trackedFraction = next
                                 }
 
@@ -1172,6 +1237,7 @@ private struct ReaderHeatmapActiveBar: View {
                                 let finalFraction = isDragging ? trackedFraction : Double(currentPageIndex)
                                 let finalIndex = min(max(Int(finalFraction.rounded()), 0), max(totalPages - 1, 0))
                                 isDragging = false
+                                lastTranslationX = 0
                                 lastHapticPageIndex = nil
                                 onScrubEnd(finalIndex)
                             }
@@ -1865,11 +1931,11 @@ struct ReaderScrubberPreviewOverlay: View {
                     let visualDelta = isRightToLeft ? -delta : delta
                     let absDelta = abs(visualDelta)
 
-                    let xOffset = visualDelta * (cardWidth * 0.86)
-                    let yOffset = pow(absDelta, 1.65) * 14.0
-                    let angle = Angle.degrees(Double(visualDelta) * 5.2)
-                    let scale = max(0.84, 1.07 - absDelta * 0.115)
-                    let cardOpacity = max(0.0, 1.0 - max(0, absDelta - 2.65) * 0.65)
+                    let xOffset = visualDelta * (cardWidth * 0.70)
+                    let yOffset = pow(absDelta, 1.60) * 11.0
+                    let angle = Angle.degrees(Double(visualDelta) * 4.0)
+                    let scale = max(0.84, 1.06 - absDelta * 0.105)
+                    let cardOpacity = max(0.0, 1.0 - max(0, absDelta - 2.85) * 0.65)
                     let isSelected = (idx == targetIndex)
 
                     let thumb = thumbnailStore.cachedThumbnail(for: page.imageURL)
@@ -1896,6 +1962,7 @@ struct ReaderScrubberPreviewOverlay: View {
         }
         .frame(width: containerWidth, height: cardHeight + 36)
         .clipped()
+        .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.90), value: scrubFraction)
     }
 
     @ViewBuilder

@@ -1883,22 +1883,15 @@ public struct PaperTextureOverlayView: View {
                     .allowsHitTesting(false)
                 } else if texture.usesOriginalAspectFillOverlay {
                     // 条漫无限长滚动模式：
-                    // 1. 使用按单页全屏 AspectFill 原图比例无损裁切生成的 3x Retina 高清无缝切片，颗粒大小与单页 1:1 严格一致；
-                    // 2. 双指/双击放大条漫时，通过零拷贝调整 UIImage.scale 抵消外层 scaleEffect，使屏幕物理颗粒永不放大变粗。
+                    // 1. 使用按单页全屏 AspectFill 原图比例无损裁切生成的 3x Retina 高清无缝切片，常态下颗粒大小与单页 1:1 严格一致；
+                    // 2. 双指/双击放大条漫时保持固定平铺周期与相位，颗粒紧贴纸面随画面自然同步放大，绝不漂移或游动。
                     let refSize = validReferenceSize() ?? fallbackScreenSize()
-                    let baseTile = ReaderTextureCache.shared.highResWebtoonSeamlessTileImage(
+                    let tileImg = ReaderTextureCache.shared.highResWebtoonSeamlessTileImage(
                         for: texture,
                         referenceSize: refSize
                     ) ?? img
-                    let zoom = max(readerZoomScale, 1.0)
-                    let effectiveTile: UIImage = {
-                        if zoom > 1.01, let cg = baseTile.cgImage {
-                            return UIImage(cgImage: cg, scale: baseTile.scale * zoom, orientation: .up)
-                        }
-                        return baseTile
-                    }()
-                    let tileW = max(effectiveTile.size.width, 32.0)
-                    let tileH = max(effectiveTile.size.height, 32.0)
+                    let tileW = max(tileImg.size.width, 64.0)
+                    let tileH = max(tileImg.size.height, 64.0)
 
                     GeometryReader { proxy in
                         let viewW = proxy.size.width
@@ -1911,7 +1904,7 @@ public struct PaperTextureOverlayView: View {
                             Color.clear
                                 .frame(width: viewW, height: viewH)
                                 .overlay(alignment: .topLeading) {
-                                    Image(uiImage: effectiveTile)
+                                    Image(uiImage: tileImg)
                                         .interpolation(.medium)
                                         .resizable(resizingMode: .tile)
                                         .frame(width: viewW + tileW * 2.0, height: viewH + tileH * 2.0)
