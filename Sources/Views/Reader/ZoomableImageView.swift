@@ -267,22 +267,7 @@ public struct ZoomableImageView: UIViewRepresentable {
                     imageView.textureClipContainer.isHidden = false
                     let currentZoom = scrollView?.zoomScale ?? 1.0
 
-                    if texture.usesOriginalClassicImage {
-                        imageView.neutralTextureOverlayView.isHidden = true
-                        imageView.neutralTextureOverlayView.image = nil
-                        imageView.neutralTextureOverlayView.backgroundColor = .clear
-
-                        imageView.textureOverlayView.isHidden = false
-                        imageView.textureOverlayView.backgroundColor = .clear
-                        imageView.textureOverlayView.contentMode = .scaleAspectFill
-                        imageView.textureOverlayView.layer.magnificationFilter = .linear
-                        imageView.textureOverlayView.layer.minificationFilter = .linear
-                        imageView.textureOverlayView.image = texImg
-                        imageView.textureOverlayView.alpha = 1.0
-
-                        imageView.highlightOverlayView.image = nil
-                        updateZoomMipmapBlend(zoomScale: currentZoom)
-                    } else if texture.usesFineTilePattern {
+                    if texture.usesFineTilePattern {
                         // 程序化双层细节纸纹 (Mipmap Level 0: 128pt + Level 1: 64pt)：随缩放丝滑交叉淡入，2x 放大还原 1:1 物理像素细腻颗粒
                         let tiled = ReaderTextureCache.shared.tiledTextureImage(for: texture, grainDensity: grainDensity) ?? texImg
 

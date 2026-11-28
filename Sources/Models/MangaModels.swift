@@ -1526,7 +1526,7 @@ public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable
 /// 真实纸张与材质纹理类型
 public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
     case classic        = "Texture_0_classic_paper"       // 经典纸张
-    case classicWhite   = "Texture_0_classic_white"       // 原版经典白纸（直接使用 Texture_0 原图）
+    case classicWhite   = "Texture_0_classic_white"       // 中性白色高密颗粒
     case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸
     case whiteWall      = "Texture_2_white_wall"          // 白墙灰泥
     case grungePaper    = "Texture_3_grunge_paper"        // 草稿纸
@@ -1537,11 +1537,11 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
 
     /// 是否采用程序化高密 256pt 无缝浮雕微粒平铺（经典纸张：复刻 MangaPrism 立体微粒纸感引擎）
     public var usesFineTilePattern: Bool {
-        self == .classic
+        self == .classic || self == .classicWhite
     }
 
-    /// 直接显示原始 Texture_0 位图，走单图 AspectFill 路径，不进行程序化颗粒生成
-    public var usesOriginalClassicImage: Bool {
+    /// 从经典纸张中提取无色高频纤维，生成独立的白色微粒层
+    public var usesClassicWhiteGrain: Bool {
         self == .classicWhite
     }
 

@@ -135,16 +135,7 @@ public struct ReaderBackgroundPickerSheet: View {
                         for: item,
                         grainDensity: store.readerClassicGrainDensity
                     ) {
-                        if item.usesOriginalClassicImage {
-                            Image(uiImage: img)
-                                .resizable()
-                                .interpolation(.high)
-                                .scaledToFill()
-                                .frame(minWidth: 0, maxWidth: .infinity)
-                                .frame(height: 72)
-                                .clipped()
-                                .blendMode(.multiply)
-                        } else if item.usesFineTilePattern {
+                        if item.usesFineTilePattern {
                             Image(uiImage: img)
                                 .interpolation(.none)
                                 .resizable(resizingMode: .tile)
