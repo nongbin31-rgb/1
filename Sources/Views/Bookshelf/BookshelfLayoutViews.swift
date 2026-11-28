@@ -48,6 +48,7 @@ struct BookshelfViewCallbacks {
     let onMarkCompleted: (Manga) -> Void
     let onResetProgress: (Manga) -> Void
     let onRemoveSingle: (Manga) -> Void
+    let onShowHud: (String) -> Void
 }
 
 /// 书架多样式集合容器（4 套原生高阶书架视图，全量使用 iOS 15+ 通用 SwiftUI API）
@@ -172,9 +173,9 @@ private struct BookshelfFocusShelfView: View {
     /// 聚焦续读下方书架每行列数（默认 4 本，支持双指捏合在 2~5 本间无缝切换并持久化记忆）
     @AppStorage("bookshelf_focus_grid_columns_v2") private var storedCompactColumns: Int = 4
     @AppStorage("bookshelf_focus_grid_columns_regular_v2") private var storedRegularColumns: Int = 5
-    @State private var pinchAnchorScale: CGFloat = 1.0
-    @State private var zoomHudText: String?
-    @State private var zoomHudTask: Task<Void, Never>?
+    @State private var isPinchActive: Bool = false
+    @State private var pinchVisualScale: CGFloat = 1.0
+    @State private var pinchReleaseGuardTask: Task<Void, Never>?
 
     private var minColumnCount: Int {
         horizontalSizeClass == .regular ? 3 : 2
@@ -249,23 +250,7 @@ private struct BookshelfFocusShelfView: View {
             }
         }
         BookshelfHaptics.light()
-        showZoomHud("每行 \(clamped) 本")
-    }
-
-    private func showZoomHud(_ text: String) {
-        zoomHudTask?.cancel()
-        withAnimation(.easeOut(duration: 0.16)) {
-            zoomHudText = text
-        }
-        zoomHudTask = Task {
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    zoomHudText = nil
-                }
-            }
-        }
+        callbacks.onShowHud("每行 \(clamped) 本")
     }
 
     private func count(for filter: BookshelfFocusFilter) -> Int {
@@ -360,74 +345,273 @@ private struct BookshelfFocusShelfView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 44)
             } else {
-                ZStack(alignment: .top) {
-                    LazyVGrid(columns: gridColumns, spacing: gridRowSpacing) {
-                        ForEach(displayedBooks, id: \.compositeKey) { manga in
-                            let progress = store.progress(for: manga)
-                            let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
-                            let isSelected = selectedKeys.contains(manga.compositeKey)
+                LazyVGrid(columns: gridColumns, spacing: gridRowSpacing) {
+                    ForEach(displayedBooks, id: \.compositeKey) { manga in
+                        let progress = store.progress(for: manga)
+                        let chapterBadge = store.resolvedBookshelfChapterBadge(for: manga)
+                        let isSelected = selectedKeys.contains(manga.compositeKey)
 
-                            BookshelfItemInteractiveWrapper(
+                        BookshelfItemInteractiveWrapper(
+                            manga: manga,
+                            progress: progress,
+                            isEditing: isEditing,
+                            callbacks: callbacks
+                        ) {
+                            BookshelfFocusGridCard(
                                 manga: manga,
                                 progress: progress,
+                                chapterBadge: chapterBadge,
+                                columnCount: effectiveColumnCount,
                                 isEditing: isEditing,
-                                callbacks: callbacks
-                            ) {
-                                BookshelfFocusGridCard(
-                                    manga: manga,
-                                    progress: progress,
-                                    chapterBadge: chapterBadge,
-                                    columnCount: effectiveColumnCount,
-                                    isEditing: isEditing,
-                                    isSelected: isSelected
-                                )
-                            }
+                                isSelected: isSelected
+                            )
                         }
                     }
-                    .padding(.horizontal, gridHorizontalPadding)
-
-                    if let zoomHudText {
-                        Text(zoomHudText)
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.76), in: Capsule())
-                            .padding(.top, 6)
-                            .allowsHitTesting(false)
-                            .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                    }
                 }
+                .padding(.horizontal, gridHorizontalPadding)
+                .scaleEffect(pinchVisualScale, anchor: .top)
             }
         }
+        .allowsHitTesting(!isPinchActive)
         .padding(.top, 10)
         .padding(.bottom, 16)
-        .simultaneousGesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    guard value.isFinite, value > 0 else { return }
-                    let ratio = value / max(pinchAnchorScale, 0.01)
-                    if ratio <= 0.80 {
-                        // 双指收拢：缩小封面，每行显示更多本（最多 5 本 / iPad 7 本）
-                        pinchAnchorScale = value
-                        updateColumnCount(effectiveColumnCount + 1)
-                    } else if ratio >= 1.24 {
-                        // 双指张开：放大封面，每行显示更少本（最少 2 本 / iPad 3 本）
-                        pinchAnchorScale = value
-                        updateColumnCount(effectiveColumnCount - 1)
+        .background {
+            #if canImport(UIKit)
+            BookshelfPinchZoomInstaller(
+                isEnabled: !displayedBooks.isEmpty,
+                onPinchBegan: {
+                    pinchReleaseGuardTask?.cancel()
+                    pinchReleaseGuardTask = nil
+                    isPinchActive = true
+                },
+                onVisualScaleChanged: { visualScale in
+                    pinchVisualScale = visualScale
+                },
+                onStepColumns: { delta in
+                    updateColumnCount(effectiveColumnCount + delta)
+                },
+                onPinchEnded: {
+                    withAnimation(.spring(response: 0.24, dampingFraction: 0.85)) {
+                        pinchVisualScale = 1.0
+                    }
+                    pinchReleaseGuardTask?.cancel()
+                    pinchReleaseGuardTask = Task {
+                        try? await Task.sleep(nanoseconds: 140_000_000)
+                        guard !Task.isCancelled else { return }
+                        await MainActor.run {
+                            isPinchActive = false
+                        }
                     }
                 }
-                .onEnded { _ in
-                    pinchAnchorScale = 1.0
-                }
-        )
+            )
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            #endif
+        }
         .onDisappear {
-            zoomHudTask?.cancel()
-            zoomHudTask = nil
+            pinchReleaseGuardTask?.cancel()
+            pinchReleaseGuardTask = nil
+            isPinchActive = false
+            pinchVisualScale = 1.0
         }
     }
 }
+
+#if canImport(UIKit)
+/// 基于 UIKit 原生 UIPinchGestureRecognizer 挂载至宿主 UIScrollView 的书架双指缩放控制器：
+/// - 两指先后落指也能 100% 稳定识别并立即打断底层 ScrollView 拖拽，解决 SwiftUI MagnificationGesture 难触发问题；
+/// - cancelsTouchesInView + 结束短暂保护期彻底杜绝双指松手误触点进漫画详情页；
+/// - 提供跟手微缩放视觉阻尼与 140ms 步进防抖，手感对齐系统照片 App。
+private struct BookshelfPinchZoomInstaller: UIViewRepresentable {
+    let isEnabled: Bool
+    let onPinchBegan: () -> Void
+    let onVisualScaleChanged: (CGFloat) -> Void
+    let onStepColumns: (Int) -> Void
+    let onPinchEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            isEnabled: isEnabled,
+            onPinchBegan: onPinchBegan,
+            onVisualScaleChanged: onVisualScaleChanged,
+            onStepColumns: onStepColumns,
+            onPinchEnded: onPinchEnded
+        )
+    }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        view.onMovedToWindow = { [weak coordinator = context.coordinator, weak view] in
+            guard let coordinator, let view else { return }
+            coordinator.attachIfNeeded(from: view)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: AnchorView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onPinchBegan = onPinchBegan
+        context.coordinator.onVisualScaleChanged = onVisualScaleChanged
+        context.coordinator.onStepColumns = onStepColumns
+        context.coordinator.onPinchEnded = onPinchEnded
+        context.coordinator.attachIfNeeded(from: uiView)
+        context.coordinator.syncEnabledState()
+    }
+
+    static func dismantleUIView(_ uiView: AnchorView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    final class AnchorView: UIView {
+        var onMovedToWindow: (() -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil {
+                onMovedToWindow?()
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var isEnabled: Bool
+        var onPinchBegan: () -> Void
+        var onVisualScaleChanged: (CGFloat) -> Void
+        var onStepColumns: (Int) -> Void
+        var onPinchEnded: () -> Void
+
+        private weak var attachedScrollView: UIScrollView?
+        private var pinchRecognizer: UIPinchGestureRecognizer?
+        private var isPinching: Bool = false
+        private var anchorScale: CGFloat = 1.0
+        private var lastStepTimestamp: CFAbsoluteTime = 0
+
+        /// 步进灵敏度与防跳档间隔
+        private let pinchInThreshold: CGFloat = 0.85   // 双指收拢 15% -> 列数 +1（更紧凑）
+        private let pinchOutThreshold: CGFloat = 1.17  // 双指张开 17% -> 列数 -1（更大封面）
+        private let minStepInterval: CFAbsoluteTime = 0.15
+
+        init(
+            isEnabled: Bool,
+            onPinchBegan: @escaping () -> Void,
+            onVisualScaleChanged: @escaping (CGFloat) -> Void,
+            onStepColumns: @escaping (Int) -> Void,
+            onPinchEnded: @escaping () -> Void
+        ) {
+            self.isEnabled = isEnabled
+            self.onPinchBegan = onPinchBegan
+            self.onVisualScaleChanged = onVisualScaleChanged
+            self.onStepColumns = onStepColumns
+            self.onPinchEnded = onPinchEnded
+            super.init()
+        }
+
+        func attachIfNeeded(from anchorView: UIView) {
+            guard let scrollView = findEnclosingScrollView(from: anchorView) else { return }
+            if attachedScrollView === scrollView, pinchRecognizer != nil {
+                syncEnabledState()
+                return
+            }
+
+            detach()
+
+            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+            pinch.delegate = self
+            pinch.cancelsTouchesInView = true
+            scrollView.addGestureRecognizer(pinch)
+
+            self.attachedScrollView = scrollView
+            self.pinchRecognizer = pinch
+            syncEnabledState()
+        }
+
+        func syncEnabledState() {
+            pinchRecognizer?.isEnabled = isEnabled
+        }
+
+        func detach() {
+            if let sv = attachedScrollView, let pinch = pinchRecognizer {
+                sv.removeGestureRecognizer(pinch)
+            }
+            pinchRecognizer = nil
+            attachedScrollView = nil
+        }
+
+        private func findEnclosingScrollView(from view: UIView) -> UIScrollView? {
+            var current: UIView? = view.superview
+            while let candidate = current {
+                if let sv = candidate as? UIScrollView {
+                    return sv
+                }
+                current = candidate.superview
+            }
+            return nil
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            // 仅在尚未进入捏合态时允许与 ScrollView pan 共存（吸收双指先后落指时间差）；
+            // 一旦进入 .began 立即独占，彻底杜绝边捏合边乱滚
+            if !isPinching, let sv = attachedScrollView, otherGestureRecognizer === sv.panGestureRecognizer {
+                return true
+            }
+            return false
+        }
+
+        @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                isPinching = true
+                anchorScale = max(gesture.scale, 0.01)
+                lastStepTimestamp = 0
+                // 立即打断已经开始的纵向拖拽，锁定页面位置不乱蹿
+                if let pan = attachedScrollView?.panGestureRecognizer, pan.isEnabled {
+                    pan.isEnabled = false
+                    pan.isEnabled = true
+                }
+                onPinchBegan()
+
+            case .changed:
+                // 仅在双指都贴屏时响应，松开其中一根手指立刻停止采样防止末尾甩动误触发
+                guard gesture.numberOfTouches >= 2 else { return }
+                let scale = max(gesture.scale, 0.01)
+                let ratio = scale / max(anchorScale, 0.01)
+
+                // 轻柔视觉阻尼反馈（0.92 ~ 1.09），让用户第一帧即明确感知正在缩放
+                let dampedVisual = min(max(1.0 + (ratio - 1.0) * 0.30, 0.92), 1.09)
+                onVisualScaleChanged(dampedVisual)
+
+                let now = CFAbsoluteTimeGetCurrent()
+                if now - lastStepTimestamp >= minStepInterval {
+                    if ratio <= pinchInThreshold {
+                        anchorScale = scale
+                        lastStepTimestamp = now
+                        onVisualScaleChanged(1.0)
+                        onStepColumns(1)
+                    } else if ratio >= pinchOutThreshold {
+                        anchorScale = scale
+                        lastStepTimestamp = now
+                        onVisualScaleChanged(1.0)
+                        onStepColumns(-1)
+                    }
+                }
+
+            case .ended, .cancelled, .failed:
+                isPinching = false
+                anchorScale = 1.0
+                onPinchEnded()
+
+            default:
+                break
+            }
+        }
+    }
+}
+#endif
 
 /// 顶部「继续阅读」焦点大卡
 private struct BookshelfHeroResumeCard: View {
@@ -1221,6 +1405,15 @@ private enum BookshelfTimelineBucket: String, CaseIterable, Identifiable {
         case .unread: return "收藏待读"
         }
     }
+
+    var dotColor: Color {
+        switch self {
+        case .today: return .accentColor
+        case .thisWeek: return .accentColor.opacity(0.72)
+        case .earlierRead: return .secondary.opacity(0.75)
+        case .unread: return .secondary.opacity(0.48)
+        }
+    }
 }
 
 private struct BookshelfTimelineSection: Identifiable {
@@ -1301,23 +1494,29 @@ private struct BookshelfReadingTimelineView: View {
                     .padding(.bottom, 14)
                 } header: {
                     HStack {
-                        Text(section.bucket.title)
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(section.items.count) 部")
-                            .font(.system(size: 11.5, weight: .medium))
-                            .monospacedDigit()
-                            .foregroundStyle(Color.secondary.opacity(0.8))
+                        HStack(spacing: 7) {
+                            Circle()
+                                .fill(section.bucket.dotColor)
+                                .frame(width: 6.5, height: 6.5)
+
+                            Text(section.bucket.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+
+                            Text("\(section.items.count) 部")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .liquidGlassCapsule()
+
+                        Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial)
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(Color(uiColor: .separator).opacity(0.35))
-                            .frame(height: 0.5)
-                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
                 }
             }
         }

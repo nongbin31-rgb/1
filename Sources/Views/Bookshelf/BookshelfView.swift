@@ -165,7 +165,10 @@ public struct BookshelfView: View {
             },
             onMarkCompleted: markSingleCompleted(_:),
             onResetProgress: resetSingleProgress(_:),
-            onRemoveSingle: removeSingle(_:)
+            onRemoveSingle: removeSingle(_:),
+            onShowHud: { message in
+                showHud(message, duration: 1.2)
+            }
         )
     }
 
@@ -205,7 +208,7 @@ public struct BookshelfView: View {
                                     store: store,
                                     callbacks: callbacks
                                 )
-                                .padding(.bottom, isEditing ? 78 : 8)
+                                .padding(.bottom, isEditing ? 88 : 28)
                             }
                             .refreshable {
                                 await checkBookshelfUpdates(forceAll: false, silent: false)
@@ -329,6 +332,9 @@ public struct BookshelfView: View {
             }
             .onDisappear {
                 hudDismissTask?.cancel()
+                hudDismissTask = nil
+                hudMessage = nil
+                hudShowsUndo = false
                 quickLaunchTask?.cancel()
                 backgroundSyncTask?.cancel()
                 quickLaunchingMangaKey = nil
