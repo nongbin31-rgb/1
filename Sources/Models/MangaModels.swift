@@ -1526,7 +1526,7 @@ public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable
 /// 真实纸张与材质纹理类型
 public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
     case classic        = "Texture_0_classic_paper"       // 经典纸张
-    case classicWhite   = "Texture_0_classic_white"       // 中性白色高密颗粒
+    case classicWhite   = "classic_white_grain"           // 独立中性白纸颗粒
     case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸
     case whiteWall      = "Texture_2_white_wall"          // 白墙灰泥
     case grungePaper    = "Texture_3_grunge_paper"        // 草稿纸
@@ -1540,7 +1540,7 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         self == .classic || self == .classicWhite
     }
 
-    /// 从经典纸张中提取无色高频纤维，生成独立的白色微粒层
+    /// 独立的程序化中性白纸颗粒，不复用经典纹理
     public var usesClassicWhiteGrain: Bool {
         self == .classicWhite
     }

@@ -24,7 +24,6 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private let patternColorCache = NSCache<NSString, UIColor>()
     private let ambientBlurCache = NSCache<NSString, UIImage>()
     private var classicPlasterBaseImage: UIImage?
-    private var classicWhiteSourceImage: UIImage?
     private let loadLock = NSLock()
     private let queue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.texture_cache", qos: .userInitiated)
     private let srgbContext: CIContext = {
@@ -38,6 +37,8 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 经典程序化浮雕纸纹的 100% 最大颗粒数量基准（与 MangaPrism 1:1 对齐）
     public static let maxClassicGrainCount: Int = 23_500
+    /// 经典白采用更细、更密的独立中性白颗粒
+    public static let maxClassicWhiteGrainCount: Int = 31_000
 
     private init() {
         cache.countLimit = 40
@@ -69,7 +70,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     public static func macroTileLogicalSize(for texture: ReaderTextureType) -> CGFloat {
         switch texture {
         case .classic:      return 128.0
-        case .classicWhite: return 280.0
+        case .classicWhite: return 128.0
         case .brownPaper:   return 220.0
         case .whiteWall:    return 260.0
         case .grungePaper:  return 240.0
@@ -150,20 +151,11 @@ public final class ReaderTextureCache: @unchecked Sendable {
             let pct = Self.quantizedGrainDensityPercent(grainDensity)
             let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
             if type.usesClassicWhiteGrain {
-                let source = classicWhiteSourceImage ?? {
-                    let image = loadTextureFromBundle(named: "Texture_0_classic_paper")
-                        ?? loadTextureFromBundle(named: "Texture_0")
-                    self.classicWhiteSourceImage = image
-                    return image
-                }()
-                loaded = source.flatMap {
-                    Self.buildClassicWhiteGrainTile(
-                        from: $0,
-                        densityPercent: pct,
-                        screenScale: screenScale,
-                        tileSize: 128.0
-                    )
-                }
+                loaded = Self.buildProceduralClassicWhiteGrainTile(
+                    densityPercent: pct,
+                    screenScale: screenScale,
+                    tileSize: 128.0
+                )
             } else {
                 let plasterBase = classicPlasterBaseImage ?? {
                     let base = Self.buildClassicPlasterBaseTile(screenScale: screenScale)
@@ -301,20 +293,12 @@ public final class ReaderTextureCache: @unchecked Sendable {
             let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
             let generated: UIImage?
             if type.usesClassicWhiteGrain {
-                let source = classicWhiteSourceImage ?? {
-                    let image = loadTextureFromBundle(named: "Texture_0_classic_paper")
-                        ?? loadTextureFromBundle(named: "Texture_0")
-                    self.classicWhiteSourceImage = image
-                    return image
-                }()
-                generated = source.flatMap {
-                    Self.buildClassicWhiteGrainTile(
-                        from: $0,
-                        densityPercent: pct,
-                        screenScale: screenScale,
-                        tileSize: 64.0
-                    )
-                }
+                generated = Self.buildProceduralClassicWhiteGrainTile(
+                    densityPercent: pct,
+                    screenScale: screenScale,
+                    tileSize: 64.0,
+                    seed: 20261120
+                )
             } else {
                 generated = Self.buildProceduralClassicStuccoTile(
                     densityPercent: pct,
@@ -649,49 +633,50 @@ public final class ReaderTextureCache: @unchecked Sendable {
         }
     }
 
-    /// 经典白：从经典纸张采样高频纤维，但去除全部米黄色与低频纸张底色，
-    /// 只保留中性白场微颗粒。密度滑块控制颗粒与白底的灰阶落差。
-    private static func buildClassicWhiteGrainTile(
-        from source: UIImage,
+    /// 经典白专属：独立生成中性白纸微颗粒，不复用 Texture_0 或经典程序化纸浆斑块。
+    /// 白底保持纯白，颗粒使用极浅中性灰，避免产生米黄色和明显黑孔。
+    private static func buildProceduralClassicWhiteGrainTile(
         densityPercent: Int,
         screenScale: CGFloat,
-        tileSize: CGFloat
-    ) -> UIImage? {
-        let highPass = Self.buildBitmapFineDetailTile(
-            from: source,
-            targetLogicalSize: tileSize,
-            screenScale: screenScale
+        tileSize: CGFloat,
+        seed: UInt64 = 20261119
+    ) -> UIImage {
+        let scaleFactor = tileSize / 256.0
+        let grainCount = max(
+            1,
+            Int((Double(maxClassicWhiteGrainCount) * Double(densityPercent) / 100.0).rounded())
         )
-        guard let ciImage = CIImage(image: highPass),
-              let matrix = CIFilter(name: "CIColorMatrix") else {
-            return highPass
-        }
-
-        let density = CGFloat(min(max(Double(densityPercent) / 100.0, 0.10), 1.0))
-        // 白色纸基保持 1.0 不变，只压缩颗粒暗部；不会把白色重新染成经典米黄。
-        let grainScale = 0.22 + 0.78 * density
-        let whiteBias = 1.0 - grainScale
-        matrix.setValue(ciImage, forKey: kCIInputImageKey)
-        matrix.setValue(CIVector(x: grainScale, y: 0, z: 0, w: 0), forKey: "inputRVector")
-        matrix.setValue(CIVector(x: 0, y: grainScale, z: 0, w: 0), forKey: "inputGVector")
-        matrix.setValue(CIVector(x: 0, y: 0, z: grainScale, w: 0), forKey: "inputBVector")
-        matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
-        matrix.setValue(
-            CIVector(x: whiteBias, y: whiteBias, z: whiteBias, w: 0),
-            forKey: "inputBiasVector"
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = screenScale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: tileSize, height: tileSize),
+            format: format
         )
 
-        let sRGB = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let context = CIContext(options: [
-            .workingColorSpace: sRGB,
-            .outputColorSpace: sRGB,
-            .useSoftwareRenderer: false
-        ])
-        guard let output = matrix.outputImage,
-              let cgImage = context.createCGImage(output, from: output.extent) else {
-            return highPass
+        return renderer.image { context in
+            let cg = context.cgContext
+            cg.clear(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
+            cg.setAllowsAntialiasing(false)
+            cg.setShouldAntialias(false)
+            var rng = SplitMix64RNG(seed: seed)
+
+            for _ in 0..<grainCount {
+                let x = CGFloat(rng.nextUnitDouble()) * tileSize
+                let y = CGFloat(rng.nextUnitDouble()) * tileSize
+                let diameter = (
+                    rng.nextUnitDouble() < 0.10
+                        ? 0.95 + CGFloat(rng.nextUnitDouble()) * 0.80
+                        : 0.34 + CGFloat(rng.nextUnitDouble()) * 0.58
+                ) * scaleFactor
+
+                // 只使用接近白色的中性灰，不做炭灰纸孔和暖黄色底纹。
+                let gray = 0.90 + CGFloat(rng.nextUnitDouble()) * 0.08
+                let alpha = 0.045 + CGFloat(rng.nextUnitDouble()) * 0.085
+                cg.setFillColor(red: gray, green: gray, blue: gray, alpha: alpha)
+                drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter, tileSize: tileSize)
+            }
         }
-        return UIImage(cgImage: cgImage, scale: screenScale, orientation: .up)
     }
 
     private static func drawSeamlessDot(
@@ -1199,7 +1184,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private func shortKey(for type: ReaderTextureType) -> String {
         switch type {
         case .classic:      return "Texture_0"
-        case .classicWhite: return "Texture_0_classic_paper"
+        case .classicWhite: return "classic_white_grain"
         case .brownPaper:   return "Texture_1"
         case .whiteWall:    return "Texture_2"
         case .grungePaper:  return "Texture_3"
