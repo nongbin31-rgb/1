@@ -112,7 +112,8 @@ public struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        if store.upscalerConfig.model == .anime4k {
+                        switch store.upscalerConfig.model {
+                        case .anime4k:
                             Picker("Anime4K 预设模式", selection: $store.upscalerConfig.anime4k.preset) {
                                 ForEach(Anime4kPreset.allCases) { preset in
                                     Text(preset.displayName).tag(preset)
@@ -120,11 +121,23 @@ public struct SettingsView: View {
                             }
                             Toggle("细化线条 (Anime4K_Thin_HQ)", isOn: $store.upscalerConfig.anime4k.thinLines)
                             Toggle("线条加黑 (Anime4K_Darken_HQ)", isOn: $store.upscalerConfig.anime4k.darkenLines)
-                        } else if store.upscalerConfig.model == .waifu2x {
+                        case .anime4kCoreML:
+                            Picker("Anime4K AI 模型", selection: $store.upscalerConfig.anime4kCoreML) {
+                                ForEach(Anime4kCoreMLModel.allCases) { model in
+                                    Text(model.displayName).tag(model)
+                                }
+                            }
+                        case .waifu2x:
                             Picker("Waifu2x 预设模型", selection: $store.upscalerConfig.waifu2x) {
                                 ForEach(Waifu2xModel.allCases) { model in
                                     Text(model.displayName).tag(model)
                                 }
+                            }
+                        }
+
+                        Picker("高清原图自动跳过", selection: $store.upscalerConfig.smartSkipMinWidth) {
+                            ForEach(UpscalerSmartSkipThreshold.allCases) { threshold in
+                                Text(threshold.displayName).tag(threshold.rawValue)
                             }
                         }
 
@@ -135,9 +148,9 @@ public struct SettingsView: View {
                     Text("画质增强 - 全局配置")
                 } footer: {
                     if store.upscalerConfig.bypassSizeLimit {
-                        Text("已解除 1200 万总像素限制，所有尺寸图像都会尝试 2x 超分。极端巨图可能导致内存飙升或闪退；Anime4K 仍受 Metal 单边 8192px 硬件上限约束。")
+                        Text("已解除 4800 万输出像素限制，极端巨图或 4x 模式可能导致内存飙升或闪退；Anime4K 超长条漫已支持自动分条无缝拼接。")
                     } else {
-                        Text("默认采用 1200 万总像素智能保护（放行 800×8000 等模糊条漫长图，同时防爆内存）；Anime4K 单边受 Metal 硬件 8192px 上限约束。")
+                        Text("默认采用 4800 万输出像素智能保护（等价 2x 12M 输入 / 4x 3M 输入）；Anime4K 超长单边自动分条拼接，可按宽度自动跳过高清原图。")
                     }
                 }
 
@@ -198,7 +211,7 @@ public struct SettingsView: View {
                     if store.enableTapPageTurn {
                         Toggle("翻转点击翻页方向", isOn: $store.invertTapPageTurn)
                     }
-                    Toggle("两侧边缘快滑退出漫画", isOn: $store.enableEdgeSwipeDismiss)
+                    Toggle("右向左滑动退出漫画", isOn: $store.enableEdgeSwipeDismiss)
                     Toggle("翻页音效与轻触震动", isOn: $store.pageTurnSoundEnabled)
                     Toggle("仿真卷页书脊立体中缝阴影", isOn: $store.showSpineShadowInCurl)
                 } header: {
@@ -253,18 +266,20 @@ public struct SettingsView: View {
                             )
                         }
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text("纸张着色浓度")
-                                Spacer()
-                                Text("\(Int((store.readerTextureTintOpacity * 100).rounded()))%")
-                                    .foregroundStyle(.secondary)
+                        if !store.readerTextureType.usesOriginalAspectFillOverlay {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("纸张着色浓度")
+                                    Spacer()
+                                    Text("\(Int((store.readerTextureTintOpacity * 100).rounded()))%")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(
+                                    value: $store.readerTextureTintOpacity,
+                                    in: 0.0...1.0,
+                                    step: 0.05
+                                )
                             }
-                            Slider(
-                                value: $store.readerTextureTintOpacity,
-                                in: 0.0...1.0,
-                                step: 0.05
-                            )
                         }
 
                         if store.readerTextureType.usesFineTilePattern {

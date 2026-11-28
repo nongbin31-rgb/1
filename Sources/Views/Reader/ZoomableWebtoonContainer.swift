@@ -14,6 +14,7 @@ import UIKit
 /// 6. 附带贴心的浮动倍率指示胶囊（如「🔍 2.6x」），轻触一键快速复位。
 public struct ZoomableWebtoonContainer<Content: View>: View {
     public let onSingleTap: () -> Void
+    public let onZoomStateChanged: ((Bool) -> Void)?
     public let content: () -> Content
 
     @State private var scale: CGFloat = 1.0
@@ -26,9 +27,11 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
 
     public init(
         onSingleTap: @escaping () -> Void,
+        onZoomStateChanged: ((Bool) -> Void)? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.onSingleTap = onSingleTap
+        self.onZoomStateChanged = onZoomStateChanged
         self.content = content
     }
 
@@ -139,6 +142,12 @@ public struct ZoomableWebtoonContainer<Content: View>: View {
                     .padding(.trailing, 16)
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
+            }
+            .onChange(of: scale > 1.05) { zoomed in
+                onZoomStateChanged?(zoomed)
+            }
+            .onDisappear {
+                onZoomStateChanged?(false)
             }
         }
     }

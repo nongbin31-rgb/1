@@ -1525,33 +1525,44 @@ public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable
 
 /// 真实纸张与材质纹理类型
 public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
-    case classic        = "Texture_0_classic_paper"       // 经典纸张
-    case classicWhite   = "classic_white_grain"           // 独立中性白纸颗粒
+    case classic        = "Texture_0_classic_paper"       // 经典纸张 (程序化浮雕微粒)
+    case classicWhite   = "Texture_6_classic_white"       // 经典（白色）(原版高清白纸整图正片叠底)
     case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸
     case whiteWall      = "Texture_2_white_wall"          // 白墙灰泥
-    case grungePaper    = "Texture_3_grunge_paper"        // 草稿纸
     case tissueMarble   = "Texture_4_tissue_marble"       // 厕纸/大理石纹
     case wood           = "Texture_5_wood"                // 木板
 
     public var id: String { rawValue }
 
-    /// 是否采用程序化高密 256pt 无缝浮雕微粒平铺（经典纸张：复刻 MangaPrism 立体微粒纸感引擎）
-    public var usesFineTilePattern: Bool {
-        self == .classic || self == .classicWhite
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        if let matched = ReaderTextureType(rawValue: raw) {
+            self = matched
+        } else if raw == "Texture_3_grunge_paper" || raw == "Texture_3" || raw == "Texture_6" {
+            // 兼容旧版本已选「草稿纸」或原版短名 Texture_6，平滑迁移至「经典（白色）」
+            self = .classicWhite
+        } else {
+            self = .classic
+        }
     }
 
-    /// 独立的程序化中性白纸颗粒，不复用经典纹理
-    public var usesClassicWhiteGrain: Bool {
+    /// 是否采用程序化高密 256pt 无缝浮雕微粒平铺（经典纸张：复刻 MangaPrism 立体微粒纸感引擎）
+    public var usesFineTilePattern: Bool {
+        self == .classic
+    }
+
+    /// 是否采用原版可达直出整图 AspectFill + 单层正片叠底（经典（白色）：3456×5184 原图无损直出，不切片不降采样）
+    public var usesOriginalAspectFillOverlay: Bool {
         self == .classicWhite
     }
 
     public var displayName: String {
         switch self {
         case .classic:      return "经典"
-        case .classicWhite: return "经典白"
+        case .classicWhite: return "经典（白色）"
         case .brownPaper:   return "包装纸"
         case .whiteWall:    return "白墙"
-        case .grungePaper:  return "草稿纸"
         case .tissueMarble: return "厕纸"
         case .wood:         return "木板"
         }
@@ -1563,7 +1574,6 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         case .classicWhite: return "经典白"
         case .brownPaper:   return "包装纸"
         case .whiteWall:    return "白墙"
-        case .grungePaper:  return "草稿"
         case .tissueMarble: return "厕纸"
         case .wood:         return "木板"
         }
@@ -1577,6 +1587,7 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
             // 经典粉刷纯白纸基：1:1 对齐 MangaPrism 纯白底布 (#FFFFFF)，确保漫画留白与彩漫零色差
             return UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
         case .classicWhite:
+            // 经典（白色）：1:1 对齐原版可达 ReaderBackground[3] -> UIColor.white (#FFFFFF)
             return UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
         case .brownPaper:
             // 进口包装牛皮纸：经典温厚牛皮棕 (RGB: 230, 215, 189)
@@ -1584,9 +1595,6 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         case .whiteWall:
             // 浮雕白墙灰泥：纯净微灰冷白 (RGB: 245, 245, 243)
             return UIColor(red: 0.960, green: 0.960, blue: 0.953, alpha: 1.0)
-        case .grungePaper:
-            // 复古做旧草稿：岁月沉淀羊皮纸色 (RGB: 236, 228, 210)
-            return UIColor(red: 0.925, green: 0.894, blue: 0.824, alpha: 1.0)
         case .tissueMarble:
             // 大理石云纹：柔润素净云白 (RGB: 242, 241, 237)
             return UIColor(red: 0.949, green: 0.945, blue: 0.929, alpha: 1.0)

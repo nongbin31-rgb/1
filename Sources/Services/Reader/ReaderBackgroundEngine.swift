@@ -37,8 +37,6 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 经典程序化浮雕纸纹的 100% 最大颗粒数量基准（与 MangaPrism 1:1 对齐）
     public static let maxClassicGrainCount: Int = 23_500
-    /// 经典白采用更细、更密的独立中性白颗粒
-    public static let maxClassicWhiteGrainCount: Int = 31_000
 
     private init() {
         cache.countLimit = 40
@@ -70,25 +68,26 @@ public final class ReaderTextureCache: @unchecked Sendable {
     public static func macroTileLogicalSize(for texture: ReaderTextureType) -> CGFloat {
         switch texture {
         case .classic:      return 128.0
-        case .classicWhite: return 128.0
+        case .classicWhite: return 320.0
         case .brownPaper:   return 220.0
         case .whiteWall:    return 260.0
-        case .grungePaper:  return 240.0
         case .tissueMarble: return 280.0
         case .wood:         return 320.0
         }
     }
 
-    /// 双层细节纸纹 (Detail Mipmap) 动态权重计算（现已全量支持经典与全部 5 种非经典材质）：
-    /// - 1.0x 常规或缩小阅读：100% 宏观层，0% 微观层（零额外渲染开销）；
-    /// - 1.08x -> 2.35x 双指/双击放大：Smoothstep 平滑交叉过渡，宏观层渐退，高频微观层平滑接管，彻底消除放大颗粒变大发糊；
-    /// - > 2.6x 超高倍放大：施加轻度高倍阻尼衰减，查看极小字或局部笔触时清爽不噪。
+    /// 双层细节纸纹 (Detail Mipmap) 动态权重计算：
+    /// - 经典（白色）直接采用 3456×5184 超高清原图无损直出，全倍率保持单层正片叠底不切换 Mipmap；
+    /// - 其它材质 1.0x 常规阅读使用 100% 宏观层，放大 > 1.08x 时 Smoothstep 平滑过渡至微观层。
     public static func zoomMipmapOpacities(
         for texture: ReaderTextureType,
         baseOpacity: Double,
         zoomScale: CGFloat
     ) -> (coarse: Double, fine: Double) {
         let effBase = perceptualOpacity(for: texture, rawOpacity: baseOpacity)
+        if texture.usesOriginalAspectFillOverlay {
+            return (coarse: effBase, fine: 0.0)
+        }
         guard effBase > 0.001, zoomScale > 1.08 else {
             return (coarse: effBase, fine: 0.0)
         }
@@ -150,24 +149,16 @@ public final class ReaderTextureCache: @unchecked Sendable {
         if type.usesFineTilePattern {
             let pct = Self.quantizedGrainDensityPercent(grainDensity)
             let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
-            if type.usesClassicWhiteGrain {
-                loaded = Self.buildProceduralClassicWhiteGrainTile(
-                    densityPercent: pct,
-                    screenScale: screenScale,
-                    tileSize: 128.0
-                )
-            } else {
-                let plasterBase = classicPlasterBaseImage ?? {
-                    let base = Self.buildClassicPlasterBaseTile(screenScale: screenScale)
-                    self.classicPlasterBaseImage = base
-                    return base
-                }()
-                loaded = Self.buildProceduralClassicStuccoTile(
-                    densityPercent: pct,
-                    screenScale: screenScale,
-                    plasterBase: plasterBase
-                )
-            }
+            let plasterBase = classicPlasterBaseImage ?? {
+                let base = Self.buildClassicPlasterBaseTile(screenScale: screenScale)
+                self.classicPlasterBaseImage = base
+                return base
+            }()
+            loaded = Self.buildProceduralClassicStuccoTile(
+                densityPercent: pct,
+                screenScale: screenScale,
+                plasterBase: plasterBase
+            )
         } else {
             // 优先全名 (例如 Texture_1_brown_paper) 加载，次选短名 (例如 Texture_1) 加载
             loaded = loadTextureFromBundle(named: type.rawValue)
@@ -291,24 +282,13 @@ public final class ReaderTextureCache: @unchecked Sendable {
             }
             let pct = Self.quantizedGrainDensityPercent(grainDensity)
             let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
-            let generated: UIImage?
-            if type.usesClassicWhiteGrain {
-                generated = Self.buildProceduralClassicWhiteGrainTile(
-                    densityPercent: pct,
-                    screenScale: screenScale,
-                    tileSize: 64.0,
-                    seed: 20261120
-                )
-            } else {
-                generated = Self.buildProceduralClassicStuccoTile(
-                    densityPercent: pct,
-                    screenScale: screenScale,
-                    plasterBase: nil,
-                    tileSize: 64.0,
-                    seed: 20261119
-                )
-            }
-            guard let generated else { return nil }
+            let generated = Self.buildProceduralClassicStuccoTile(
+                densityPercent: pct,
+                screenScale: screenScale,
+                plasterBase: nil,
+                tileSize: 64.0,
+                seed: 20261119
+            )
             cache.setObject(generated, forKey: key)
             return generated
         }
@@ -361,8 +341,8 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取去色白场校准后的中性纸张肌理图（彻底消除材质自带黄/棕色偏色，仅保留纯白纸纤维颗粒）
     public func neutralGrainImage(for type: ReaderTextureType) -> UIImage? {
-        if type.usesFineTilePattern {
-            // 程序化经典浮雕纸纹基底本身即为纯白零偏色，直接复用保持微粒锐度
+        if type.usesFineTilePattern || type.usesOriginalAspectFillOverlay {
+            // 程序化经典浮雕纸纹与经典（白色）原图本身即为无偏色中性白纸，直接复用保持原图锐度
             return textureImage(for: type)
         }
         let key = "\(type.rawValue)_neutral_grain" as NSString
@@ -629,52 +609,6 @@ public final class ReaderTextureCache: @unchecked Sendable {
                     cg.setFillColor(red: poreR, green: poreG, blue: poreB, alpha: poreAlpha)
                     drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter * 0.85, tileSize: tileSize)
                 }
-            }
-        }
-    }
-
-    /// 经典白专属：独立生成中性白纸微颗粒，不复用 Texture_0 或经典程序化纸浆斑块。
-    /// 白底保持纯白，颗粒使用极浅中性灰，避免产生米黄色和明显黑孔。
-    private static func buildProceduralClassicWhiteGrainTile(
-        densityPercent: Int,
-        screenScale: CGFloat,
-        tileSize: CGFloat,
-        seed: UInt64 = 20261119
-    ) -> UIImage {
-        let scaleFactor = tileSize / 256.0
-        let grainCount = max(
-            1,
-            Int((Double(maxClassicWhiteGrainCount) * Double(densityPercent) / 100.0).rounded())
-        )
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = screenScale
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(
-            size: CGSize(width: tileSize, height: tileSize),
-            format: format
-        )
-
-        return renderer.image { context in
-            let cg = context.cgContext
-            cg.clear(CGRect(x: 0, y: 0, width: tileSize, height: tileSize))
-            cg.setAllowsAntialiasing(false)
-            cg.setShouldAntialias(false)
-            var rng = SplitMix64RNG(seed: seed)
-
-            for _ in 0..<grainCount {
-                let x = CGFloat(rng.nextUnitDouble()) * tileSize
-                let y = CGFloat(rng.nextUnitDouble()) * tileSize
-                let diameter = (
-                    rng.nextUnitDouble() < 0.10
-                        ? 0.95 + CGFloat(rng.nextUnitDouble()) * 0.80
-                        : 0.34 + CGFloat(rng.nextUnitDouble()) * 0.58
-                ) * scaleFactor
-
-                // 只使用接近白色的中性灰，不做炭灰纸孔和暖黄色底纹。
-                let gray = 0.90 + CGFloat(rng.nextUnitDouble()) * 0.08
-                let alpha = 0.045 + CGFloat(rng.nextUnitDouble()) * 0.085
-                cg.setFillColor(red: gray, green: gray, blue: gray, alpha: alpha)
-                drawSeamlessDot(in: cg, x: x, y: y, diameter: diameter, tileSize: tileSize)
             }
         }
     }
@@ -1184,10 +1118,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private func shortKey(for type: ReaderTextureType) -> String {
         switch type {
         case .classic:      return "Texture_0"
-        case .classicWhite: return "classic_white_grain"
+        case .classicWhite: return "Texture_6"
         case .brownPaper:   return "Texture_1"
         case .whiteWall:    return "Texture_2"
-        case .grungePaper:  return "Texture_3"
         case .tissueMarble: return "Texture_4"
         case .wood:         return "Texture_5"
         }
@@ -1570,6 +1503,23 @@ public class ReaderBackgroundContainerView: UIView {
                 highlightOverlayView.isHidden = true
                 highlightOverlayView.image = nil
                 highlightOverlayView.alpha = 0.0
+            } else if currentTexture.usesOriginalAspectFillOverlay {
+                // 1:1 复刻原版可达经典（白色）：3456×5184 原图直出 + scaleAspectFill + 外层单层 multiplyBlendMode
+                neutralTextureOverlayView.isHidden = true
+                neutralTextureOverlayView.image = nil
+                neutralTextureOverlayView.backgroundColor = .clear
+
+                textureOverlayView.isHidden = false
+                textureOverlayView.backgroundColor = .clear
+                textureOverlayView.contentMode = .scaleAspectFill
+                textureOverlayView.layer.magnificationFilter = .linear
+                textureOverlayView.layer.minificationFilter = .linear
+                textureOverlayView.image = img
+                textureOverlayView.alpha = 1.0
+
+                highlightOverlayView.isHidden = true
+                highlightOverlayView.image = nil
+                highlightOverlayView.alpha = 0.0
             } else {
                 neutralTextureOverlayView.backgroundColor = .clear
                 textureOverlayView.backgroundColor = .clear
@@ -1747,6 +1697,22 @@ public struct PaperTextureOverlayView: View {
                         }
                     }
                     .allowsHitTesting(false)
+                } else if texture.usesOriginalAspectFillOverlay {
+                    // 1:1 复刻原版可达经典（白色）：3456×5184 原图整页 AspectFill + 单层 Multiply 正片叠底
+                    GeometryReader { proxy in
+                        let viewW = proxy.size.width
+                        let viewH = proxy.size.height
+                        if viewW > 0, viewH > 0 {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: viewW, height: viewH)
+                                .clipped()
+                                .opacity(mip.coarse)
+                                .blendMode(.multiply)
+                        }
+                    }
+                    .allowsHitTesting(false)
                 } else {
                     let neutralTile = clampedTint < 0.999 ? ReaderTextureCache.shared.seamlessNeutralDenseTileImage(for: texture) : nil
                     let denseTile = ReaderTextureCache.shared.seamlessDenseTileImage(for: texture) ?? img
@@ -1828,6 +1794,45 @@ public struct PaperTextureOverlayView: View {
                                         .blendMode(.multiply)
                                 }
                             }
+                        }
+                    }
+                    .allowsHitTesting(false)
+                } else if texture.usesOriginalAspectFillOverlay {
+                    // 条漫无限长滚动模式：将原图 2×2 无缝镜像图按全屏 AspectFill 物理尺度对齐，保证颗粒大小与单页完全一致且零接缝
+                    let refSize = validReferenceSize() ?? fallbackScreenSize()
+                    let unitSize = Self.scaledTileSize(for: img, fitting: refSize)
+                    let mirrored = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
+                    let cycleW = max(unitSize.width * 2.0, 128.0)
+                    let scaledTile: UIImage = {
+                        if let cg = mirrored.cgImage, cg.width > 0 {
+                            let targetScale = max(CGFloat(cg.width) / cycleW, 0.25)
+                            return UIImage(cgImage: cg, scale: targetScale, orientation: .up)
+                        }
+                        return mirrored
+                    }()
+                    let tileW = max(scaledTile.size.width, 64.0)
+                    let tileH = max(scaledTile.size.height, 64.0)
+
+                    GeometryReader { proxy in
+                        let viewW = proxy.size.width
+                        let viewH = proxy.size.height
+                        if viewW > 0, viewH > 0 {
+                            let contentFrame = proxy.frame(in: .named(spaceName))
+                            let phaseX = Self.positiveModulo(contentFrame.minX, divisor: tileW)
+                            let phaseY = Self.positiveModulo(contentFrame.minY, divisor: tileH)
+
+                            Color.clear
+                                .frame(width: viewW, height: viewH)
+                                .overlay(alignment: .topLeading) {
+                                    Image(uiImage: scaledTile)
+                                        .interpolation(.medium)
+                                        .resizable(resizingMode: .tile)
+                                        .frame(width: viewW + tileW, height: viewH + tileH)
+                                        .offset(x: -phaseX, y: -phaseY)
+                                }
+                                .clipped()
+                                .opacity(mip.coarse)
+                                .blendMode(.multiply)
                         }
                     }
                     .allowsHitTesting(false)

@@ -425,6 +425,7 @@ public struct ReaderView: View {
     @State private var webtoonAspectCache = WebtoonAspectRatioCache()
     @State private var webtoonPageIndexDebounceTask: Task<Void, Never>? = nil
     @State private var progressPersistDebounceTask: Task<Void, Never>? = nil
+    @State private var isWebtoonZoomed = false
 
     public init(manga: Manga, chapters: [MangaChapter], initialChapter: MangaChapter, initialPageIndex: Int? = nil) {
         self.manga = manga
@@ -446,56 +447,72 @@ public struct ReaderView: View {
     public var body: some View {
         GeometryReader { windowGeo in
             ZStack {
-                readerBackgroundView
-                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
-                    .clipped()
-
-                if isLoadingChapter {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .tint(.white)
-                        Text("正在加载章节页面...")
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.85))
+                // 右向左跟手拖拽退出容器（漫画内容与纸纹背景整体左移，右侧露出圆形进度环与红叉指示器）
+                ReaderSwipeBackContainer(
+                    isEnabled: store.enableEdgeSwipeDismiss,
+                    isBlocked: isScrubbingProgress || isCompareMode,
+                    allowFullScreenPan: activeLayoutMode == .verticalWebtoon && !isWebtoonZoomed && !showChrome,
+                    readerBackground: store.preferredReaderBackground,
+                    onDismiss: {
+                        dismiss()
                     }
-                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
-                } else if let chapterError {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.largeTitle)
-                            .foregroundStyle(.orange)
-                        Text(chapterError)
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.85))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                        HStack {
-                            Button("返回") { dismiss() }
-                                .buttonStyle(.bordered)
-                            Button("重试") {
-                                Task { await loadChapterPages() }
+                ) {
+                    ZStack {
+                        readerBackgroundView
+                            .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                            .clipped()
+
+                        if isLoadingChapter {
+                            VStack(spacing: 12) {
+                                ProgressView()
+                                    .tint(.white)
+                                Text("正在加载章节页面...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.85))
                             }
-                            .buttonStyle(.borderedProminent)
+                            .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                        } else if let chapterError {
+                            VStack(spacing: 12) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(.orange)
+                                Text(chapterError)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.85))
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 24)
+                                HStack {
+                                    Button("返回") { dismiss() }
+                                        .buttonStyle(.bordered)
+                                    Button("重试") {
+                                        Task { await loadChapterPages() }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                            }
+                            .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                        } else if pages.isEmpty {
+                            VStack(spacing: 12) {
+                                Image(systemName: "doc.questionmark")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(.secondary)
+                                Text("该章节暂无图片页")
+                                    .foregroundStyle(.white.opacity(0.8))
+                                Button("返回") { dismiss() }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                        } else {
+                            readerContent(windowSize: windowGeo.size)
+                                .id(currentChapter.id)
+                                .frame(width: windowGeo.size.width, height: windowGeo.size.height)
+                                .clipped()
                         }
                     }
                     .frame(width: windowGeo.size.width, height: windowGeo.size.height)
-                } else if pages.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "doc.questionmark")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
-                        Text("该章节暂无图片页")
-                            .foregroundStyle(.white.opacity(0.8))
-                        Button("返回") { dismiss() }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .frame(width: windowGeo.size.width, height: windowGeo.size.height)
-                } else {
-                    readerContent(windowSize: windowGeo.size)
-                        .id(currentChapter.id)
-                        .frame(width: windowGeo.size.width, height: windowGeo.size.height)
-                        .clipped()
+                    .clipped()
                 }
+                .zIndex(1)
 
                 if isScrubbingProgress && pages.count > 1 && store.readerProgressStyle != .sideRail {
                     let insets = safeAreaInsetsResolved
@@ -551,16 +568,6 @@ public struct ReaderView: View {
 
                 chromeOverlay
                     .zIndex(12)
-
-                // 两侧物理边缘快速滑入退出漫画（原生 UIScreenEdgePanGestureRecognizer，零干扰翻页）
-                ReaderEdgeSwipeDismissOverlay(
-                    isEnabled: store.enableEdgeSwipeDismiss,
-                    isBlocked: isScrubbingProgress || isCompareMode,
-                    onDismiss: {
-                        dismiss()
-                    }
-                )
-                .zIndex(14)
 
                 // 当处于对比模式且导航栏收起时，提供常驻半透明快捷退出按钮，彻底解决无法退出的死锁
                 if isCompareMode {
@@ -849,6 +856,9 @@ public struct ReaderView: View {
                         withAnimation(.spring(response: 0.30, dampingFraction: 0.92)) {
                             showChrome.toggle()
                         }
+                    },
+                    onZoomStateChanged: { zoomed in
+                        isWebtoonZoomed = zoomed
                     }
                 ) {
                     ScrollViewReader { scrollProxy in
@@ -2410,7 +2420,7 @@ private struct ReaderUpscalerSheet: View {
                         }
                     }
 
-                    Toggle("两侧边缘快滑退出漫画", isOn: $store.enableEdgeSwipeDismiss)
+                    Toggle("右向左滑动退出漫画", isOn: $store.enableEdgeSwipeDismiss)
                 } header: {
                     Text("阅读排版与翻页动画")
                 } footer: {
@@ -2434,6 +2444,12 @@ private struct ReaderUpscalerSheet: View {
                     }
                     .pickerStyle(.segmented)
 
+                    Picker("高清原图跳过", selection: $config.smartSkipMinWidth) {
+                        ForEach(UpscalerSmartSkipThreshold.allCases) { threshold in
+                            Text(threshold.displayName).tag(threshold.rawValue)
+                        }
+                    }
+
                     Button {
                         onOpenAdvancedConfig()
                     } label: {
@@ -2451,8 +2467,8 @@ private struct ReaderUpscalerSheet: View {
                 } footer: {
                     Text(
                         config.bypassSizeLimit
-                            ? "已解除 1200 万总像素限制，超巨图可能内存飙升或闪退；Anime4K 仍受 Metal 8192px 单边硬件限制。"
-                            : "默认采用 1200 万总像素保护，支持 800×8000 等模糊条漫长图直接超分。"
+                            ? "已解除 4800 万输出像素限制，超巨图或 4x 模式可能内存飙升或闪退；Anime4K 超长条漫已支持自动分条拼接。"
+                            : "默认采用 4800 万输出像素智能保护（等价 2x 12M 输入 / 4x 3M 输入）；Anime4K 超长单边自动分条拼接。"
                     )
                 }
             }
