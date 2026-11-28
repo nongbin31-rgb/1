@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UIKit
 
@@ -114,14 +115,31 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
         return memGB >= 5.5 ? 240 * 1024 * 1024 : 150 * 1024 * 1024
     }()
 
-    /// 单张超分图入缓存的体积上限，避免单张超巨图长期霸占全部缓存空间
+    /// 单张超分图入内存 L1 缓存的体积上限，避免单张超巨图长期霸占全部内存空间（超限图自动落盘至磁盘 L2 缓存）
     private static let maxSingleCachedImageCost: Int = cacheTotalCostLimit / 2
+
+    /// 磁盘 L2 超分缓存上限（350MB / 180 张，高质量 JPEG 压缩后单张 4x 图仅 ~1.5~3.5MB，可轻松缓存整话来回翻页秒开）
+    private static let maxDiskCacheBytes: Int64 = 350 * 1024 * 1024
+    private static let maxDiskCacheFileCount: Int = 180
+    private static let diskJpegQuality: CGFloat = 0.92
 
     private let resultCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 12
         cache.totalCostLimit = PageUpscalerPipeline.cacheTotalCostLimit
         return cache
+    }()
+
+    /// 尚未落盘完成的超分图暂存池（保证 3x/4x 大图在异步写盘期间来回翻页也能 0ms 直接命中，落盘后自动释放内存）
+    private let diskStateLock = NSLock()
+    private var pendingDiskWrites: [String: UIImage] = [:]
+    private let diskQueue = DispatchQueue(label: "com.selfsigned.kedaonlinereader.upscaler.diskcache", qos: .utility)
+    private let diskCacheDirectory: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let dir = caches.appendingPathComponent("UpscaledPagesCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }()
 
     private let inFlightLock = NSLock()
@@ -140,15 +158,43 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
 
     public func clearCache() {
         resultCache.removeAllObjects()
+        diskStateLock.lock()
+        pendingDiskWrites.removeAll()
+        diskStateLock.unlock()
+
+        let dir = diskCacheDirectory
+        diskQueue.async {
+            let fm = FileManager.default
+            if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                for url in files {
+                    try? fm.removeItem(at: url)
+                }
+            }
+        }
     }
 
-    /// 同步查询已缓存的超分成品图（专供主线程快路径与预热跳过检查使用）
+    /// 同步查询已常驻内存的超分成品图（专供主线程 0ms 快路径使用；同时命中正在异步落盘的 3x/4x 大图）
     public func cachedImage(pageKey: String, config: ImageUpscalerConfig) -> UIImage? {
-        let cacheKey = "\(pageKey)::\(config.cacheKey)" as NSString
-        return resultCache.object(forKey: cacheKey)
+        let keyString = "\(pageKey)::\(config.cacheKey)"
+        if let mem = resultCache.object(forKey: keyString as NSString) {
+            return mem
+        }
+        diskStateLock.lock()
+        let pending = pendingDiskWrites[keyString]
+        diskStateLock.unlock()
+        return pending
     }
 
-    /// 预判该图超分结果是否可顺利入缓存（避免后台预热为超限/跳过/不可缓存的巨图白耗算力）
+    /// 快速探测该页超分成品是否已存在（内存 L1 或磁盘 L2），供预热跳过与进度条热力图使用
+    public func hasCachedResult(pageKey: String, config: ImageUpscalerConfig) -> Bool {
+        if cachedImage(pageKey: pageKey, config: config) != nil {
+            return true
+        }
+        let keyString = "\(pageKey)::\(config.cacheKey)"
+        return FileManager.default.fileExists(atPath: diskFileURL(for: keyString).path)
+    }
+
+    /// 预判该图超分结果是否可顺利入缓存（支持内存 L1 + 磁盘 L2，确保 Anime4K AI 2x/3x/4x 全部支持预超分）
     public func canCacheUpscaledOutput(for image: UIImage, config: ImageUpscalerConfig) -> Bool {
         let origSize = pixelSize(of: image)
         let origW = Int(origSize.width)
@@ -162,6 +208,7 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
 
         let pixelCount = origW * origH
         let outPixels = pixelCount * scale * scale
+        guard outPixels > 0 else { return false }
         if !config.bypassSizeLimit && outPixels > ImageUpscalerConfig.maxOutputPixelCountThreshold {
             return false
         }
@@ -180,9 +227,8 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
             }
         }
 
-        // 按真实输出倍率估算 RGBA8 显存占用（width * scale * height * scale * 4）
-        let estimatedCost = outPixels * 4
-        return estimatedCost > 0 && estimatedCost <= Self.maxSingleCachedImageCost
+        // 所有合规超分输出均可落盘至磁盘 L2 缓存，不再受单张未压缩 RGBA 内存阈值阻断预超分
+        return true
     }
 
     /// 对漫画单页执行超分（若命中缓存则瞬时返回；若后台正在预热同一页则直接合并承接）
@@ -240,11 +286,38 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
 
         let keyString = "\(pageKey)::\(config.cacheKey)"
         let cacheKey = keyString as NSString
-        if let cached = resultCache.object(forKey: cacheKey) {
+        if let cached = cachedImage(pageKey: pageKey, config: config) {
             return ProcessedPageImage(
                 image: cached,
                 originalSize: origSize,
                 outputSize: pixelSize(of: cached),
+                elapsedMs: 0,
+                appliedModel: config.model,
+                notice: "命中缓存"
+            )
+        }
+
+        // 命中磁盘 L2 缓存：几十毫秒内直接解码复用，避免来回翻页或内存警告后重复跑神经网络超分
+        if let diskCached = await loadFromDiskCache(keyString: keyString) {
+            guard !Task.isCancelled else {
+                return ProcessedPageImage(
+                    image: image,
+                    originalSize: origSize,
+                    outputSize: origSize,
+                    elapsedMs: 0,
+                    appliedModel: nil,
+                    notice: nil
+                )
+            }
+            let outSize = pixelSize(of: diskCached)
+            let cost = Int(outSize.width * outSize.height * 4)
+            if cost > 0 && cost <= Self.maxSingleCachedImageCost {
+                resultCache.setObject(diskCached, forKey: cacheKey, cost: cost)
+            }
+            return ProcessedPageImage(
+                image: diskCached,
+                originalSize: origSize,
+                outputSize: outSize,
                 elapsedMs: 0,
                 appliedModel: config.model,
                 notice: "命中缓存"
@@ -386,6 +459,7 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
             if cost > 0 && cost <= Self.maxSingleCachedImageCost {
                 resultCache.setObject(enhanced, forKey: cacheKey, cost: cost)
             }
+            storeToDiskCacheAsync(image: enhanced, keyString: keyString)
 
             return ProcessedPageImage(
                 image: enhanced,
@@ -457,6 +531,102 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
         inFlightLock.unlock()
 
         taskToCancel?.cancel()
+    }
+
+    // MARK: - 磁盘 L2 持久化缓存（LRU）
+
+    private func diskFileURL(for keyString: String) -> URL {
+        let digest = SHA256.hash(data: Data(keyString.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return diskCacheDirectory.appendingPathComponent("\(hex).jpg")
+    }
+
+    private func loadFromDiskCache(keyString: String) async -> UIImage? {
+        let fileURL = diskFileURL(for: keyString)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            diskQueue.async {
+                autoreleasepool {
+                    guard let data = try? Data(contentsOf: fileURL),
+                          let img = UIImage(data: data) else {
+                        try? FileManager.default.removeItem(at: fileURL)
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    // 刷新修改时间作为 LRU 最近访问标记
+                    try? FileManager.default.setAttributes(
+                        [.modificationDate: Date()],
+                        ofItemAtPath: fileURL.path
+                    )
+                    continuation.resume(returning: img)
+                }
+            }
+        }
+    }
+
+    private func storeToDiskCacheAsync(image: UIImage, keyString: String) {
+        diskStateLock.lock()
+        pendingDiskWrites[keyString] = image
+        diskStateLock.unlock()
+
+        let fileURL = diskFileURL(for: keyString)
+        let dir = diskCacheDirectory
+        let quality = Self.diskJpegQuality
+        let maxBytes = Self.maxDiskCacheBytes
+        let maxCount = Self.maxDiskCacheFileCount
+
+        diskQueue.async { [weak self] in
+            autoreleasepool {
+                let fm = FileManager.default
+                if !fm.fileExists(atPath: dir.path) {
+                    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                }
+                if let jpegData = image.jpegData(compressionQuality: quality) {
+                    try? jpegData.write(to: fileURL, options: .atomic)
+                    Self.trimDiskCacheIfNeeded(in: dir, maxBytes: maxBytes, maxCount: maxCount)
+                }
+            }
+            guard let self else { return }
+            self.diskStateLock.lock()
+            if self.pendingDiskWrites[keyString] === image {
+                self.pendingDiskWrites.removeValue(forKey: keyString)
+            }
+            self.diskStateLock.unlock()
+        }
+    }
+
+    private static func trimDiskCacheIfNeeded(in directory: URL, maxBytes: Int64, maxCount: Int) {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey]
+        guard let urls = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: Array(keys)) else {
+            return
+        }
+        var entries: [(url: URL, size: Int64, mtime: Date)] = []
+        entries.reserveCapacity(urls.count)
+        var totalSize: Int64 = 0
+
+        for url in urls {
+            guard let vals = try? url.resourceValues(forKeys: keys) else { continue }
+            let size = Int64(vals.fileSize ?? 0)
+            let mtime = vals.contentModificationDate ?? .distantPast
+            entries.append((url, size, mtime))
+            totalSize += size
+        }
+
+        guard totalSize > maxBytes || entries.count > maxCount else { return }
+
+        entries.sort { $0.mtime < $1.mtime }
+        var remainingCount = entries.count
+        for entry in entries {
+            if totalSize <= maxBytes && remainingCount <= maxCount {
+                break
+            }
+            try? fm.removeItem(at: entry.url)
+            totalSize -= entry.size
+            remainingCount -= 1
+        }
     }
 
     private func pixelSize(of image: UIImage) -> CGSize {

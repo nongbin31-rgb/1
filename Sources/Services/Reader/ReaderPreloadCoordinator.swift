@@ -337,10 +337,10 @@ public final class ReaderPreloadCoordinator: ObservableObject {
             return false
         }
         if enableUpscaler {
-            return PageUpscalerPipeline.shared.cachedImage(
+            return PageUpscalerPipeline.shared.hasCachedResult(
                 pageKey: page.imageURL,
                 config: upscalerConfig
-            ) != nil
+            )
         }
         return true
     }
@@ -512,7 +512,7 @@ public final class ReaderPreloadCoordinator: ObservableObject {
             return false
         }
         if upscale {
-            guard PageUpscalerPipeline.shared.cachedImage(pageKey: page.imageURL, config: upscalerConfig) != nil else {
+            guard PageUpscalerPipeline.shared.hasCachedResult(pageKey: page.imageURL, config: upscalerConfig) else {
                 return false
             }
             if filterConfig.hasActiveFilters {

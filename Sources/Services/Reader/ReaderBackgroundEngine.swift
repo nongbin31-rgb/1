@@ -363,6 +363,90 @@ public final class ReaderTextureCache: @unchecked Sendable {
         }
     }
 
+    /// 获取专为「经典（白色）」等原图直出材质在条漫模式下打造的高清 Retina 无缝切片：
+    /// 1. 严格按单页全屏 AspectFill 的原图采样比例从 3456×5184 原图中心无损裁切，保证颗粒物理尺寸与单页 1:1 一致；
+    /// 2. 直接输出完整 3x Retina 原生像素密度（不经过 1024px 2×2 降采样拉伸），彻底杜绝条漫下颗粒放大发糊；
+    /// 3. 通过平场归一化 + 双轴可分离升余弦无缝环绕混合，四边 100% 连续无接缝且无镜像重复感。
+    public func highResWebtoonSeamlessTileImage(
+        for type: ReaderTextureType,
+        referenceSize: CGSize
+    ) -> UIImage? {
+        let refW = max(referenceSize.width, 320.0)
+        let refH = max(referenceSize.height, 480.0)
+        // 按 32pt 步进量化缓存键，避免旋转或安全区微调导致重复重建
+        let qW = Int((refW / 32.0).rounded()) * 32
+        let qH = Int((refH / 32.0).rounded()) * 32
+        let key = "\(type.rawValue)_webtoon_hr_\(qW)x\(qH)" as NSString
+        if let cached = seamlessTileCache.object(forKey: key) {
+            return cached
+        }
+        guard let baseImg = textureImage(for: type) else {
+            return nil
+        }
+
+        let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
+        return queue.sync {
+            if let cached = seamlessTileCache.object(forKey: key) {
+                return cached
+            }
+            let generated = Self.buildHighResAspectMatchedSeamlessTile(
+                from: baseImg,
+                referenceSize: CGSize(width: refW, height: refH),
+                screenScale: screenScale
+            )
+            seamlessTileCache.setObject(generated, forKey: key)
+            return generated
+        }
+    }
+
+    /// 按单页 AspectFill 物理比例裁切原图并生成全 Retina 分辨率无缝切片
+    private static func buildHighResAspectMatchedSeamlessTile(
+        from image: UIImage,
+        referenceSize: CGSize,
+        screenScale: CGFloat
+    ) -> UIImage {
+        guard let srcCG = image.cgImage, srcCG.width > 64, srcCG.height > 64 else {
+            return image
+        }
+
+        let srcW = CGFloat(srcCG.width)
+        let srcH = CGFloat(srcCG.height)
+        let fillScale = max(referenceSize.width / srcW, referenceSize.height / srcH)
+
+        // 逻辑切片尺寸 280~360pt：既足够舒展消除平铺规律感，又能以 3x Retina 全像素清晰渲染
+        let tileLogicalSize = min(max(min(referenceSize.width, referenceSize.height) * 0.85, 280.0), 360.0)
+        let desiredSrcSide = fillScale > 0 ? (tileLogicalSize / fillScale) : min(srcW, srcH)
+        let cropSide = min(min(srcW, srcH), max(desiredSrcSide, 256.0))
+        let cropX = floor((srcW - cropSide) * 0.5)
+        let cropY = floor((srcH - cropSide) * 0.5)
+        let cropRect = CGRect(x: cropX, y: cropY, width: floor(cropSide), height: floor(cropSide))
+
+        let croppedCG = srcCG.cropping(to: cropRect) ?? srcCG
+        let pixelDim = max(256, min(Int((tileLogicalSize * screenScale).rounded()), 1152))
+
+        // 先以高质量插值缩放到目标 3x Retina 物理像素
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = true
+        let scaledPatch = UIGraphicsImageRenderer(
+            size: CGSize(width: pixelDim, height: pixelDim),
+            format: format
+        ).image { ctx in
+            ctx.cgContext.interpolationQuality = .high
+            UIImage(cgImage: croppedCG, scale: 1.0, orientation: .up)
+                .draw(in: CGRect(x: 0, y: 0, width: pixelDim, height: pixelDim))
+        }
+
+        guard let rawBytes = extractRGBABytes(from: scaledPatch, width: pixelDim, height: pixelDim) else {
+            return UIImage(cgImage: croppedCG, scale: max(CGFloat(croppedCG.width) / tileLogicalSize, 1.0), orientation: .up)
+        }
+
+        let flatBytes = applyFlatFieldNormalization(rawBytes, width: pixelDim, height: pixelDim)
+        let seamlessBytes = applyOffsetWrapBlend(flatBytes, width: pixelDim, height: pixelDim)
+        return makeUIImage(fromRGBABytes: seamlessBytes, width: pixelDim, height: pixelDim, scale: screenScale)
+            ?? scaledPatch
+    }
+
     /// 获取专为条漫连续滚动平铺打造的 2×2 镜像无缝纹理图（裁去边缘暗边并双向镜像衔接，消除拼接线）
     public func seamlessTileImage(for type: ReaderTextureType) -> UIImage? {
         if type.usesFineTilePattern {
@@ -1798,20 +1882,23 @@ public struct PaperTextureOverlayView: View {
                     }
                     .allowsHitTesting(false)
                 } else if texture.usesOriginalAspectFillOverlay {
-                    // 条漫无限长滚动模式：将原图 2×2 无缝镜像图按全屏 AspectFill 物理尺度对齐，保证颗粒大小与单页完全一致且零接缝
+                    // 条漫无限长滚动模式：
+                    // 1. 使用按单页全屏 AspectFill 原图比例无损裁切生成的 3x Retina 高清无缝切片，颗粒大小与单页 1:1 严格一致；
+                    // 2. 双指/双击放大条漫时，通过零拷贝调整 UIImage.scale 抵消外层 scaleEffect，使屏幕物理颗粒永不放大变粗。
                     let refSize = validReferenceSize() ?? fallbackScreenSize()
-                    let unitSize = Self.scaledTileSize(for: img, fitting: refSize)
-                    let mirrored = ReaderTextureCache.shared.seamlessTileImage(for: texture) ?? img
-                    let cycleW = max(unitSize.width * 2.0, 128.0)
-                    let scaledTile: UIImage = {
-                        if let cg = mirrored.cgImage, cg.width > 0 {
-                            let targetScale = max(CGFloat(cg.width) / cycleW, 0.25)
-                            return UIImage(cgImage: cg, scale: targetScale, orientation: .up)
+                    let baseTile = ReaderTextureCache.shared.highResWebtoonSeamlessTileImage(
+                        for: texture,
+                        referenceSize: refSize
+                    ) ?? img
+                    let zoom = max(readerZoomScale, 1.0)
+                    let effectiveTile: UIImage = {
+                        if zoom > 1.01, let cg = baseTile.cgImage {
+                            return UIImage(cgImage: cg, scale: baseTile.scale * zoom, orientation: .up)
                         }
-                        return mirrored
+                        return baseTile
                     }()
-                    let tileW = max(scaledTile.size.width, 64.0)
-                    let tileH = max(scaledTile.size.height, 64.0)
+                    let tileW = max(effectiveTile.size.width, 32.0)
+                    let tileH = max(effectiveTile.size.height, 32.0)
 
                     GeometryReader { proxy in
                         let viewW = proxy.size.width
@@ -1824,10 +1911,10 @@ public struct PaperTextureOverlayView: View {
                             Color.clear
                                 .frame(width: viewW, height: viewH)
                                 .overlay(alignment: .topLeading) {
-                                    Image(uiImage: scaledTile)
+                                    Image(uiImage: effectiveTile)
                                         .interpolation(.medium)
                                         .resizable(resizingMode: .tile)
-                                        .frame(width: viewW + tileW, height: viewH + tileH)
+                                        .frame(width: viewW + tileW * 2.0, height: viewH + tileH * 2.0)
                                         .offset(x: -phaseX, y: -phaseY)
                                 }
                                 .clipped()

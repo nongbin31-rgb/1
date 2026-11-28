@@ -292,8 +292,14 @@ private final class ReaderPageSlot: ObservableObject {
         self.displayImage = baselineFilteredImage
         self.isLoading = false
 
-        isUpscaling = true
-        upscaleProgress = ""
+        let hasCachedUpscaled = PageUpscalerPipeline.shared.hasCachedResult(
+            pageKey: page.imageURL,
+            config: config
+        )
+        if !hasCachedUpscaled {
+            isUpscaling = true
+            upscaleProgress = ""
+        }
         defer {
             if loadGeneration == currentGeneration {
                 isUpscaling = false
@@ -497,9 +503,16 @@ public struct ReaderView: View {
                                     .font(.largeTitle)
                                     .foregroundStyle(.secondary)
                                 Text("该章节暂无图片页")
-                                    .foregroundStyle(.white.opacity(0.8))
-                                Button("返回") { dismiss() }
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    Button("返回") { dismiss() }
+                                        .buttonStyle(.bordered)
+                                    Button("重试") {
+                                        Task { await loadChapterPages() }
+                                    }
                                     .buttonStyle(.borderedProminent)
+                                }
                             }
                             .frame(width: windowGeo.size.width, height: windowGeo.size.height)
                         } else {

@@ -221,8 +221,14 @@ public final class ComicPageSlot: ObservableObject {
         self.displayImage = baselineFilteredImage
         self.isLoading = false
 
-        isUpscaling = true
-        upscaleProgress = ""
+        let hasCachedUpscaled = PageUpscalerPipeline.shared.hasCachedResult(
+            pageKey: page.imageURL,
+            config: config
+        )
+        if !hasCachedUpscaled {
+            isUpscaling = true
+            upscaleProgress = ""
+        }
         defer {
             if loadGeneration == currentGeneration {
                 isUpscaling = false

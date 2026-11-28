@@ -79,7 +79,7 @@ final class ReaderPageCacheSnapshotStore: ObservableObject {
                 if Task.isCancelled { return }
                 let page = capturedPages[idx]
                 let status: ReaderPageHealthStatus
-                if enableUpscaler && PageUpscalerPipeline.shared.cachedImage(pageKey: page.id, config: upscalerConfig) != nil {
+                if enableUpscaler && PageUpscalerPipeline.shared.hasCachedResult(pageKey: page.imageURL, config: upscalerConfig) {
                     status = .upscaled
                 } else if OnlineImageLoader.shared.hasCachedImage(for: page.imageURL) {
                     status = .cached
@@ -1681,7 +1681,7 @@ struct ReaderScrubberPreviewOverlay: View {
             let stripFrames = thumbAsset?.longStripFrames
             let isLongStrip = (stripFrames?.count ?? 0) >= 3
             let isAtOrigin = (targetIndex == originIndex)
-            let isUpscaled = enableUpscaler && PageUpscalerPipeline.shared.cachedImage(pageKey: page.id, config: upscalerConfig) != nil
+            let isUpscaled = enableUpscaler && PageUpscalerPipeline.shared.hasCachedResult(pageKey: page.imageURL, config: upscalerConfig)
             let isLocallyCached = thumb != nil || OnlineImageLoader.shared.hasCachedImage(for: page.imageURL)
             let isHoverLoading = thumbnailStore.isInFlight(for: page.imageURL)
 

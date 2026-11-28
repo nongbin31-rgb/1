@@ -22,12 +22,11 @@ public enum JmCrypto {
     ]
 
     public static let defaultApiDomains: [String] = [
-        "www.cdnbtd.cc",
         "www.cdnutc.cc",
         "www.cdngwc.net",
-        "www.cdngwc.club",
         "www.cdnutc.me",
-        "www.cdnhjk.net",
+        "www.cdnbtd.cc",
+        "www.cdngwc.club",
     ]
 
     public static let defaultImageDomains: [String] = [

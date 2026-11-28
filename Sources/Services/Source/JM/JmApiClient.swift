@@ -19,8 +19,13 @@ public actor JmApiClient {
     private var hasAttemptedDynamicDomainRefresh = false
     private var hasLoadedPersistedEndpoints = false
     private var scrambleIdCache: [String: Int] = [:]
-    private var inFlightScrambleTasks: [String: Task<Int, Never>] = [:]
+    private var inFlightScrambleTasks: [String: Task<ChapterTemplateResult, Never>] = [:]
     private var isFetchingSetting = false
+
+    private struct ChapterTemplateResult: Sendable {
+        let scrambleId: Int
+        let images: [String]
+    }
     private let paginator = UniformPaginator(
         pageSize: UniformPaginator.defaultPageSize,
         approxRawPageSize: 80
@@ -155,7 +160,7 @@ public actor JmApiClient {
         if let encrypted = dataField as? String {
             let plain = try JmCrypto.decryptData(encrypted, timestamp: ts)
             if plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return nil
+                throw MangaSourceError.decodingFailed("接口返回空数据")
             }
             guard let plainData = plain.data(using: .utf8) else {
                 throw MangaSourceError.decodingFailed("解密后 JSON 编码无效")
@@ -165,14 +170,15 @@ public actor JmApiClient {
         if let dataField, !(dataField is NSNull), JSONSerialization.isValidJSONObject(dataField) {
             return try JSONSerialization.data(withJSONObject: dataField)
         }
-        return nil
+        throw MangaSourceError.decodingFailed("接口缺少有效数据字段")
     }
 
     private func performSingleDecryptedRequest(
         base: String,
         path: String,
         queryParameters: [String: String],
-        tokenSecret: String
+        tokenSecret: String,
+        validatePayload: (@Sendable (Data) -> Bool)? = nil
     ) async throws -> Data? {
         guard var components = URLComponents(string: "\(base)\(path)") else {
             throw MangaSourceError.invalidURL("\(base)\(path)")
@@ -203,7 +209,13 @@ public actor JmApiClient {
         guard let body = String(data: data, encoding: .utf8) else {
             throw MangaSourceError.decodingFailed("响应非 UTF-8 文本")
         }
-        return try decodeJmResponseData(body, timestamp: ts)
+        let decoded = try decodeJmResponseData(body, timestamp: ts)
+        if let validatePayload {
+            guard let payload = decoded, validatePayload(payload) else {
+                throw MangaSourceError.decodingFailed("节点返回空或异常章节数据")
+            }
+        }
+        return decoded
     }
 
     private func refreshSetting(base: String) async {
@@ -224,7 +236,8 @@ public actor JmApiClient {
     public func requestDecryptedJson(
         path: String,
         queryParameters: [String: String] = [:],
-        useContentSecret: Bool = false
+        useContentSecret: Bool = false,
+        validatePayload: (@Sendable (Data) -> Bool)? = nil
     ) async throws -> Any? {
         await ensurePersistedEndpoints()
         let secret = useContentSecret ? JmCrypto.defaultAppTokenSecret2 : JmCrypto.defaultAppTokenSecret
@@ -236,6 +249,7 @@ public actor JmApiClient {
             path: path,
             queryParameters: queryParameters,
             tokenSecret: secret,
+            validatePayload: validatePayload,
             triedBases: triedBases
         )
         if firstTry.hit {
@@ -256,6 +270,7 @@ public actor JmApiClient {
                     path: path,
                     queryParameters: queryParameters,
                     tokenSecret: secret,
+                    validatePayload: validatePayload,
                     triedBases: triedBases
                 )
                 if secondTry.hit {
@@ -276,6 +291,7 @@ public actor JmApiClient {
         path: String,
         queryParameters: [String: String],
         tokenSecret: String,
+        validatePayload: (@Sendable (Data) -> Bool)? = nil,
         triedBases initialTried: Set<String>
     ) async -> (hit: Bool, payload: Data?, triedBases: Set<String>, lastError: Error?) {
         var triedBases = initialTried
@@ -290,7 +306,8 @@ public actor JmApiClient {
                     base: working,
                     path: path,
                     queryParameters: queryParameters,
-                    tokenSecret: tokenSecret
+                    tokenSecret: tokenSecret,
+                    validatePayload: validatePayload
                 )
                 recordWorkingApiBase(working)
                 if path != "/setting" { maybeRefreshSettingInBackground(base: working) }
@@ -318,7 +335,8 @@ public actor JmApiClient {
                                 base: candidate,
                                 path: path,
                                 queryParameters: queryParameters,
-                                tokenSecret: tokenSecret
+                                tokenSecret: tokenSecret,
+                                validatePayload: validatePayload
                             )
                             return (candidate, res, nil)
                         } catch {
@@ -568,8 +586,8 @@ public actor JmApiClient {
         var chapters: [MangaChapter] = []
         if let rawSeries = data["series"] as? [[String: Any]], !rawSeries.isEmpty {
             let sorted = rawSeries.sorted { a, b in
-                let sa = Int(cleanField(a["sort"]) ?? "") ?? 0
-                let sb = Int(cleanField(b["sort"]) ?? "") ?? 0
+                let sa = Double(cleanField(a["sort"]) ?? "") ?? 0
+                let sb = Double(cleanField(b["sort"]) ?? "") ?? 0
                 return sa < sb
             }
             for (idx, item) in sorted.enumerated() {
@@ -622,24 +640,86 @@ public actor JmApiClient {
         return (updatedManga, chapters)
     }
 
+    private func fetchChapterImageNames(photoId: String) async -> (images: [String], error: Error?) {
+        do {
+            let json = try await requestDecryptedJson(
+                path: "/chapter",
+                queryParameters: ["id": photoId],
+                validatePayload: { payload in
+                    guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+                        return false
+                    }
+                    return !Self.extractImageFileNamesStatic(from: obj["images"]).isEmpty
+                }
+            )
+            if let data = json as? [String: Any] {
+                return (Self.extractImageFileNamesStatic(from: data["images"]), nil)
+            }
+            return ([], nil)
+        } catch {
+            return ([], error)
+        }
+    }
+
     public func getChapterPages(photoId: String) async throws -> [MangaPage] {
-        let idNum = Int(photoId) ?? 0
+        let normalizedPhotoId = photoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPhotoId.isEmpty else {
+            throw MangaSourceError.decodingFailed("无效的章节编号")
+        }
+
+        let idNum = Int(normalizedPhotoId) ?? 0
         let needsRemoteScramble = (idNum <= 0 || idNum >= JmCrypto.defaultScrambleId)
 
-        async let chapterReq = requestDecryptedJson(path: "/chapter", queryParameters: ["id": photoId])
-        async let scrambleReq: Int = needsRemoteScramble ? fetchScrambleId(photoId: photoId) : JmCrypto.defaultScrambleId
+        // 并发请求 /chapter（带非空图片校验与多节点自愈）与 /chapter_view_template（同时提取 scramble_id 与图片清单兜底）
+        async let chapterReq = fetchChapterImageNames(photoId: normalizedPhotoId)
+        async let templateReq: ChapterTemplateResult? = needsRemoteScramble
+            ? fetchChapterTemplate(photoId: normalizedPhotoId)
+            : nil
 
-        guard let data = try await chapterReq as? [String: Any],
-              let rawImages = data["images"] as? [Any],
-              !rawImages.isEmpty else {
+        let chapterOutcome = await chapterReq
+        let templateOutcome = await templateReq
+
+        var imageFileNames = chapterOutcome.images
+        var resolvedScrambleId = templateOutcome?.scrambleId ?? JmCrypto.defaultScrambleId
+
+        // 兜底 1：若 /chapter 未返回有效图片列表，回退到 /chapter_view_template HTML 解析的图片清单
+        if imageFileNames.isEmpty {
+            let fallbackTemplate: ChapterTemplateResult
+            if let existing = templateOutcome, !existing.images.isEmpty {
+                fallbackTemplate = existing
+            } else {
+                fallbackTemplate = await fetchChapterTemplate(photoId: normalizedPhotoId, forceRefresh: true)
+            }
+            if !fallbackTemplate.images.isEmpty {
+                imageFileNames = fallbackTemplate.images
+                resolvedScrambleId = fallbackTemplate.scrambleId
+            }
+        }
+
+        // 兜底 2：兼容极少数老本或单话将图片清单返回在 /album 接口的 images 字段中
+        if imageFileNames.isEmpty,
+           let albumData = try? await requestDecryptedJson(
+               path: "/album",
+               queryParameters: ["id": normalizedPhotoId]
+           ) as? [String: Any] {
+            imageFileNames = Self.extractImageFileNamesStatic(from: albumData["images"])
+        }
+
+        if imageFileNames.isEmpty {
+            if let err = chapterOutcome.error {
+                throw err
+            }
             return []
         }
 
-        let scrambleId = await scrambleReq
         var pages: [MangaPage] = []
-        for (idx, rawName) in rawImages.enumerated() {
-            guard let fileName = cleanField(rawName) else { continue }
-            let imageURL = buildChapterImageURL(photoId: photoId, fileName: fileName, scrambleId: scrambleId)
+        pages.reserveCapacity(imageFileNames.count)
+        for (idx, fileName) in imageFileNames.enumerated() {
+            let imageURL = buildChapterImageURL(
+                photoId: normalizedPhotoId,
+                fileName: fileName,
+                scrambleId: resolvedScrambleId
+            )
             pages.append(
                 MangaPage(
                     index: idx,
@@ -651,18 +731,54 @@ public actor JmApiClient {
         return pages
     }
 
-    // MARK: - Scramble ID
+    /// 兼容 JSON 数组 [Any]、PHP unset 后关联数组 [String: Any] 与单字符串格式的图片文件名提取
+    private nonisolated static func extractImageFileNamesStatic(from rawImages: Any?) -> [String] {
+        guard let rawImages, !(rawImages is NSNull) else { return [] }
 
-    private func fetchScrambleId(photoId: String) async -> Int {
-        if let cached = scrambleIdCache[photoId] {
-            return cached
+        func normalizeName(_ raw: Any?) -> String? {
+            guard let raw, !(raw is NSNull) else { return nil }
+            let s = String(describing: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !s.isEmpty, s != "<null>" else { return nil }
+            return MangaAuthorFormatter.decodeUnicodeEscape(s)
         }
-        if let inFlight = inFlightScrambleTasks[photoId] {
+
+        if let arr = rawImages as? [Any] {
+            return arr.compactMap(normalizeName)
+        }
+
+        if let dict = rawImages as? [String: Any] {
+            let sortedEntries = dict.sorted { lhs, rhs in
+                switch (Int(lhs.key), Int(rhs.key)) {
+                case let (a?, b?): return a < b
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return lhs.key < rhs.key
+                }
+            }
+            return sortedEntries.compactMap { normalizeName($0.value) }
+        }
+
+        if let str = normalizeName(rawImages) {
+            let parts = str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            return parts
+        }
+
+        return []
+    }
+
+    // MARK: - Scramble ID & Template Fallback
+
+    private func fetchChapterTemplate(photoId: String, forceRefresh: Bool = false) async -> ChapterTemplateResult {
+        if !forceRefresh, let cachedScramble = scrambleIdCache[photoId], inFlightScrambleTasks[photoId] == nil {
+            // 常规路径只需 scrambleId；若外层需要模板图片兜底会以 forceRefresh = true 调用
+            return ChapterTemplateResult(scrambleId: cachedScramble, images: [])
+        }
+        if !forceRefresh, let inFlight = inFlightScrambleTasks[photoId] {
             return await inFlight.value
         }
 
-        let task = Task<Int, Never> {
-            await self.doFetchScrambleId(photoId: photoId)
+        let task = Task<ChapterTemplateResult, Never> {
+            await self.doFetchChapterTemplate(photoId: photoId)
         }
         inFlightScrambleTasks[photoId] = task
         let resolved = await task.value
@@ -670,16 +786,22 @@ public actor JmApiClient {
         if scrambleIdCache.count >= 200, let firstKey = scrambleIdCache.keys.first {
             scrambleIdCache.removeValue(forKey: firstKey)
         }
-        scrambleIdCache[photoId] = resolved
+        scrambleIdCache[photoId] = resolved.scrambleId
         return resolved
     }
 
-    private func doFetchScrambleId(photoId: String) async -> Int {
+    private func doFetchChapterTemplate(photoId: String) async -> ChapterTemplateResult {
         await ensurePersistedEndpoints()
-        let bases = candidateApiBases()
-        guard !bases.isEmpty else { return JmCrypto.defaultScrambleId }
+        var bases = candidateApiBases()
+        if bases.isEmpty, !hasAttemptedDynamicDomainRefresh {
+            let fresh = await refreshDynamicDomains()
+            bases = fresh.map(normalizeDomainBase)
+        }
+        guard !bases.isEmpty else {
+            return ChapterTemplateResult(scrambleId: JmCrypto.defaultScrambleId, images: [])
+        }
 
-        func tryOne(_ base: String) async -> Int? {
+        func tryOne(_ base: String) async -> ChapterTemplateResult? {
             guard var comps = URLComponents(string: "\(base)/chapter_view_template") else { return nil }
             comps.queryItems = [
                 URLQueryItem(name: "id", value: photoId),
@@ -688,30 +810,40 @@ public actor JmApiClient {
             guard let url = comps.url else { return nil }
             let ts = JmCrypto.currentTimestampSeconds()
             var req = URLRequest(url: url)
-            req.timeoutInterval = 4
+            req.timeoutInterval = 5
             for (k, v) in JmCrypto.buildHeaders(timestamp: ts, tokenSecret: JmCrypto.defaultAppTokenSecret2) {
                 req.setValue(v, forHTTPHeaderField: k)
             }
             guard let (data, resp) = try? await session.data(for: req),
                   let http = resp as? HTTPURLResponse,
                   (200...299).contains(http.statusCode),
-                  let body = String(data: data, encoding: .utf8) else {
+                  let body = String(data: data, encoding: .utf8),
+                  !body.isEmpty else {
                 return nil
             }
+
+            var scrambleId: Int? = nil
             if let range = body.range(of: #"var\s+scramble_id\s*=\s*(\d+)\s*;"#, options: .regularExpression) {
                 let matched = String(body[range])
                 let digits = matched.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                return Int(digits) ?? JmCrypto.defaultScrambleId
+                scrambleId = Int(digits)
             }
-            return nil
+            let templateImages = Self.parseTemplateImageFileNames(from: body)
+            if scrambleId == nil && templateImages.isEmpty {
+                return nil
+            }
+            return ChapterTemplateResult(
+                scrambleId: scrambleId ?? JmCrypto.defaultScrambleId,
+                images: templateImages
+            )
         }
 
         if let working = lastWorkingApiBase, bases.first == working, let hit = await tryOne(working) {
             return hit
         }
 
-        let candidates = Array(bases.prefix(2))
-        return await withTaskGroup(of: Int?.self) { group in
+        let candidates = Array(bases.prefix(3))
+        return await withTaskGroup(of: ChapterTemplateResult?.self) { group in
             for candidate in candidates {
                 group.addTask { await tryOne(candidate) }
             }
@@ -721,8 +853,42 @@ public actor JmApiClient {
                     return val
                 }
             }
-            return JmCrypto.defaultScrambleId
+            return ChapterTemplateResult(scrambleId: JmCrypto.defaultScrambleId, images: [])
         }
+    }
+
+    /// 从 /chapter_view_template HTML 中提取 `images: ['00001.webp', ...]` 文件名列表
+    private nonisolated static func parseTemplateImageFileNames(from html: String) -> [String] {
+        let fullRange = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let blockRegex = try? NSRegularExpression(
+            pattern: #"images\s*:\s*\[([^\]]+)\]"#,
+            options: [.dotMatchesLineSeparators]
+        ),
+        let blockMatch = blockRegex.firstMatch(in: html, range: fullRange),
+        blockMatch.numberOfRanges > 1,
+        let blockRange = Range(blockMatch.range(at: 1), in: html) else {
+            return []
+        }
+
+        let listBody = String(html[blockRange])
+        let listRange = NSRange(listBody.startIndex..<listBody.endIndex, in: listBody)
+        guard let itemRegex = try? NSRegularExpression(
+            pattern: #"['"]([^'"]+\.(?:webp|jpg|jpeg|png|gif))['"]"#,
+            options: [.caseInsensitive]
+        ) else {
+            return []
+        }
+
+        var results: [String] = []
+        for match in itemRegex.matches(in: listBody, range: listRange) where match.numberOfRanges > 1 {
+            if let r = Range(match.range(at: 1), in: listBody) {
+                let name = String(listBody[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty {
+                    results.append(name)
+                }
+            }
+        }
+        return results
     }
 
     // MARK: - Parsing Helpers

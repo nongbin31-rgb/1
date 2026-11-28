@@ -38,8 +38,8 @@ public final class Anime4K: @unchecked Sendable {
     public var sizeMap: [String: (Float, Float)] = [:]
     public var bufferIndex: Int = -1
 
-    /// 按 Pass 函数名持久化缓存已编译的 MTLComputePipelineState 与采样器，避免每页重复构建管线
-    private var cachedPipelineStates: [String: MTLComputePipelineState] = [:]
+    /// 按 Pass 索引持久化缓存已编译的 MTLComputePipelineState 与采样器（同一 GLSL 文件内多个卷积层可能共用相同的 DESC/functionName，必须按索引隔离）
+    private var cachedPipelineStates: [Int: MTLComputePipelineState] = [:]
     private var cachedNearestSampler: MTLSamplerState?
     private var cachedLinearSampler: MTLSamplerState?
 
@@ -179,14 +179,14 @@ public final class Anime4K: @unchecked Sendable {
             }
 
             let pipelineState: MTLComputePipelineState
-            if let cached = cachedPipelineStates[shader.functionName] {
+            if let cached = cachedPipelineStates[i] {
                 pipelineState = cached
             } else {
                 guard let fn = library.makeFunction(name: shader.functionName) else {
                     throw Anime4KError.encoderFail("未能找到 Metal 计算入口: \(shader.functionName)")
                 }
                 let created = try device.makeComputePipelineState(function: fn)
-                cachedPipelineStates[shader.functionName] = created
+                cachedPipelineStates[i] = created
                 pipelineState = created
             }
             pipelineStates.append(pipelineState)
