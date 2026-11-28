@@ -1526,6 +1526,7 @@ public enum ReaderBackground: Int, Codable, CaseIterable, Identifiable, Sendable
 /// 真实纸张与材质纹理类型
 public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Sendable {
     case classic        = "Texture_0_classic_paper"       // 经典纸张
+    case classicWhite   = "Texture_0_classic_white"       // 原版经典白纸（直接使用 Texture_0 原图）
     case brownPaper     = "Texture_1_brown_paper"         // 包装纸/牛皮纸
     case whiteWall      = "Texture_2_white_wall"          // 白墙灰泥
     case grungePaper    = "Texture_3_grunge_paper"        // 草稿纸
@@ -1539,9 +1540,15 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         self == .classic
     }
 
+    /// 直接显示原始 Texture_0 位图，走单图 AspectFill 路径，不进行程序化颗粒生成
+    public var usesOriginalClassicImage: Bool {
+        self == .classicWhite
+    }
+
     public var displayName: String {
         switch self {
         case .classic:      return "经典"
+        case .classicWhite: return "经典白"
         case .brownPaper:   return "包装纸"
         case .whiteWall:    return "白墙"
         case .grungePaper:  return "草稿纸"
@@ -1553,6 +1560,7 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
     public var shortName: String {
         switch self {
         case .classic:      return "经典"
+        case .classicWhite: return "经典白"
         case .brownPaper:   return "包装纸"
         case .whiteWall:    return "白墙"
         case .grungePaper:  return "草稿"
@@ -1567,6 +1575,8 @@ public enum ReaderTextureType: String, Codable, CaseIterable, Identifiable, Send
         switch self {
         case .classic:
             // 经典粉刷纯白纸基：1:1 对齐 MangaPrism 纯白底布 (#FFFFFF)，确保漫画留白与彩漫零色差
+            return UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+        case .classicWhite:
             return UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
         case .brownPaper:
             // 进口包装牛皮纸：经典温厚牛皮棕 (RGB: 230, 215, 189)

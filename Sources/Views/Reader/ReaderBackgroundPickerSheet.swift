@@ -107,7 +107,7 @@ public struct ReaderBackgroundPickerSheet: View {
             HStack {
                 Text("真实材质纹理")
                 Spacer()
-                Text("6 款真实纸张与材质")
+                Text("\(ReaderTextureType.allCases.count) 款真实纸张与材质")
                     .font(.caption2)
                     .textCase(nil)
             }
@@ -135,7 +135,16 @@ public struct ReaderBackgroundPickerSheet: View {
                         for: item,
                         grainDensity: store.readerClassicGrainDensity
                     ) {
-                        if item.usesFineTilePattern {
+                        if item.usesOriginalClassicImage {
+                            Image(uiImage: img)
+                                .resizable()
+                                .interpolation(.high)
+                                .scaledToFill()
+                                .frame(minWidth: 0, maxWidth: .infinity)
+                                .frame(height: 72)
+                                .clipped()
+                                .blendMode(.multiply)
+                        } else if item.usesFineTilePattern {
                             Image(uiImage: img)
                                 .interpolation(.none)
                                 .resizable(resizingMode: .tile)

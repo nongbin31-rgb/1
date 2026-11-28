@@ -68,6 +68,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     public static func macroTileLogicalSize(for texture: ReaderTextureType) -> CGFloat {
         switch texture {
         case .classic:      return 128.0
+        case .classicWhite: return 280.0
         case .brownPaper:   return 220.0
         case .whiteWall:    return 260.0
         case .grungePaper:  return 240.0
@@ -86,6 +87,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
         zoomScale: CGFloat
     ) -> (coarse: Double, fine: Double) {
         let effBase = perceptualOpacity(for: texture, rawOpacity: baseOpacity)
+        if texture.usesOriginalClassicImage {
+            return (coarse: effBase, fine: 0.0)
+        }
         guard effBase > 0.001, zoomScale > 1.08 else {
             return (coarse: effBase, fine: 0.0)
         }
@@ -144,7 +148,10 @@ public final class ReaderTextureCache: @unchecked Sendable {
         }
 
         let loaded: UIImage?
-        if type.usesFineTilePattern {
+        if type.usesOriginalClassicImage {
+            loaded = loadTextureFromBundle(named: "Texture_0_classic_paper")
+                ?? loadTextureFromBundle(named: "Texture_0")
+        } else if type.usesFineTilePattern {
             let pct = Self.quantizedGrainDensityPercent(grainDensity)
             let screenScale: CGFloat = Thread.isMainThread ? max(UIScreen.main.scale, 2.0) : 3.0
             let plasterBase = classicPlasterBaseImage ?? {
@@ -173,6 +180,9 @@ public final class ReaderTextureCache: @unchecked Sendable {
         let key = cacheKey(for: type, grainDensity: grainDensity)
         if let cached = tiledImageCache.object(forKey: key) {
             return cached
+        }
+        if type.usesOriginalClassicImage {
+            return textureImage(for: type, grainDensity: grainDensity)
         }
         let baseImg: UIImage?
         if type.usesFineTilePattern {
@@ -208,7 +218,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取其它位图材质的舒展无接缝平铺切片（按材质分级至 220~320pt，采用偏移交叉羽化消除镜像格子感）
     public func seamlessDenseTileImage(for type: ReaderTextureType) -> UIImage? {
-        if type.usesFineTilePattern {
+        if type.usesFineTilePattern || type.usesOriginalClassicImage {
             return textureImage(for: type)
         }
         let key = "\(type.rawValue)_offset_wrap_tile" as NSString
@@ -232,7 +242,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
 
     /// 获取其它位图材质去色中性版的舒展无接缝平铺切片
     public func seamlessNeutralDenseTileImage(for type: ReaderTextureType) -> UIImage? {
-        if type.usesFineTilePattern {
+        if type.usesFineTilePattern || type.usesOriginalClassicImage {
             return textureImage(for: type)
         }
         let key = "\(type.rawValue)_neutral_offset_wrap_tile" as NSString
@@ -1116,6 +1126,7 @@ public final class ReaderTextureCache: @unchecked Sendable {
     private func shortKey(for type: ReaderTextureType) -> String {
         switch type {
         case .classic:      return "Texture_0"
+        case .classicWhite: return "Texture_0_classic_paper"
         case .brownPaper:   return "Texture_1"
         case .whiteWall:    return "Texture_2"
         case .grungePaper:  return "Texture_3"
@@ -1484,7 +1495,23 @@ public class ReaderBackgroundContainerView: UIView {
 
         let grainDensity = Double(textureGrainDensity)
         if let img = ReaderTextureCache.shared.textureImage(for: currentTexture, grainDensity: grainDensity) {
-            if currentTexture.usesFineTilePattern {
+            if currentTexture.usesOriginalClassicImage {
+                neutralTextureOverlayView.isHidden = true
+                neutralTextureOverlayView.image = nil
+                neutralTextureOverlayView.backgroundColor = .clear
+
+                textureOverlayView.isHidden = false
+                textureOverlayView.backgroundColor = .clear
+                textureOverlayView.contentMode = .scaleAspectFill
+                textureOverlayView.layer.magnificationFilter = .linear
+                textureOverlayView.layer.minificationFilter = .linear
+                textureOverlayView.image = img
+                textureOverlayView.alpha = 1.0
+
+                highlightOverlayView.isHidden = true
+                highlightOverlayView.image = nil
+                highlightOverlayView.alpha = 0.0
+            } else if currentTexture.usesFineTilePattern {
                 let tiled = ReaderTextureCache.shared.tiledTextureImage(for: currentTexture, grainDensity: grainDensity) ?? img
                 neutralTextureOverlayView.isHidden = true
                 neutralTextureOverlayView.image = nil
@@ -1654,7 +1681,18 @@ public struct PaperTextureOverlayView: View {
             )
             let clampedTint = min(max(tintOpacity, 0.0), 1.0)
 
-            switch phaseAnchor {
+            if texture.usesOriginalClassicImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .opacity(mip.coarse)
+                    .blendMode(.multiply)
+                    .allowsHitTesting(false)
+            } else {
+                switch phaseAnchor {
             case .local:
                 if texture.usesFineTilePattern {
                     // 经典高密粉刷微粒：双层细节纸纹 Mipmap 交叉过渡（1x 宏观 128pt + 2x 微观 64pt），纯 Multiply 正片叠底
@@ -1821,6 +1859,7 @@ public struct PaperTextureOverlayView: View {
                     }
                     .allowsHitTesting(false)
                 }
+            }
             }
         }
     }
