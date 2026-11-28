@@ -249,9 +249,9 @@ public struct ZoomableImageView: UIViewRepresentable {
             imageView.updateOverlayFrames()
 
             if applyToImage, let texture {
-                // 1. 物理纸张基准原生底色正片叠底 (支持 0%~100% 着色浓度调节，0% 时保留原图纯白不发黄)
+                // 1. 物理纸张基准原生底色正片叠底 (经典（白色）原图本身为纯白纸基，跳过冗余染色层)
                 let clampedTint = min(max(tintOpacity, 0.0), 1.0)
-                if clampedTint > 0.001 {
+                if !texture.usesOriginalAspectFillOverlay && clampedTint > 0.001 {
                     imageView.paperTintOverlayView.isHidden = false
                     imageView.paperTintOverlayView.image = UIImage.solidColorImage(color: texture.basePaperColor)
                     imageView.paperTintOverlayView.alpha = CGFloat(clampedTint)
@@ -292,6 +292,23 @@ public struct ZoomableImageView: UIViewRepresentable {
                         } else {
                             imageView.highlightOverlayView.image = nil
                         }
+                        updateZoomMipmapBlend(zoomScale: currentZoom)
+                    } else if texture.usesOriginalAspectFillOverlay {
+                        // 1:1 复刻原版可达经典（白色）：3456×5184 原图无损直出 + scaleAspectFill + 外层单层 multiplyBlendMode
+                        // 借助 alignedFrame 与四周留白 PaperTextureOverlayView 相位 100% 严丝合缝对齐
+                        imageView.neutralTextureOverlayView.isHidden = true
+                        imageView.neutralTextureOverlayView.image = nil
+                        imageView.neutralTextureOverlayView.backgroundColor = .clear
+
+                        imageView.textureOverlayView.isHidden = false
+                        imageView.textureOverlayView.backgroundColor = .clear
+                        imageView.textureOverlayView.contentMode = .scaleAspectFill
+                        imageView.textureOverlayView.layer.magnificationFilter = .linear
+                        imageView.textureOverlayView.layer.minificationFilter = .linear
+                        imageView.textureOverlayView.image = texImg
+                        imageView.textureOverlayView.alpha = 1.0
+
+                        imageView.highlightOverlayView.image = nil
                         updateZoomMipmapBlend(zoomScale: currentZoom)
                     } else {
                         imageView.neutralTextureOverlayView.backgroundColor = .clear

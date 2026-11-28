@@ -38,6 +38,11 @@ public final class Anime4K: @unchecked Sendable {
     public var sizeMap: [String: (Float, Float)] = [:]
     public var bufferIndex: Int = -1
 
+    /// 按 Pass 函数名持久化缓存已编译的 MTLComputePipelineState 与采样器，避免每页重复构建管线
+    private var cachedPipelineStates: [String: MTLComputePipelineState] = [:]
+    private var cachedNearestSampler: MTLSamplerState?
+    private var cachedLinearSampler: MTLSamplerState?
+
     public var outputW: Float = 0
     public var outputH: Float = 0
     public var textureInW: Float = 0
@@ -173,10 +178,17 @@ public final class Anime4K: @unchecked Sendable {
                 sizeMap[save] = (self.outputW, self.outputH)
             }
 
-            guard let fn = library.makeFunction(name: shader.functionName) else {
-                throw Anime4KError.encoderFail("未能找到 Metal 计算入口: \(shader.functionName)")
+            let pipelineState: MTLComputePipelineState
+            if let cached = cachedPipelineStates[shader.functionName] {
+                pipelineState = cached
+            } else {
+                guard let fn = library.makeFunction(name: shader.functionName) else {
+                    throw Anime4KError.encoderFail("未能找到 Metal 计算入口: \(shader.functionName)")
+                }
+                let created = try device.makeComputePipelineState(function: fn)
+                cachedPipelineStates[shader.functionName] = created
+                pipelineState = created
             }
-            let pipelineState = try device.makeComputePipelineState(function: fn)
             pipelineStates.append(pipelineState)
         }
     }
@@ -193,20 +205,37 @@ public final class Anime4K: @unchecked Sendable {
         bufferIndex = (bufferIndex + 1) % Anime4K.bufferCount
         if textureMap.count <= bufferIndex {
             textureMap.append([:])
-            let desc = MTLSamplerDescriptor()
-            desc.magFilter = .nearest
-            desc.minFilter = .nearest
-            desc.sAddressMode = .clampToEdge
-            desc.tAddressMode = .clampToEdge
-            guard let nearestSampler = device.makeSamplerState(descriptor: desc) else {
-                throw Anime4KError.encoderCreationFail("NearestSampler")
+            let nearestSampler: MTLSamplerState
+            if let cached = cachedNearestSampler {
+                nearestSampler = cached
+            } else {
+                let desc = MTLSamplerDescriptor()
+                desc.magFilter = .nearest
+                desc.minFilter = .nearest
+                desc.sAddressMode = .clampToEdge
+                desc.tAddressMode = .clampToEdge
+                guard let created = device.makeSamplerState(descriptor: desc) else {
+                    throw Anime4KError.encoderCreationFail("NearestSampler")
+                }
+                cachedNearestSampler = created
+                nearestSampler = created
             }
             nearestSamplerStates.append(nearestSampler)
 
-            desc.magFilter = .linear
-            desc.minFilter = .linear
-            guard let linearSampler = device.makeSamplerState(descriptor: desc) else {
-                throw Anime4KError.encoderCreationFail("LinearSampler")
+            let linearSampler: MTLSamplerState
+            if let cached = cachedLinearSampler {
+                linearSampler = cached
+            } else {
+                let desc = MTLSamplerDescriptor()
+                desc.magFilter = .linear
+                desc.minFilter = .linear
+                desc.sAddressMode = .clampToEdge
+                desc.tAddressMode = .clampToEdge
+                guard let created = device.makeSamplerState(descriptor: desc) else {
+                    throw Anime4KError.encoderCreationFail("LinearSampler")
+                }
+                cachedLinearSampler = created
+                linearSampler = created
             }
             linearSamplerStates.append(linearSampler)
         }

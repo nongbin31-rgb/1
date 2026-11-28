@@ -6,6 +6,7 @@ import Foundation
 /// 超分模型大类
 public enum ImageUpscalerModel: String, Codable, CaseIterable, Identifiable {
     case anime4k = "anime4k"
+    case anime4kCoreML = "anime4kCoreML"
     case waifu2x = "waifu2x"
 
     public var id: String { rawValue }
@@ -14,14 +15,19 @@ public enum ImageUpscalerModel: String, Codable, CaseIterable, Identifiable {
     public var displayName: String {
         switch self {
         case .anime4k: return "Anime4K"
+        case .anime4kCoreML: return "Anime4K AI"
         case .waifu2x: return "Waifu2x"
         }
     }
 
     public var descriptionText: String {
         switch self {
-        case .anime4k: return "基于 Metal GPU 像素着色器管线，毫秒级实时渲染，极低功耗"
-        case .waifu2x: return "基于 Apple Neural Engine / CoreML 深度卷积网络，印刷级画质重构"
+        case .anime4k:
+            return "基于 Metal GPU 像素着色器管线，毫秒级实时渲染，极低功耗，支持超长条漫自动分条无缝拼接"
+        case .anime4kCoreML:
+            return "基于 Apple Neural Engine / CoreML 的轻量化 Anime4K 神经网络，支持 1x 修复、2x/4x 预设与 GAN 强锐化"
+        case .waifu2x:
+            return "基于 Apple Neural Engine / CoreML 深度卷积网络，印刷级 2x 无损放大与降噪"
         }
     }
 }
@@ -208,22 +214,137 @@ public struct Anime4kConfig: Codable, Equatable, Hashable {
     }
 }
 
+// MARK: - 3.5 Anime4K CoreML 神经网络模型预设（ANE 轻量化 1x/2x/3x/4x & GAN）
+
+/// Anime4K CoreML 预编译神经网络模型（对应 Resources/Anime4K_CoreML/*.mlmodelc）
+public enum Anime4kCoreMLModel: String, Codable, CaseIterable, Identifiable {
+    // 2x 完整管线预设（与 GLSL 同款配方，运行于 ANE 神经网络）
+    case perset2x_a_a_fast = "perset2x_a_a_fast"
+    case perset2x_a_a_hq   = "perset2x_a_a_hq"
+    case perset2x_b_b_fast = "perset2x_b_b_fast"
+    case perset2x_b_b_hq   = "perset2x_b_b_hq"
+    case perset2x_c_a_fast = "perset2x_c_a_fast"
+    case perset2x_c_a_hq   = "perset2x_c_a_hq"
+
+    // GAN 对抗生成强锐化超分（2x / 3x / 4x）
+    case model_sr_m_gan    = "model_sr_m_gan"
+    case model_sr_l_gan    = "model_sr_l_gan"
+    case model_sr_vl_gan   = "model_sr_vl_gan"
+    case model_sr_ul_gan   = "model_sr_ul_gan"
+    case model_sr_uul_gan  = "model_sr_uul_gan"
+
+    // 4x 一步到位超分预设（适合超低清扫描老漫）
+    case perset4x_a_a_fast = "perset4x_a_a_fast"
+    case perset4x_a_a_hq   = "perset4x_a_a_hq"
+    case perset4x_b_b_fast = "perset4x_b_b_fast"
+    case perset4x_b_b_hq   = "perset4x_b_b_hq"
+    case perset4x_c_a_fast = "perset4x_c_a_fast"
+    case perset4x_c_a_hq   = "perset4x_c_a_hq"
+
+    // 2x 降噪超分 & 1x 原尺寸画质修复
+    case model_sr_denoise_m    = "model_sr_denoise_m"
+    case model_sr_denoise_ul   = "model_sr_denoise_ul"
+    case model_restore_m       = "model_restore_m"
+    case model_restore_ul      = "model_restore_ul"
+    case model_restore_soft_ul = "model_restore_soft_ul"
+
+    public var id: String { rawValue }
+
+    /// 精确输出放大倍率（严格对齐模型 MIL 输出张量 128 / 256 / 384 / 512）
+    public var scaleFactor: Int {
+        switch self {
+        case .model_restore_m, .model_restore_ul, .model_restore_soft_ul:
+            return 1
+        case .perset2x_a_a_fast, .perset2x_a_a_hq,
+             .perset2x_b_b_fast, .perset2x_b_b_hq,
+             .perset2x_c_a_fast, .perset2x_c_a_hq,
+             .model_sr_m_gan,
+             .model_sr_denoise_m, .model_sr_denoise_ul:
+            return 2
+        case .model_sr_l_gan, .model_sr_vl_gan:
+            return 3
+        case .model_sr_ul_gan, .model_sr_uul_gan,
+             .perset4x_a_a_fast, .perset4x_a_a_hq,
+             .perset4x_b_b_fast, .perset4x_b_b_hq,
+             .perset4x_c_a_fast, .perset4x_c_a_hq:
+            return 4
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .perset2x_a_a_fast:     return "2x · A+A 高速 (推荐)"
+        case .perset2x_a_a_hq:       return "2x · A+A 高质量"
+        case .perset2x_b_b_fast:     return "2x · B+B 软线条高速"
+        case .perset2x_b_b_hq:       return "2x · B+B 软线条高质量"
+        case .perset2x_c_a_fast:     return "2x · C+A 降噪高速"
+        case .perset2x_c_a_hq:       return "2x · C+A 降噪高质量"
+        case .model_sr_m_gan:        return "GAN 2x · 均衡锐化 (M)"
+        case .model_sr_l_gan:        return "GAN 3x · 高清锐化 (L)"
+        case .model_sr_vl_gan:       return "GAN 3x · 超清锐化 (VL)"
+        case .model_sr_ul_gan:       return "GAN 4x · 旗舰锐化 (UL)"
+        case .model_sr_uul_gan:      return "GAN 4x · 终极锐化 (UUL)"
+        case .perset4x_a_a_fast:     return "4x · A+A 高速"
+        case .perset4x_a_a_hq:       return "4x · A+A 高质量"
+        case .perset4x_b_b_fast:     return "4x · B+B 软线条高速"
+        case .perset4x_b_b_hq:       return "4x · B+B 软线条高质量"
+        case .perset4x_c_a_fast:     return "4x · C+A 降噪高速"
+        case .perset4x_c_a_hq:       return "4x · C+A 降噪高质量"
+        case .model_sr_denoise_m:    return "2x · 轻量降噪超分 (M)"
+        case .model_sr_denoise_ul:   return "2x · 深度降噪超分 (UL)"
+        case .model_restore_m:       return "1x · 原尺寸去糊修复 (M)"
+        case .model_restore_ul:      return "1x · 原尺寸旗舰修复 (UL)"
+        case .model_restore_soft_ul: return "1x · 原尺寸柔化修复 (Soft UL)"
+        }
+    }
+
+    public var modelBundleName: String {
+        "\(rawValue).mlmodelc"
+    }
+}
+
+/// 智能跳过高清原图宽度阈值（原图宽度达标时自动跳过放大超分，省电省内存）
+public enum UpscalerSmartSkipThreshold: Int, Codable, CaseIterable, Identifiable {
+    case disabled = 0
+    case width1600 = 1600
+    case width2000 = 2000
+    case width2400 = 2400
+
+    public var id: Int { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .disabled:  return "关闭（全部执行）"
+        case .width1600: return "宽 ≥ 1600px 自动跳过"
+        case .width2000: return "宽 ≥ 2000px 自动跳过"
+        case .width2400: return "宽 ≥ 2400px 自动跳过"
+        }
+    }
+}
+
 // MARK: - 4. 统一超分辨率全局/单本配置（对齐原版 ImageUpscalerConfig）
 
 public struct ImageUpscalerConfig: Codable, Equatable, Hashable {
-    /// 选用的超分引擎（Anime4K 实时或 Waifu2x 深度）
+    /// 选用的超分引擎（Anime4K Metal / Anime4K CoreML / Waifu2x CoreML）
     public var model: ImageUpscalerModel
-    /// Anime4K 管线预设与微调参数
+    /// Anime4K Metal 管线预设与微调参数
     public var anime4k: Anime4kConfig
+    /// Anime4K CoreML 神经网络模型预设
+    public var anime4kCoreML: Anime4kCoreMLModel
     /// Waifu2x 模型预设
     public var waifu2x: Waifu2xModel
-    /// 是否解除超分尺寸限制（默认关闭：使用 1200 万总像素智能保护；开启后跳过软件尺寸拦截，仅受硬件限制）
+    /// 是否解除超分尺寸限制（默认关闭：按输出总像素智能保护；开启后跳过软件尺寸拦截）
     public var bypassSizeLimit: Bool
+    /// 智能跳过高清原图宽度阈值（0 表示关闭；非 0 时原图宽度 ≥ 阈值且放大倍率 > 1 则自动跳过超分）
+    public var smartSkipMinWidth: Int
 
-    /// 默认总像素保护上限（1200 万像素 ≈ 2x 输出位图 192MB，兼顾 800×8000 等模糊条漫长图与防 Jetsam OOM）
+    /// 默认最大允许输入总像素（2x 引擎等价 1200 万输入像素）
     public static let maxPixelCountThreshold: Int = 12_000_000
 
-    /// Anime4K / Metal 2x 纹理输入单边硬件理论上限（Apple4+ GPU 纹理单边上限 16384px，对应输入 ≤ 8192px）
+    /// 默认最大允许输出总像素（4800 万输出像素 ≈ 192MB RGBA8，兼容 2x 12M 输入、4x 3M 输入、1x 48M 输入，防 Jetsam OOM）
+    public static let maxOutputPixelCountThreshold: Int = 48_000_000
+
+    /// Anime4K / Metal 单次 2x 纹理输入单边硬件上限（超过此单边将自动启用重叠分条无缝拼接）
     public static let maxMetalInputDimension: Int = 8192
 
     /// Anime4K 官方进阶说明文档链接
@@ -232,42 +353,64 @@ public struct ImageUpscalerConfig: Codable, Equatable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case model
         case anime4k
+        case anime4kCoreML
         case waifu2x
         case bypassSizeLimit
+        case smartSkipMinWidth
     }
 
     public init(
         model: ImageUpscalerModel = .anime4k,
         anime4k: Anime4kConfig = Anime4kConfig(),
+        anime4kCoreML: Anime4kCoreMLModel = .perset2x_a_a_fast,
         waifu2x: Waifu2xModel = .anime_noise1_scale2x,
-        bypassSizeLimit: Bool = false
+        bypassSizeLimit: Bool = false,
+        smartSkipMinWidth: Int = 0
     ) {
         self.model = model
         self.anime4k = anime4k
+        self.anime4kCoreML = anime4kCoreML
         self.waifu2x = waifu2x
         self.bypassSizeLimit = bypassSizeLimit
+        self.smartSkipMinWidth = smartSkipMinWidth
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.model = try container.decodeIfPresent(ImageUpscalerModel.self, forKey: .model) ?? .anime4k
         self.anime4k = try container.decodeIfPresent(Anime4kConfig.self, forKey: .anime4k) ?? Anime4kConfig()
+        self.anime4kCoreML = try container.decodeIfPresent(Anime4kCoreMLModel.self, forKey: .anime4kCoreML) ?? .perset2x_a_a_fast
         self.waifu2x = try container.decodeIfPresent(Waifu2xModel.self, forKey: .waifu2x) ?? .anime_noise1_scale2x
         self.bypassSizeLimit = try container.decodeIfPresent(Bool.self, forKey: .bypassSizeLimit) ?? false
+        self.smartSkipMinWidth = try container.decodeIfPresent(Int.self, forKey: .smartSkipMinWidth) ?? 0
+    }
+
+    /// 当前所选引擎与模型的实际输出倍率（1x / 2x / 3x / 4x）
+    public var outputScaleFactor: Int {
+        switch model {
+        case .anime4k:
+            return 2
+        case .anime4kCoreML:
+            return anime4kCoreML.scaleFactor
+        case .waifu2x:
+            return 2
+        }
     }
 
     public var cacheKey: String {
         switch model {
         case .anime4k:
             return "a4k_\(anime4k.cacheKey)"
+        case .anime4kCoreML:
+            return "a4kml_\(anime4kCoreML.rawValue)"
         case .waifu2x:
             return "w2x_\(waifu2x.rawValue)"
         }
     }
 
-    /// 视图重载标识（含尺寸限制开关状态，切换时立即触发页面重新评估是否执行超分）
+    /// 视图重载标识（含尺寸限制与智能跳过阈值，切换时立即触发页面重新评估是否执行超分）
     public var reloadKey: String {
-        "\(cacheKey)_b\(bypassSizeLimit ? 1 : 0)"
+        "\(cacheKey)_b\(bypassSizeLimit ? 1 : 0)_s\(smartSkipMinWidth)"
     }
 
     public var summaryText: String {
@@ -278,6 +421,8 @@ public struct ImageUpscalerConfig: Codable, Equatable, Hashable {
             if anime4k.darkenLines { extras.append("线条加黑") }
             let suffix = extras.isEmpty ? "" : " + \(extras.joined(separator: " / "))"
             return "Anime4K · \(anime4k.preset.displayName)\(suffix)"
+        case .anime4kCoreML:
+            return "Anime4K AI · \(anime4kCoreML.displayName)"
         case .waifu2x:
             return "Waifu2x · \(waifu2x.displayName)"
         }

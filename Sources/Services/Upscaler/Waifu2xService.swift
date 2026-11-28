@@ -1,3 +1,4 @@
+import Accelerate
 import CoreGraphics
 import CoreML
 import Darwin
@@ -229,66 +230,138 @@ public final class Waifu2xService: @unchecked Sendable {
         }
         let mlModel = try getOrLoadMLModel(at: modelURL)
 
-        // 5. 准备可复用的输入 MLMultiArray [3, 156, 156]（Double 类型，严格按 strides 写入）
+        // 5. 准备可复用的 Float32 输入 MLMultiArray 池 [3, 156, 156]
+        //    iOS 16+ 使用 MLArrayBatchProvider 4 块并发喂给 ANE/GPU；iOS 15 保持单块稳定路径，内存与带宽较 Double 减半
+        let batchSize: Int
+        if #available(iOS 16.0, *) {
+            batchSize = min(4, totalTiles)
+        } else {
+            batchSize = 1
+        }
+
         let inputShape: [NSNumber] = [3, NSNumber(value: inputTileSize), NSNumber(value: inputTileSize)]
-        let inputMultiArray = try MLMultiArray(shape: inputShape, dataType: .double)
-        let inStrides = Self.extractChannelStrides(from: inputMultiArray, tileSize: inputTileSize)
-        let inputCapacity = max(inputMultiArray.count, inStrides.minRequiredCount)
-        let inputPtr = inputMultiArray.dataPointer.bindMemory(to: Double.self, capacity: inputCapacity)
-        let featureProvider = Waifu2xMLFeatureProvider(input: inputMultiArray)
+        var inputArrays: [MLMultiArray] = []
+        var inputStridesList: [TensorChannelStrides] = []
+        var inputPtrs: [UnsafeMutablePointer<Float>] = []
+        var providers: [Waifu2xMLFeatureProvider] = []
+        inputArrays.reserveCapacity(batchSize)
+        inputStridesList.reserveCapacity(batchSize)
+        inputPtrs.reserveCapacity(batchSize)
+        providers.reserveCapacity(batchSize)
 
-        let inv255 = 1.0 / 255.0
+        for _ in 0..<batchSize {
+            let arr = try MLMultiArray(shape: inputShape, dataType: .float32)
+            let strides = Self.extractChannelStrides(from: arr, tileSize: inputTileSize)
+            let capacity = max(arr.count, strides.minRequiredCount)
+            let ptr = arr.dataPointer.bindMemory(to: Float.self, capacity: capacity)
+            inputArrays.append(arr)
+            inputStridesList.append(strides)
+            inputPtrs.append(ptr)
+            providers.append(Waifu2xMLFeatureProvider(input: arr))
+        }
 
-        // 6. 逐块执行推理并填充目标缓冲区（每块前检查取消标志，翻页/切配置即时释放队列）
-        for (tileIndex, rect) in rects.enumerated() {
+        // 复用行级 vDSP 临时缓冲，避免在分块读回循环中反复分配堆内存
+        var rowR = [Float](repeating: 0, count: outputTileSize)
+        var rowG = [Float](repeating: 0, count: outputTileSize)
+        var rowB = [Float](repeating: 0, count: outputTileSize)
+        var byteR = [UInt8](repeating: 0, count: outputTileSize)
+        var byteG = [UInt8](repeating: 0, count: outputTileSize)
+        var byteB = [UInt8](repeating: 0, count: outputTileSize)
+
+        let inv255: Float = 1.0 / 255.0
+
+        // 6. 按批执行推理并填充目标缓冲区（每批前检查取消标志，翻页/切配置即时释放队列）
+        var cursor = 0
+        while cursor < totalTiles {
             if cancelFlag.isCancelled {
                 throw CancellationError()
             }
 
-            let originX = Int(rect.origin.x)
-            let originY = Int(rect.origin.y)
+            let currentBatchCount = min(batchSize, totalTiles - cursor)
 
-            // 采样原图像素至 [3, 156, 156]，边界处采用边缘复制 (Edge Clamping)
-            for py in 0..<inputTileSize {
-                let sampleY = min(max(originY - shrinkSize + py, 0), height - 1)
-                let rowOffset = sampleY * width
-                let planeRow = py * inStrides.yStride
+            // 填充当前批次的全部输入分块（边界 Edge Clamping）
+            for b in 0..<currentBatchCount {
+                let rect = rects[cursor + b]
+                let originX = Int(rect.origin.x)
+                let originY = Int(rect.origin.y)
+                let inStrides = inputStridesList[b]
+                let inputPtr = inputPtrs[b]
+                let gBase = inStrides.cStride
+                let bBase = inStrides.cStride * 2
 
-                for px in 0..<inputTileSize {
-                    let sampleX = min(max(originX - shrinkSize + px, 0), width - 1)
-                    let pixelIdx = (rowOffset + sampleX) * 4
+                for py in 0..<inputTileSize {
+                    let sampleY = min(max(originY - shrinkSize + py, 0), height - 1)
+                    let rowOffset = sampleY * width
+                    let planeRow = py * inStrides.yStride
 
-                    let r = Double(srcPtr[pixelIdx]) * inv255
-                    let g = Double(srcPtr[pixelIdx + 1]) * inv255
-                    let b = Double(srcPtr[pixelIdx + 2]) * inv255
+                    for px in 0..<inputTileSize {
+                        let sampleX = min(max(originX - shrinkSize + px, 0), width - 1)
+                        let pixelIdx = (rowOffset + sampleX) * 4
 
-                    let offsetInPlane = planeRow + px * inStrides.xStride
-                    inputPtr[offsetInPlane] = r
-                    inputPtr[inStrides.cStride + offsetInPlane] = g
-                    inputPtr[inStrides.cStride * 2 + offsetInPlane] = b
+                        let offsetInPlane = planeRow + px * inStrides.xStride
+                        inputPtr[offsetInPlane] = Float(srcPtr[pixelIdx]) * inv255
+                        inputPtr[gBase + offsetInPlane] = Float(srcPtr[pixelIdx + 1]) * inv255
+                        inputPtr[bBase + offsetInPlane] = Float(srcPtr[pixelIdx + 2]) * inv255
+                    }
                 }
             }
 
-            // 单块推理放入 autoreleasepool，防止超长条漫数百个分块导致 CoreML 临时对象持续堆积
+            // 单批推理放入 autoreleasepool，防止超长条漫数百个分块导致 CoreML 临时对象持续堆积
             try autoreleasepool {
-                let prediction = try mlModel.prediction(from: featureProvider)
-                guard let outputArray = prediction.featureValue(for: "conv7")?.multiArrayValue else {
-                    throw Waifu2xServiceError.inferenceFailed("未找到输出层 conv7")
+                if currentBatchCount == 1 {
+                    let prediction = try mlModel.prediction(from: providers[0])
+                    guard let outputArray = prediction.featureValue(for: "conv7")?.multiArrayValue else {
+                        throw Waifu2xServiceError.inferenceFailed("未找到输出层 conv7")
+                    }
+                    let rect = rects[cursor]
+                    Self.writeOutputTile(
+                        outputArray: outputArray,
+                        outputTileSize: outputTileSize,
+                        destOriginX: Int(rect.origin.x) * outScale,
+                        destOriginY: Int(rect.origin.y) * outScale,
+                        targetWidth: targetWidth,
+                        targetHeight: targetHeight,
+                        dstPixels: dstPtr,
+                        rowR: &rowR,
+                        rowG: &rowG,
+                        rowB: &rowB,
+                        byteR: &byteR,
+                        byteG: &byteG,
+                        byteB: &byteB
+                    )
+                } else {
+                    let batchProvider = MLArrayBatchProvider(array: Array(providers[0..<currentBatchCount]))
+                    let batchOutput = try mlModel.predictions(fromBatch: batchProvider)
+                    guard batchOutput.count == currentBatchCount else {
+                        throw Waifu2xServiceError.inferenceFailed("批量推理输出数量不匹配")
+                    }
+                    for b in 0..<currentBatchCount {
+                        let prediction = batchOutput.features(at: b)
+                        guard let outputArray = prediction.featureValue(for: "conv7")?.multiArrayValue else {
+                            throw Waifu2xServiceError.inferenceFailed("未找到输出层 conv7")
+                        }
+                        let rect = rects[cursor + b]
+                        Self.writeOutputTile(
+                            outputArray: outputArray,
+                            outputTileSize: outputTileSize,
+                            destOriginX: Int(rect.origin.x) * outScale,
+                            destOriginY: Int(rect.origin.y) * outScale,
+                            targetWidth: targetWidth,
+                            targetHeight: targetHeight,
+                            dstPixels: dstPtr,
+                            rowR: &rowR,
+                            rowG: &rowG,
+                            rowB: &rowB,
+                            byteR: &byteR,
+                            byteG: &byteG,
+                            byteB: &byteB
+                        )
+                    }
                 }
-
-                // 将 conv7 [3, 284, 284] 输出写入目标大图
-                Self.writeOutputTile(
-                    outputArray: outputArray,
-                    outputTileSize: outputTileSize,
-                    destOriginX: originX * outScale,
-                    destOriginY: originY * outScale,
-                    targetWidth: targetWidth,
-                    targetHeight: targetHeight,
-                    dstPixels: dstPtr
-                )
             }
 
-            let percent = Int(Double(tileIndex + 1) / Double(totalTiles) * 100)
+            cursor += currentBatchCount
+            let percent = Int(Double(cursor) / Double(totalTiles) * 100)
             progress?("\(percent)%")
         }
 
@@ -405,6 +478,81 @@ public final class Waifu2xService: @unchecked Sendable {
         return UInt8(scaled)
     }
 
+    /// vDSP 矢量化快路径：将 Float32 平面 RGB 批量缩放/钳位并转为 UInt8 写入目标 RGBA 位图
+    private static func copyFloat32PlanesSIMD(
+        _ ptr: UnsafePointer<Float>,
+        strides: TensorChannelStrides,
+        outputTileSize: Int,
+        destOriginX: Int,
+        destOriginY: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+        dstPixels: UnsafeMutablePointer<UInt8>,
+        rowR: inout [Float],
+        rowG: inout [Float],
+        rowB: inout [Float],
+        byteR: inout [UInt8],
+        byteG: inout [UInt8],
+        byteB: inout [UInt8]
+    ) {
+        let validXStart = max(0, -destOriginX)
+        let validXEnd = min(outputTileSize, targetWidth - destOriginX)
+        let validWidth = validXEnd - validXStart
+        guard validWidth > 0 else { return }
+
+        let validYStart = max(0, -destOriginY)
+        let validYEnd = min(outputTileSize, targetHeight - destOriginY)
+        guard validYStart < validYEnd else { return }
+
+        let rPtr = ptr
+        let gPtr = ptr.advanced(by: strides.cStride)
+        let bPtr = ptr.advanced(by: strides.cStride * 2)
+        let yStride = strides.yStride
+
+        var scale255: Float = 255.0
+        var low: Float = 0.0
+        var high: Float = 255.0
+        let count = vDSP_Length(validWidth)
+
+        for sy in validYStart..<validYEnd {
+            let srcRowOffset = sy * yStride + validXStart
+            let rSrc = rPtr.advanced(by: srcRowOffset)
+            let gSrc = gPtr.advanced(by: srcRowOffset)
+            let bSrc = bPtr.advanced(by: srcRowOffset)
+
+            rowR.withUnsafeMutableBufferPointer { buf in
+                guard let base = buf.baseAddress else { return }
+                vDSP_vsmul(rSrc, 1, &scale255, base, 1, count)
+                vDSP_vclip(base, 1, &low, &high, base, 1, count)
+                vDSP_vfixu8(base, 1, &byteR, 1, count)
+            }
+
+            rowG.withUnsafeMutableBufferPointer { buf in
+                guard let base = buf.baseAddress else { return }
+                vDSP_vsmul(gSrc, 1, &scale255, base, 1, count)
+                vDSP_vclip(base, 1, &low, &high, base, 1, count)
+                vDSP_vfixu8(base, 1, &byteG, 1, count)
+            }
+
+            rowB.withUnsafeMutableBufferPointer { buf in
+                guard let base = buf.baseAddress else { return }
+                vDSP_vsmul(bSrc, 1, &scale255, base, 1, count)
+                vDSP_vclip(base, 1, &low, &high, base, 1, count)
+                vDSP_vfixu8(base, 1, &byteB, 1, count)
+            }
+
+            let dy = destOriginY + sy
+            var dstIdx = (dy * targetWidth + destOriginX + validXStart) * 4
+            for x in 0..<validWidth {
+                dstPixels[dstIdx]     = byteR[x]
+                dstPixels[dstIdx + 1] = byteG[x]
+                dstPixels[dstIdx + 2] = byteB[x]
+                dstPixels[dstIdx + 3] = 255
+                dstIdx += 4
+            }
+        }
+    }
+
     /// 将平面 RGB 缓冲区的单个分块快速写入目标 RGBA 位图指针（严格按真实 strides 读取，防对齐错位与 NaN 崩溃）
     private static func copyChannelPlanes<T>(
         _ ptr: UnsafePointer<T>,
@@ -444,7 +592,7 @@ public final class Waifu2xService: @unchecked Sendable {
         }
     }
 
-    /// 安全读取 conv7 [3, 284, 284] 输出并直接写入目标像素指针（零拷贝，支持 Double、Float32、Float16 任意精度与对齐步长）
+    /// 安全读取 conv7 [3, 284, 284] 输出并直接写入目标像素指针（Float32 连续行启用 vDSP SIMD 加速，兼容 Double/Float16 与任意步长）
     private static func writeOutputTile(
         outputArray: MLMultiArray,
         outputTileSize: Int, // 284
@@ -452,11 +600,51 @@ public final class Waifu2xService: @unchecked Sendable {
         destOriginY: Int,
         targetWidth: Int,
         targetHeight: Int,
-        dstPixels: UnsafeMutablePointer<UInt8>
+        dstPixels: UnsafeMutablePointer<UInt8>,
+        rowR: inout [Float],
+        rowG: inout [Float],
+        rowB: inout [Float],
+        byteR: inout [UInt8],
+        byteG: inout [UInt8],
+        byteB: inout [UInt8]
     ) {
         let strides = extractChannelStrides(from: outputArray, tileSize: outputTileSize)
         let capacity = max(outputArray.count, strides.minRequiredCount)
         let dataType = outputArray.dataType
+
+        if dataType == .float32 {
+            let ptr = outputArray.dataPointer.bindMemory(to: Float.self, capacity: capacity)
+            if strides.xStride == 1 {
+                copyFloat32PlanesSIMD(
+                    ptr,
+                    strides: strides,
+                    outputTileSize: outputTileSize,
+                    destOriginX: destOriginX,
+                    destOriginY: destOriginY,
+                    targetWidth: targetWidth,
+                    targetHeight: targetHeight,
+                    dstPixels: dstPixels,
+                    rowR: &rowR,
+                    rowG: &rowG,
+                    rowB: &rowB,
+                    byteR: &byteR,
+                    byteG: &byteG,
+                    byteB: &byteB
+                )
+            } else {
+                copyChannelPlanes(
+                    ptr,
+                    strides: strides,
+                    outputTileSize: outputTileSize,
+                    destOriginX: destOriginX,
+                    destOriginY: destOriginY,
+                    targetWidth: targetWidth,
+                    targetHeight: targetHeight,
+                    dstPixels: dstPixels
+                ) { Double($0) }
+            }
+            return
+        }
 
         if dataType == .double {
             let ptr = outputArray.dataPointer.bindMemory(to: Double.self, capacity: capacity)
@@ -470,21 +658,6 @@ public final class Waifu2xService: @unchecked Sendable {
                 targetHeight: targetHeight,
                 dstPixels: dstPixels
             ) { $0 }
-            return
-        }
-
-        if dataType == .float32 {
-            let ptr = outputArray.dataPointer.bindMemory(to: Float.self, capacity: capacity)
-            copyChannelPlanes(
-                ptr,
-                strides: strides,
-                outputTileSize: outputTileSize,
-                destOriginX: destOriginX,
-                destOriginY: destOriginY,
-                targetWidth: targetWidth,
-                targetHeight: targetHeight,
-                dstPixels: dstPixels
-            ) { Double($0) }
             return
         }
 

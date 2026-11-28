@@ -223,8 +223,8 @@ public struct ReaderImageUpscalerConfigView: View {
 
             Text(
                 store.upscalerConfig.bypassSizeLimit
-                    ? "已解除 1200 万总像素限制，超巨图可能触发高内存占用或闪退（Anime4K 仍受 Metal 单边 8192px 硬件上限约束）。"
-                    : "默认按总像素上限（1200 万像素）智能保护，支持 800×8000 等条漫长图超分；需要处理更巨幅原图可开启下方解除开关。"
+                    ? "已解除 4800 万输出像素限制，超巨图或 4x 模式可能触发高内存占用或闪退（Anime4K 支持超长单边自动分条拼接）。"
+                    : "默认按输出总像素上限（4800 万像素，等价 2x 12M 输入 / 4x 3M 输入）智能保护；Anime4K 超长条漫已支持自动分条无缝拼接。"
             )
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.6))
@@ -232,7 +232,7 @@ public struct ReaderImageUpscalerConfigView: View {
 
             Divider().background(Color.white.opacity(0.2))
 
-            // 引擎切换：Anime4K / Waifu2x
+            // 引擎切换：Anime4K / Anime4K AI / Waifu2x
             Picker("超分引擎", selection: $store.upscalerConfig.model) {
                 ForEach(ImageUpscalerModel.allCases) { m in
                     Text(m.displayName).tag(m)
@@ -241,10 +241,28 @@ public struct ReaderImageUpscalerConfigView: View {
             .pickerStyle(.segmented)
 
             // 各引擎专属参数
-            if store.upscalerConfig.model == .anime4k {
+            switch store.upscalerConfig.model {
+            case .anime4k:
                 anime4kSettingsSection
-            } else {
+            case .anime4kCoreML:
+                anime4kCoreMLSettingsSection
+            case .waifu2x:
                 waifu2xSettingsSection
+            }
+
+            // 高清原图智能跳过
+            HStack {
+                Text("高清原图跳过")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Spacer()
+                Picker("高清原图跳过", selection: $store.upscalerConfig.smartSkipMinWidth) {
+                    ForEach(UpscalerSmartSkipThreshold.allCases) { threshold in
+                        Text(threshold.displayName).tag(threshold.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.white)
             }
 
             // 增强后平滑淡入
@@ -337,6 +355,34 @@ public struct ReaderImageUpscalerConfigView: View {
         }
     }
 
+    // MARK: - Anime4K CoreML 配置项
+
+    private var anime4kCoreMLSettingsSection: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("神经网络模型")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Spacer()
+                Text("输出 \(store.upscalerConfig.anime4kCoreML.scaleFactor)x · ANE")
+                    .font(.caption)
+                    .foregroundColor(.cyan)
+            }
+
+            Picker("Anime4K AI 模型", selection: $store.upscalerConfig.anime4kCoreML) {
+                ForEach(Anime4kCoreMLModel.allCases) { m in
+                    Text(m.displayName).tag(m)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(8)
+        }
+    }
+
     // MARK: - Waifu2x 配置项
 
     private var waifu2xSettingsSection: some View {
@@ -402,6 +448,18 @@ public struct ReaderImageUpscalerConfigView: View {
                     config: store.upscalerConfig.anime4k,
                     bypassSizeLimit: store.upscalerConfig.bypassSizeLimit
                 )
+            case .anime4kCoreML:
+                result = try await Anime4kCoreMLService.shared.enhance(
+                    image: target,
+                    model: store.upscalerConfig.anime4kCoreML,
+                    bypassSizeLimit: store.upscalerConfig.bypassSizeLimit,
+                    progress: { pct in
+                        DispatchQueue.main.async {
+                            guard self.previewGeneration == generation else { return }
+                            self.enhanceProgressText = pct
+                        }
+                    }
+                )
             case .waifu2x:
                 result = try await Waifu2xService.shared.enhance(
                     image: target,
@@ -452,29 +510,37 @@ public struct ReaderImageUpscalerConfigView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("关于 AI 画质增强")
                         .font(.title2.bold())
-                    Text("本阅读器内置了端侧双轨超分辨率画质增强管线：")
+                    Text("本阅读器内置了端侧三轨超分辨率画质增强管线：")
                         .foregroundColor(.secondary)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("1. Anime4K (Metal 实时级)")
+                        Text("1. Anime4K (Metal GPU 实时级)")
                             .font(.headline)
-                        Text("基于 GPU 片元着色器管线，毫秒级即时放大，专门针对日漫二次元黑白与彩漫分镜进行了线条恢复与抗锯齿处理，功耗极低，推荐日常连续翻页使用。")
+                        Text("基于 GPU 计算管线，毫秒级即时 2x 放大，针对二次元线条恢复与抗锯齿优化，功耗极低；超长条漫自动启用重叠分条无缝拼接，推荐日常连续翻页使用。")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("2. Waifu2x (CoreML 深度卷积级)")
+                        Text("2. Anime4K AI (CoreML / ANE 轻量化神经网)")
                             .font(.headline)
-                        Text("依托 Apple Neural Engine (ANE) 执行 7 层深度卷积网络，提供印刷级无损放大与颗粒降噪，适合大画幅插画与精细画集阅览。")
+                        Text("将 Anime4K CNN 与 GAN 打包为 Apple CoreML 模型并由神经网络引擎批量推理，支持 1x 原尺寸去糊修复、2x/4x 一步到位预设及 GAN 3x/4x 强锐化，速度远快于 Waifu2x。")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("3. 智能总像素保护与解除限制开关")
+                        Text("3. Waifu2x (CoreML 深度卷积级)")
                             .font(.headline)
-                        Text("默认使用 1200 万总像素上限替代旧版单边 2500px 截断，既能放行 800×8000 等低清条漫长图，又能配合显存释放与零拷贝机制防爆内存。若需对更巨幅原图超分，可手动开启「解除超分尺寸限制」（Anime4K 仍受 Apple GPU Metal 单边 8192px 纹理硬件上限约束，超长单边可切换 Waifu2x）。")
+                        Text("依托 Apple Neural Engine (ANE) 批量执行 7 层深度卷积网络，提供印刷级 2x 无损放大与多档颗粒降噪，适合大画幅插画与精细画集阅览。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("4. 智能输出像素保护与高清原图自动跳过")
+                            .font(.headline)
+                        Text("默认限制输出 ≤ 4800 万像素（等价 2x 时 12M 输入 / 4x 时 3M 输入）以防爆内存；同时可按原图宽度开启「高清原图跳过」，仅对低清模糊页执行超分，兼顾画质与续航。")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }

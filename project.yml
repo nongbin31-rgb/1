@@ -98,6 +98,9 @@ targets:
       - path: Resources/Anime4K_Shaders
         type: folder
         buildPhase: resources
+      - path: Resources/Anime4K_CoreML
+        type: folder
+        buildPhase: resources
       - path: Resources/Reader_Textures
         type: folder
         buildPhase: resources

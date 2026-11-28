@@ -102,16 +102,9 @@ public actor Anime4kService {
 
         let hardwareMaxInputSide = Self.maxHardwareInputDimension(for: device)
 
-        // 0. 前置像素尺寸校验（在排队与分配位图前快速拦截超限图）
+        // 0. 前置像素尺寸校验（在排队与分配位图前快速拦截总像素超限图；单边超限将自动启用安全重叠分条切片）
         let preSize = Self.pixelDimensions(of: image)
         if preSize.width > 0 && preSize.height > 0 {
-            guard preSize.width <= hardwareMaxInputSide && preSize.height <= hardwareMaxInputSide else {
-                throw Anime4kServiceError.exceedsMetalTextureLimit(
-                    width: preSize.width,
-                    height: preSize.height,
-                    maxInputSide: hardwareMaxInputSide
-                )
-            }
             if !bypassSizeLimit {
                 let pixelCount = preSize.width * preSize.height
                 guard pixelCount <= Self.maxPixelCount else {
@@ -130,16 +123,12 @@ public actor Anime4kService {
 
         try Task.checkCancellation()
 
-        // 1. 同步标准化为 8-bit sRGB RGBA 并直接上传到 MTLTexture（彻底避开 iOS 15 MTKTextureLoader 异步兼容坑）
-        let (inputTex, inWidth, inHeight) = try Self.makeInputTexture(from: image, device: device)
-
-        // 2. 标准化后二次校验 Metal 硬件上限与默认总像素上限
-        guard inWidth <= hardwareMaxInputSide && inHeight <= hardwareMaxInputSide else {
-            throw Anime4kServiceError.exceedsMetalTextureLimit(
-                width: inWidth,
-                height: inHeight,
-                maxInputSide: hardwareMaxInputSide
-            )
+        // 1. 提取正向 CGImage 并校验总像素上限
+        let sourceCG = try Self.normalizedCGImage(from: image)
+        let inWidth = sourceCG.width
+        let inHeight = sourceCG.height
+        guard inWidth > 0, inHeight > 0 else {
+            throw Anime4kServiceError.imageNormalizationFailed
         }
         if !bypassSizeLimit {
             let pixelCount = inWidth * inHeight
@@ -154,9 +143,9 @@ public actor Anime4kService {
 
         try Task.checkCancellation()
 
-        // 3. 加载或复用该配置对应的多 Pass Anime4K 着色器链
+        // 2. 加载或复用该配置对应的多 Pass Anime4K 着色器链
         let pipeline = try loadOrCreatePipeline(config: config, device: device)
-        guard let finalPass = pipeline.last else {
+        guard !pipeline.isEmpty else {
             throw Anime4kServiceError.emptyShaderChain
         }
 
@@ -167,10 +156,53 @@ public actor Anime4kService {
             }
         }
 
+        // 3. 若单边超过 Metal 纹理硬件上限（如 800×12000 超长条漫），自动启用带重叠边的无缝分条拼接
+        if inWidth > hardwareMaxInputSide || inHeight > hardwareMaxInputSide {
+            return try await enhanceTiledStrips(
+                sourceCG: sourceCG,
+                pipeline: pipeline,
+                device: device,
+                commandQueue: commandQueue,
+                maxStripSide: min(hardwareMaxInputSide, 4096)
+            )
+        }
+
+        // 4. 常规尺寸整图直通路径
+        let inputTex = try Self.makeInputTexture(from: sourceCG, device: device)
+        let outputTexture = try await runPipeline(
+            inputTex: inputTex,
+            inWidth: inWidth,
+            inHeight: inHeight,
+            pipeline: pipeline,
+            device: device,
+            commandQueue: commandQueue
+        )
+
+        // 5. 零拷贝读回像素并生成高质量 UIImage
+        guard let outImage = Self.makeUIImage(from: outputTexture) else {
+            throw Anime4kServiceError.readbackFailed
+        }
+
+        return outImage
+    }
+
+    /// 执行单次完整 Anime4K Metal 多 Pass 计算并返回 2x 输出纹理
+    private func runPipeline(
+        inputTex: MTLTexture,
+        inWidth: Int,
+        inHeight: Int,
+        pipeline: [Anime4K],
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue
+    ) async throws -> MTLTexture {
+        guard let finalPass = pipeline.last else {
+            throw Anime4kServiceError.emptyShaderChain
+        }
+
         let targetWidth = inWidth * 2
         let targetHeight = inHeight * 2
 
-        // 4. 按当前图片分辨率配置各 Pass 的纹理尺寸与 WHEN 条件
+        // 按当前分辨率配置各 Pass 的纹理尺寸与 WHEN 条件（复用已缓存的 ComputePipelineState）
         var currentInW = inWidth
         var currentInH = inHeight
         for pass in pipeline {
@@ -187,8 +219,8 @@ public actor Anime4kService {
             currentInH = max(1, Int(pass.outputH))
         }
 
-        // 5. 分阶段提交 GPU 计算任务：每完成一个着色器文件立刻释放该阶段全部中间 rgba16Float 纹理，
-        //    将单页瞬时显存峰值降低 65%~75%，并避免单次长命令缓冲触发 iOS 15 Metal Watchdog 超时
+        // 分阶段提交 GPU 计算任务：每完成一个着色器文件立刻释放该阶段全部中间 rgba16Float 纹理，
+        // 将单页瞬时显存峰值降低 65%~75%，并避免单次长命令缓冲触发 iOS 15 Metal Watchdog 超时
         var currentTex: MTLTexture? = inputTex
         for pass in pipeline {
             try Task.checkCancellation()
@@ -212,7 +244,7 @@ public actor Anime4kService {
 
         try Task.checkCancellation()
 
-        // 6. 创建 2x 目标 RGBA8 输出纹理（shared 模式便于 CPU 零拷贝读回）并执行最终 CenterResize
+        // 创建 2x 目标 RGBA8 输出纹理（shared 模式便于 CPU 零拷贝读回）并执行最终 CenterResize
         let outDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm,
             width: targetWidth,
@@ -235,15 +267,144 @@ public actor Anime4kService {
         try finalPass.encodeFinalResize(cmdBuf: finalCommandBuffer, input: resizeInput, output: outputTexture)
         try await Self.commitAndWait(finalCommandBuffer)
 
-        // 提前释放最后的中间 rgba16Float 显存纹理，与下方 CPU 位图读回错峰
+        // 提前释放最后的中间 rgba16Float 显存纹理，与后续 CPU 位图读回错峰
         currentTex = nil
+        return outputTexture
+    }
 
-        // 7. 零拷贝读回像素并生成高质量 UIImage
-        guard let outImage = Self.makeUIImage(from: outputTexture) else {
+    /// 超长单边图像（> Metal 纹理硬件上限）自动重叠分条超分并无缝拼接
+    private func enhanceTiledStrips(
+        sourceCG: CGImage,
+        pipeline: [Anime4K],
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue,
+        maxStripSide: Int
+    ) async throws -> UIImage {
+        let inWidth = sourceCG.width
+        let inHeight = sourceCG.height
+        let targetWidth = inWidth * 2
+        let targetHeight = inHeight * 2
+        let dstBytesPerRow = targetWidth * 4
+        let totalTargetBytes = dstBytesPerRow * targetHeight
+        guard totalTargetBytes > 0, let dstRawPtr = malloc(totalTargetBytes) else {
             throw Anime4kServiceError.readbackFailed
         }
+        var ownershipTransferred = false
+        defer {
+            if !ownershipTransferred {
+                free(dstRawPtr)
+            }
+        }
+        let dstPtr = dstRawPtr.bindMemory(to: UInt8.self, capacity: totalTargetBytes)
 
-        return outImage
+        let overlap = 24
+        let stepX = max(256, maxStripSide - overlap * 2)
+        let stepY = max(256, maxStripSide - overlap * 2)
+
+        let xRanges = Self.computeStripRanges(total: inWidth, maxChunk: maxStripSide, step: stepX)
+        let yRanges = Self.computeStripRanges(total: inHeight, maxChunk: maxStripSide, step: stepY)
+
+        for yRange in yRanges {
+            let cropY0 = max(0, yRange.lowerBound - overlap)
+            let cropY1 = min(inHeight, yRange.upperBound + overlap)
+            let cropH = cropY1 - cropY0
+            let trimTop = (yRange.lowerBound - cropY0) * 2
+            let validOutH = (yRange.upperBound - yRange.lowerBound) * 2
+
+            for xRange in xRanges {
+                try Task.checkCancellation()
+
+                let cropX0 = max(0, xRange.lowerBound - overlap)
+                let cropX1 = min(inWidth, xRange.upperBound + overlap)
+                let cropW = cropX1 - cropX0
+                let trimLeft = (xRange.lowerBound - cropX0) * 2
+                let validOutW = (xRange.upperBound - xRange.lowerBound) * 2
+
+                let cropRect = CGRect(x: cropX0, y: cropY0, width: cropW, height: cropH)
+                guard let tileCG = sourceCG.cropping(to: cropRect) else {
+                    throw Anime4kServiceError.imageNormalizationFailed
+                }
+
+                let tileInputTex = try Self.makeInputTexture(from: tileCG, device: device)
+                let tileOutTex = try await runPipeline(
+                    inputTex: tileInputTex,
+                    inWidth: cropW,
+                    inHeight: cropH,
+                    pipeline: pipeline,
+                    device: device,
+                    commandQueue: commandQueue
+                )
+
+                // 读回有效中心区域并无缝写入最终目标位图
+                let tileBytesPerRow = cropW * 2 * 4
+                let tileTotalBytes = tileBytesPerRow * cropH * 2
+                guard tileTotalBytes > 0, let tileBuf = malloc(tileTotalBytes) else {
+                    throw Anime4kServiceError.readbackFailed
+                }
+                defer { free(tileBuf) }
+
+                let region = MTLRegionMake2D(0, 0, cropW * 2, cropH * 2)
+                tileOutTex.getBytes(tileBuf, bytesPerRow: tileBytesPerRow, from: region, mipmapLevel: 0)
+
+                let srcTilePtr = tileBuf.bindMemory(to: UInt8.self, capacity: tileTotalBytes)
+                let dstOriginX = xRange.lowerBound * 2
+                let dstOriginY = yRange.lowerBound * 2
+                let copyRowBytes = validOutW * 4
+
+                for row in 0..<validOutH {
+                    let srcOffset = (trimTop + row) * tileBytesPerRow + trimLeft * 4
+                    let dstOffset = (dstOriginY + row) * dstBytesPerRow + dstOriginX * 4
+                    memcpy(dstPtr.advanced(by: dstOffset), srcTilePtr.advanced(by: srcOffset), copyRowBytes)
+                }
+            }
+        }
+
+        guard let provider = CGDataProvider(
+            dataInfo: nil,
+            data: dstRawPtr,
+            size: totalTargetBytes,
+            releaseData: { _, data, _ in
+                free(UnsafeMutableRawPointer(mutating: data))
+            }
+        ) else {
+            throw Anime4kServiceError.readbackFailed
+        }
+        ownershipTransferred = true
+
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        )
+        guard let cgImage = CGImage(
+            width: targetWidth,
+            height: targetHeight,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: dstBytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        ) else {
+            throw Anime4kServiceError.readbackFailed
+        }
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+    }
+
+    private static func computeStripRanges(total: Int, maxChunk: Int, step: Int) -> [Range<Int>] {
+        if total <= maxChunk {
+            return [0..<total]
+        }
+        var ranges: [Range<Int>] = []
+        var cursor = 0
+        while cursor < total {
+            let next = min(total, cursor + step)
+            ranges.append(cursor..<next)
+            cursor = next
+        }
+        return ranges
     }
 
     private static func commitAndWait(_ commandBuffer: MTLCommandBuffer) async throws {
@@ -303,20 +464,21 @@ public actor Anime4kService {
         return compiled
     }
 
-    /// 同步将 UIImage 规范化为 8-bit sRGB RGBA8 并直写 MTLTexture（兼容全系 iOS 15~26，零异步重入风险）
-    private static func makeInputTexture(from image: UIImage, device: MTLDevice) throws -> (MTLTexture, Int, Int) {
-        return try autoreleasepool {
-            let sourceCG: CGImage
-            if let cg = image.cgImage, image.imageOrientation == .up {
-                sourceCG = cg
-            } else {
-                guard let normalized = Waifu2xService.forceDecodeToPixelImage(image),
-                      let cg = normalized.cgImage else {
-                    throw Anime4kServiceError.imageNormalizationFailed
-                }
-                sourceCG = cg
-            }
+    /// 提取正向 CGImage（避免重复解码，仅方向非 .up 或无 cgImage 时规范化）
+    private static func normalizedCGImage(from image: UIImage) throws -> CGImage {
+        if let cg = image.cgImage, image.imageOrientation == .up {
+            return cg
+        }
+        guard let normalized = Waifu2xService.forceDecodeToPixelImage(image),
+              let cg = normalized.cgImage else {
+            throw Anime4kServiceError.imageNormalizationFailed
+        }
+        return cg
+    }
 
+    /// 同步将 CGImage 规范化为 8-bit sRGB RGBA8 并直写 MTLTexture（兼容全系 iOS 15~26，零异步重入风险）
+    private static func makeInputTexture(from sourceCG: CGImage, device: MTLDevice) throws -> MTLTexture {
+        return try autoreleasepool {
             let width = sourceCG.width
             let height = sourceCG.height
             let bytesPerRow = width * 4
@@ -356,11 +518,11 @@ public actor Anime4kService {
             }
             let region = MTLRegionMake2D(0, 0, width, height)
             texture.replace(region: region, mipmapLevel: 0, withBytes: rawPtr, bytesPerRow: bytesPerRow)
-            return (texture, width, height)
+            return texture
         }
     }
 
-    /// 从 shared MTLTexture 零拷贝读回像素并构造 UIImage（确保 Alpha 为 100% 不透明，彻底消除 Data 双倍拷贝峰值）
+    /// 从 shared MTLTexture 零拷贝读回像素并构造 UIImage（CenterResize 已写入 alpha=1.0 且 CGImage 使用 noneSkipLast，免除 CPU 全图遍历）
     private static func makeUIImage(from texture: MTLTexture) -> UIImage? {
         autoreleasepool {
             let width = texture.width
@@ -373,12 +535,6 @@ public actor Anime4kService {
 
             let region = MTLRegionMake2D(0, 0, width, height)
             texture.getBytes(rawPtr, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
-
-            // 强制将第 4 通道 Alpha 设为 255（不透明），杜绝着色器 luma 计算导致 Alpha 为 0 呈现透明空图
-            let bytePtr = rawPtr.bindMemory(to: UInt8.self, capacity: totalBytes)
-            for i in stride(from: 3, to: totalBytes, by: 4) {
-                bytePtr[i] = 255
-            }
 
             // 零拷贝移交堆内存所有权给 CGDataProvider，UIImage/CGImage 释放时自动 free
             guard let provider = CGDataProvider(

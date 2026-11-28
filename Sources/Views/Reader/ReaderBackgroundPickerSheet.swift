@@ -143,6 +143,14 @@ public struct ReaderBackgroundPickerSheet: View {
                                 .frame(height: 72)
                                 .clipped()
                                 .blendMode(.multiply)
+                        } else if item.usesOriginalAspectFillOverlay {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(minWidth: 0, maxWidth: .infinity)
+                                .frame(height: 72)
+                                .clipped()
+                                .blendMode(.multiply)
                         } else {
                             let clampedTint = min(max(store.readerTextureTintOpacity, 0.0), 1.0)
                             let neutralImg = clampedTint < 0.999 ? ReaderTextureCache.shared.neutralGrainImage(for: item) : nil
@@ -328,31 +336,33 @@ public struct ReaderBackgroundPickerSheet: View {
             }
             .padding(.vertical, 2)
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("纸张着色浓度")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("\(Int((store.readerTextureTintOpacity * 100).rounded()))%")
-                        .font(.subheadline.monospacedDigit())
+            if !store.readerTextureType.usesOriginalAspectFillOverlay {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("纸张着色浓度")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text("\(Int((store.readerTextureTintOpacity * 100).rounded()))%")
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { store.readerTextureTintOpacity },
+                            set: { store.readerTextureTintOpacity = $0 }
+                        ),
+                        in: 0.0...1.0,
+                        step: 0.05
+                    )
+                    .tint(.accentColor)
+
+                    Text("控制材质自带纸张色调对背景与画面的着色深浅；调至 0% 可去除泛黄偏色并仅保留纯白纸纤维肌理。")
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-
-                Slider(
-                    value: Binding(
-                        get: { store.readerTextureTintOpacity },
-                        set: { store.readerTextureTintOpacity = $0 }
-                    ),
-                    in: 0.0...1.0,
-                    step: 0.05
-                )
-                .tint(.accentColor)
-
-                Text("控制材质自带纸张色调对背景与画面的着色深浅；调至 0% 可去除泛黄偏色并仅保留纯白纸纤维肌理。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
 
             if store.readerTextureType.usesFineTilePattern {
                 VStack(alignment: .leading, spacing: 8) {

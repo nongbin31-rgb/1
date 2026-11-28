@@ -126,8 +126,17 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
 
     private let inFlightLock = NSLock()
     private var inFlightEntries: [String: InFlightUpscaleEntry] = [:]
+    private var memoryWarningObserver: NSObjectProtocol?
 
-    private init() {}
+    private init() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.resultCache.removeAllObjects()
+        }
+    }
 
     public func clearCache() {
         resultCache.removeAllObjects()
@@ -139,21 +148,30 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
         return resultCache.object(forKey: cacheKey)
     }
 
-    /// 预判该图 2x 超分结果是否可顺利入缓存（避免后台预热为超限/不可缓存的巨图白耗算力）
+    /// 预判该图超分结果是否可顺利入缓存（避免后台预热为超限/跳过/不可缓存的巨图白耗算力）
     public func canCacheUpscaledOutput(for image: UIImage, config: ImageUpscalerConfig) -> Bool {
         let origSize = pixelSize(of: image)
         let origW = Int(origSize.width)
         let origH = Int(origSize.height)
         guard origW > 0, origH > 0 else { return false }
 
+        let scale = config.outputScaleFactor
+        if config.smartSkipMinWidth > 0 && scale > 1 && origW >= config.smartSkipMinWidth {
+            return false
+        }
+
         let pixelCount = origW * origH
-        if !config.bypassSizeLimit && pixelCount > ImageUpscalerConfig.maxPixelCountThreshold {
+        let outPixels = pixelCount * scale * scale
+        if !config.bypassSizeLimit && outPixels > ImageUpscalerConfig.maxOutputPixelCountThreshold {
             return false
         }
 
         switch config.model {
         case .anime4k:
-            if max(origW, origH) > ImageUpscalerConfig.maxMetalInputDimension {
+            // Anime4K 已支持超长单边自动分条无缝拼接，无需拦截单边 > 8192px
+            break
+        case .anime4kCoreML:
+            if min(origW, origH) < Anime4kCoreMLService.minDimension {
                 return false
             }
         case .waifu2x:
@@ -162,8 +180,8 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
             }
         }
 
-        // 2x 超分后 RGBA8 显存占用（width * 2 * height * 2 * 4 = pixelCount * 16）
-        let estimatedCost = pixelCount * 16
+        // 按真实输出倍率估算 RGBA8 显存占用（width * scale * height * scale * 4）
+        let estimatedCost = outPixels * 4
         return estimatedCost > 0 && estimatedCost <= Self.maxSingleCachedImageCost
     }
 
@@ -188,21 +206,34 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
             )
         }
 
-        // 2. 尺寸安全保护：默认采用 1200 万总像素上限（兼容 800×8000 等条漫长图），用户开启「解除超分尺寸限制」后跳过软件限制
+        // 2. 智能跳过高清原图（仅对放大倍率 > 1 的模式生效，保留 1x 原尺寸修复功能）
         let origW = Int(origSize.width)
         let origH = Int(origSize.height)
-        let pixelCount = origW * origH
+        let scale = config.outputScaleFactor
+        if config.smartSkipMinWidth > 0 && scale > 1 && origW >= config.smartSkipMinWidth {
+            return ProcessedPageImage(
+                image: image,
+                originalSize: origSize,
+                outputSize: origSize,
+                elapsedMs: 0,
+                appliedModel: nil,
+                notice: "原图宽度 \(origW)px 已达高清阈值，已自动跳过超分"
+            )
+        }
+
+        // 3. 尺寸安全保护：按真实输出总像素上限保护（默认 4800 万输出像素 ≈ 192MB RGBA，等价 2x 时 12M 输入 / 4x 时 3M 输入）
+        let outPixelCount = origW * scale * origH * scale
         if !config.bypassSizeLimit {
-            guard pixelCount <= ImageUpscalerConfig.maxPixelCountThreshold else {
-                let mpText = String(format: "%.1f", Double(pixelCount) / 1_000_000.0)
-                let limitMP = ImageUpscalerConfig.maxPixelCountThreshold / 1_000_000
+            guard outPixelCount > 0 && outPixelCount <= ImageUpscalerConfig.maxOutputPixelCountThreshold else {
+                let mpText = String(format: "%.1f", Double(outPixelCount) / 1_000_000.0)
+                let limitMP = ImageUpscalerConfig.maxOutputPixelCountThreshold / 1_000_000
                 return ProcessedPageImage(
                     image: image,
                     originalSize: origSize,
                     outputSize: origSize,
                     elapsedMs: 0,
                     appliedModel: nil,
-                    notice: "总像素 \(mpText)M 超过默认 \(limitMP)M 上限，已跳过超分"
+                    notice: "\(scale)x 输出像素 \(mpText)M 超过默认 \(limitMP)M 上限，已跳过超分"
                 )
             }
         }
@@ -328,6 +359,15 @@ public final class PageUpscalerPipeline: @unchecked Sendable {
                     image: image,
                     config: config.anime4k,
                     bypassSizeLimit: config.bypassSizeLimit
+                )
+            case .anime4kCoreML:
+                enhanced = try await Anime4kCoreMLService.shared.enhance(
+                    image: image,
+                    model: config.anime4kCoreML,
+                    bypassSizeLimit: config.bypassSizeLimit,
+                    progress: { [weak self] pct in
+                        self?.broadcastProgress(pct, entry: entry)
+                    }
                 )
             case .waifu2x:
                 enhanced = try await Waifu2xService.shared.enhance(
