@@ -16,6 +16,8 @@ public struct ReaderImageFilterView: View {
     @State private var filteredPreviewImage: UIImage?
     /// 是否正在渲染中
     @State private var isProcessing = false
+    /// 渲染期间到达的最新待补渲配置（避免拖动滑块松手后预览停留在旧帧）
+    @State private var pendingRenderConfig: ImageFilterConfig?
     /// 当前是否处于全屏大图模式（折叠底部抽屉）
     @State private var isFullScreenPreview = false
     /// 是否正在按住屏幕临时对比原图
@@ -410,9 +412,13 @@ public struct ReaderImageFilterView: View {
                     var current = localConfig.config(for: type)
                     let def = ImageFilterItemConfig.default(for: type)
                     current.grayscaleIntensity = def.grayscaleIntensity
+                    current.grayscaleContrast = def.grayscaleContrast
                     current.gammaValue = def.gammaValue
                     current.sharpnessValue = def.sharpnessValue
                     current.toneTemperature = def.toneTemperature
+                    current.toneSaturation = def.toneSaturation
+                    current.toneTintEnabled = def.toneTintEnabled
+                    current.toneTintColor = def.toneTintColor
                     current.shadowAmount = def.shadowAmount
                     localConfig.updateConfig(current)
                     impactFeedback.impactOccurred()
@@ -443,19 +449,36 @@ public struct ReaderImageFilterView: View {
 
         switch type {
         case .grayscale:
-            HStack(spacing: 12) {
-                Text("强度")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .leading)
+            VStack(spacing: 8) {
+                HStack(spacing: 12) {
+                    Text("强度")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
 
-                Slider(value: binding.grayscaleIntensity, in: 0.0...1.0, step: 0.05)
-                    .tint(.primary)
+                    Slider(value: binding.grayscaleIntensity, in: 0.0...1.0, step: 0.01)
+                        .tint(.primary)
 
-                Text("\(Int(binding.grayscaleIntensity.wrappedValue * 100))%")
-                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                    Text("\(Int(round(binding.grayscaleIntensity.wrappedValue * 100)))%")
+                        .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
+
+                HStack(spacing: 12) {
+                    Text("对比度")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
+
+                    Slider(value: binding.grayscaleContrast, in: 0.5...2.0, step: 0.05)
+                        .tint(.primary)
+
+                    Text(String(format: "%.2f", binding.grayscaleContrast.wrappedValue))
+                        .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
             }
 
         case .gamma:
@@ -463,15 +486,15 @@ public struct ReaderImageFilterView: View {
                 Text("伽马")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .leading)
+                    .frame(width: 40, alignment: .leading)
 
-                Slider(value: binding.gammaValue, in: 0.4...2.4, step: 0.05)
+                Slider(value: binding.gammaValue, in: 0.2...3.0, step: 0.05)
                     .tint(.primary)
 
                 Text(String(format: "%.2f", binding.gammaValue.wrappedValue))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                    .frame(width: 48, alignment: .trailing)
             }
 
         case .sharpen:
@@ -479,32 +502,118 @@ public struct ReaderImageFilterView: View {
                 Text("锐度")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .leading)
+                    .frame(width: 40, alignment: .leading)
 
-                Slider(value: binding.sharpnessValue, in: 0.1...2.0, step: 0.05)
+                Slider(value: binding.sharpnessValue, in: 0.0...2.0, step: 0.05)
                     .tint(.primary)
 
                 Text(String(format: "%.2f", binding.sharpnessValue.wrappedValue))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                    .frame(width: 48, alignment: .trailing)
             }
 
         case .tone:
-            HStack(spacing: 12) {
-                Text("冷暖")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .leading)
+            VStack(spacing: 8) {
+                HStack(spacing: 12) {
+                    Text("冷暖")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
 
-                Slider(value: binding.toneTemperature, in: -1.0...1.0, step: 0.05)
-                    .tint(.primary)
+                    Slider(value: binding.toneTemperature, in: -1.0...1.0, step: 0.05)
+                        .tint(.primary)
 
-                let val = binding.toneTemperature.wrappedValue
-                Text(val > 0.05 ? "暖 \(Int(val * 100))" : (val < -0.05 ? "冷 \(Int(-val * 100))" : "中性"))
-                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                    let val = binding.toneTemperature.wrappedValue
+                    Text(val > 0.05 ? "暖 \(Int(round(val * 100)))" : (val < -0.05 ? "冷 \(Int(round(-val * 100)))" : "中性"))
+                        .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
+
+                HStack(spacing: 12) {
+                    Text("饱和度")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
+
+                    Slider(value: binding.toneSaturation, in: 0.0...2.0, step: 0.05)
+                        .tint(.primary)
+
+                    Text("\(Int(round(binding.toneSaturation.wrappedValue * 100)))%")
+                        .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
+
+                HStack(spacing: 10) {
+                    Text("染纸色")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
+
+                    // 原色（关闭染纸）
+                    Button {
+                        var updated = binding.wrappedValue
+                        updated.toneTintEnabled = false
+                        binding.wrappedValue = updated
+                        impactFeedback.impactOccurred()
+                    } label: {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 22, height: 22)
+                            .overlay(
+                                Image(systemName: "line.diagonal")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            )
+                            .overlay(
+                                Circle()
+                                    .stroke(!binding.wrappedValue.toneTintEnabled ? Color.accentColor : Color.primary.opacity(0.2), lineWidth: !binding.wrappedValue.toneTintEnabled ? 2 : 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    // 护眼预设色圆点
+                    ForEach(FilterRGBColor.presets, id: \.name) { preset in
+                        let isSelected = binding.wrappedValue.toneTintEnabled && binding.wrappedValue.toneTintColor == preset.color
+                        Button {
+                            var updated = binding.wrappedValue
+                            updated.toneTintEnabled = true
+                            updated.toneTintColor = preset.color
+                            binding.wrappedValue = updated
+                            impactFeedback.impactOccurred()
+                        } label: {
+                            Circle()
+                                .fill(preset.color.swiftUIColor)
+                                .frame(width: 22, height: 22)
+                                .overlay(
+                                    Circle()
+                                        .stroke(isSelected ? Color.accentColor : Color.primary.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.name)
+                    }
+
+                    Spacer()
+
+                    // 自定义任意护眼染纸色
+                    ColorPicker(
+                        "",
+                        selection: Binding<Color>(
+                            get: { binding.wrappedValue.toneTintColor.swiftUIColor },
+                            set: { newColor in
+                                var updated = binding.wrappedValue
+                                updated.toneTintEnabled = true
+                                updated.toneTintColor = FilterRGBColor(swiftUIColor: newColor)
+                                binding.wrappedValue = updated
+                            }
+                        ),
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+                }
             }
 
         case .shadow:
@@ -512,16 +621,16 @@ public struct ReaderImageFilterView: View {
                 Text("暗部")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .leading)
+                    .frame(width: 40, alignment: .leading)
 
                 Slider(value: binding.shadowAmount, in: -1.0...1.0, step: 0.05)
                     .tint(.primary)
 
                 let val = binding.shadowAmount.wrappedValue
-                Text(val < -0.05 ? "加深 \(Int(-val * 100))" : (val > 0.05 ? "提亮 \(Int(val * 100))" : "标准"))
+                Text(val < -0.05 ? "加深 \(Int(round(-val * 100)))" : (val > 0.05 ? "提亮 \(Int(round(val * 100)))" : "标准"))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                    .frame(width: 48, alignment: .trailing)
             }
         }
     }
@@ -562,22 +671,31 @@ public struct ReaderImageFilterView: View {
         }
     }
 
-    // MARK: - 实时渲染预览图
+    // MARK: - 实时渲染预览图（带末尾帧补渲，确保快速拖动滑块松手后必渲染最新参数）
 
-    private func renderFilteredPreview() {
-        guard !isProcessing else { return }
+    private func renderFilteredPreview(for overrideConfig: ImageFilterConfig? = nil) {
+        let configToRender = overrideConfig ?? localConfig
+        if isProcessing {
+            pendingRenderConfig = configToRender
+            return
+        }
         isProcessing = true
-        let configToRender = localConfig
+        pendingRenderConfig = nil
 
+        let sourceImage = previewSourceImage
         Task.detached(priority: .userInteractive) {
             let result = ImageFilterPipeline.shared.process(
-                image: self.previewSourceImage,
+                image: sourceImage,
                 cacheKey: "filter_preview",
                 config: configToRender
             )
             await MainActor.run {
                 self.filteredPreviewImage = result
                 self.isProcessing = false
+                if let nextConfig = self.pendingRenderConfig {
+                    self.pendingRenderConfig = nil
+                    self.renderFilteredPreview(for: nextConfig)
+                }
             }
         }
     }

@@ -8,6 +8,7 @@ public final class ImageFilterPipeline: @unchecked Sendable {
 
     private let ciContext: CIContext
     private let cache = NSCache<NSString, UIImage>()
+    private var memoryWarningObserver: NSObjectProtocol?
 
     private init() {
         // 创建高性能 Metal 硬件加速上下文
@@ -19,6 +20,14 @@ public final class ImageFilterPipeline: @unchecked Sendable {
         self.ciContext = CIContext(options: options)
         self.cache.countLimit = 64
         self.cache.totalCostLimit = 150 * 1024 * 1024 // 150MB 内存缓存保护
+
+        self.memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.cache.removeAllObjects()
+        }
     }
 
     /// 应用滤镜链并生成新图片
@@ -55,13 +64,23 @@ public final class ImageFilterPipeline: @unchecked Sendable {
             let item = config.config(for: type)
             switch type {
             case .grayscale:
-                currentCI = applyGrayscale(to: currentCI, intensity: item.grayscaleIntensity)
+                currentCI = applyGrayscale(
+                    to: currentCI,
+                    intensity: item.grayscaleIntensity,
+                    contrast: item.grayscaleContrast
+                )
             case .gamma:
                 currentCI = applyGamma(to: currentCI, gamma: item.gammaValue)
             case .sharpen:
                 currentCI = applySharpen(to: currentCI, sharpness: item.sharpnessValue)
             case .tone:
-                currentCI = applyTone(to: currentCI, temperature: item.toneTemperature)
+                currentCI = applyTone(
+                    to: currentCI,
+                    temperature: item.toneTemperature,
+                    saturation: item.toneSaturation,
+                    tintEnabled: item.toneTintEnabled,
+                    tintColor: item.toneTintColor
+                )
             case .shadow:
                 currentCI = applyShadow(to: currentCI, shadowAmount: item.shadowAmount)
             }
@@ -125,55 +144,93 @@ public final class ImageFilterPipeline: @unchecked Sendable {
 
     // MARK: - 单项滤镜实现
 
-    /// 1. 黑白滤镜（彩图变黑白，支持饱和度无级过渡与反差微调）
-    private func applyGrayscale(to input: CIImage, intensity: Double) -> CIImage {
-        guard intensity > 0.001 else { return input }
+    /// 1. 黑白滤镜（彩图变黑白，支持饱和度无级去色与独立对比度调节）
+    private func applyGrayscale(to input: CIImage, intensity: Double, contrast: Double) -> CIImage {
+        let clampedIntensity = min(max(intensity, 0.0), 1.0)
+        let clampedContrast = min(max(contrast, 0.5), 2.0)
+        guard clampedIntensity > 0.001 || abs(clampedContrast - 1.0) > 0.005 else {
+            return input
+        }
         guard let filter = CIFilter(name: "CIColorControls") else { return input }
         filter.setValue(input, forKey: kCIInputImageKey)
-        // 饱和度从 1.0 降低至 0.0 (去色)
-        let saturation = max(0.0, 1.0 - intensity)
-        filter.setValue(saturation, forKey: kCIInputSaturationKey)
-        // 配合轻微对比度增强让黑白漫画线条更加黑白分明
-        let contrast = 1.0 + (0.12 * intensity)
-        filter.setValue(contrast, forKey: kCIInputContrastKey)
+        // 饱和度从 1.0 降低至 0.0 (纯净无损去色，保持白底纯净不发灰)
+        filter.setValue(max(0.0, 1.0 - clampedIntensity), forKey: kCIInputSaturationKey)
+        // 独立对比度调节（默认 1.12 令黑白线条分明，用户可按需拉高去灰或降低保留灰阶）
+        filter.setValue(clampedContrast, forKey: kCIInputContrastKey)
         return filter.outputImage ?? input
     }
 
-    /// 2. 伽马校正（改善扫描图发灰、中间调发虚的问题）
+    /// 2. 伽马校正（改善扫描图发灰、中间调发虚的问题，支持 0.2 ~ 3.0 宽幅校正）
     private func applyGamma(to input: CIImage, gamma: Double) -> CIImage {
-        guard abs(gamma - 1.0) > 0.01 else { return input }
+        let clampedGamma = min(max(gamma, 0.2), 3.0)
+        guard abs(clampedGamma - 1.0) > 0.005 else { return input }
         guard let filter = CIFilter(name: "CIGammaAdjust") else { return input }
         filter.setValue(input, forKey: kCIInputImageKey)
         // inputPower > 1.0 压暗发灰背景加深墨线，< 1.0 提亮画面
-        filter.setValue(gamma, forKey: "inputPower")
+        filter.setValue(clampedGamma, forKey: "inputPower")
         return filter.outputImage ?? input
     }
 
-    /// 3. 锐化（边缘轮廓清晰化，提升漫画网点与线条锐利度）
+    /// 3. 锐化（边缘轮廓清晰化，提升漫画网点与线条锐利度，支持 0.0 ~ 2.0）
     private func applySharpen(to input: CIImage, sharpness: Double) -> CIImage {
-        guard sharpness > 0.05 else { return input }
+        let clampedSharpness = min(max(sharpness, 0.0), 2.0)
+        guard clampedSharpness > 0.01 else { return input }
         guard let filter = CIFilter(name: "CISharpenLuminance") else { return input }
         filter.setValue(input, forKey: kCIInputImageKey)
-        filter.setValue(sharpness, forKey: kCIInputSharpnessKey)
+        filter.setValue(clampedSharpness, forKey: kCIInputSharpnessKey)
         return filter.outputImage ?? input
     }
 
-    /// 4. 色调（冷暖调节、墨水屏色调与暖黄纸张护眼）
-    private func applyTone(to input: CIImage, temperature: Double) -> CIImage {
-        guard abs(temperature) > 0.01 else { return input }
-        guard let filter = CIFilter(name: "CITemperatureAndTint") else { return input }
-        filter.setValue(input, forKey: kCIInputImageKey)
+    /// 4. 色调（冷暖色温 + 零开销 CIColorMatrix 护眼染纸色 + 独立饱和度）
+    private func applyTone(
+        to input: CIImage,
+        temperature: Double,
+        saturation: Double,
+        tintEnabled: Bool,
+        tintColor: FilterRGBColor
+    ) -> CIImage {
+        var current = input
 
-        // 基准中性色温: 6500K
-        let neutral = CIVector(x: 6500, y: 0)
-        // 当 temperature > 0 时为暖光（羊皮纸护眼色，低至 4500K），< 0 时为冷光
-        let targetTemp = 6500.0 - (temperature * 2400.0)
-        let targetTint = temperature * 12.0
-        let target = CIVector(x: CGFloat(targetTemp), y: CGFloat(targetTint))
+        // 4.1 冷暖色温调节（基准 6500K，正值偏暖、负值偏冷）
+        if abs(temperature) > 0.01, let tempFilter = CIFilter(name: "CITemperatureAndTint") {
+            tempFilter.setValue(current, forKey: kCIInputImageKey)
+            let neutral = CIVector(x: 6500, y: 0)
+            let targetTemp = 6500.0 - (temperature * 2400.0)
+            let targetTint = temperature * 12.0
+            let target = CIVector(x: CGFloat(targetTemp), y: CGFloat(targetTint))
+            tempFilter.setValue(neutral, forKey: "inputNeutral")
+            tempFilter.setValue(target, forKey: "inputTargetNeutral")
+            if let out = tempFilter.outputImage {
+                current = out
+            }
+        }
 
-        filter.setValue(neutral, forKey: "inputNeutral")
-        filter.setValue(target, forKey: "inputTargetNeutral")
-        return filter.outputImage ?? input
+        // 4.2 护眼染纸色（使用 GPU 单指令 CIColorMatrix 逐通道相乘，与 3D LUT 数学等价且零内存分配，纯黑墨线不受影响）
+        if tintEnabled,
+           (tintColor.red < 0.999 || tintColor.green < 0.999 || tintColor.blue < 0.999),
+           let matrixFilter = CIFilter(name: "CIColorMatrix") {
+            matrixFilter.setValue(current, forKey: kCIInputImageKey)
+            matrixFilter.setValue(CIVector(x: CGFloat(tintColor.red), y: 0, z: 0, w: 0), forKey: "inputRVector")
+            matrixFilter.setValue(CIVector(x: 0, y: CGFloat(tintColor.green), z: 0, w: 0), forKey: "inputGVector")
+            matrixFilter.setValue(CIVector(x: 0, y: 0, z: CGFloat(tintColor.blue), w: 0), forKey: "inputBVector")
+            matrixFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+            matrixFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 0), forKey: "inputBiasVector")
+            if let out = matrixFilter.outputImage {
+                current = out
+            }
+        }
+
+        // 4.3 独立饱和度调节（0.0 ~ 2.0，1.0 为原始色彩）
+        let clampedSat = min(max(saturation, 0.0), 2.0)
+        if abs(clampedSat - 1.0) > 0.01, let satFilter = CIFilter(name: "CIColorControls") {
+            satFilter.setValue(current, forKey: kCIInputImageKey)
+            satFilter.setValue(clampedSat, forKey: kCIInputSaturationKey)
+            if let out = satFilter.outputImage {
+                current = out
+            }
+        }
+
+        return current
     }
 
     /// 5. 阴影（调节暗部深浅与阴影层次）
